@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "70343076611",
+    "project_id": "safehood-security-app",
+    "storage_bucket": "safehood-security-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:70343076611:android:ed1935d3a65213932cd736",
+        "android_client_info": {
+          "package_name": "com.example.safehood"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD67oTvqkboX0kgRgYKod5tXY4c_z-NUSo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:70343076611:android:8acee06177a1ec7c2cd736",
+        "android_client_info": {
+          "package_name": "com.safehood.securityapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD67oTvqkboX0kgRgYKod5tXY4c_z-NUSo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

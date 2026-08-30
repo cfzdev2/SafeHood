@@ -1,0 +1,174 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{userId} {
+      allow read, write:
+        if request.auth != null
+        && request.auth.uid == userId;
+
+            match /cameras/{cameraId} {
+        allow read, write:
+          if request.auth != null
+          && request.auth.uid == userId;
+      }
+
+      match /bridges/{bridgeId} {
+        // Status Bridge może odczytać
+        // wyłącznie jego właściciel.
+        allow read:
+          if request.auth != null
+          && request.auth.uid == userId;
+
+        // Status zapisuje wyłącznie Bridge
+        // przez Firebase Admin SDK.
+        allow create, update, delete:
+          if false;
+      }
+
+      match /devices/{deviceId} {
+        allow read:
+          if request.auth != null
+          && request.auth.uid == userId;
+
+        allow create, update:
+          if request.auth != null
+          && request.auth.uid == userId
+          && request.resource.data.fid
+             == deviceId
+          && request.resource.data.fcmToken
+             is string
+          && request.resource.data.platform
+             is string
+          && request.resource.data.notificationsAllowed
+             is bool;
+
+        allow delete:
+          if request.auth != null
+          && request.auth.uid == userId;
+      }
+    }
+
+    match /communityProfiles/{userId} {
+      allow read:
+        if request.auth != null;
+
+      allow write:
+        if request.auth != null
+        && request.auth.uid == userId;
+    }
+
+    match /incidents/{incidentId} {
+      allow read:
+        if request.auth != null
+        && request.auth.uid
+           in resource.data.participantIds;
+
+      allow create: if false;
+
+      allow update:
+        if request.auth != null
+        && request.auth.uid
+           == resource.data.reporterId
+        && request.resource.data.reporterId
+           == resource.data.reporterId
+        && request.resource.data.participantIds
+           == resource.data.participantIds;
+
+      allow delete: if false;
+
+      match /responses/{responseUserId} {
+        function isParticipant() {
+          return request.auth != null
+              && request.auth.uid in get(
+                /databases/$(database)/documents/incidents/$(incidentId)
+              ).data.participantIds;
+        }
+
+        allow read:
+          if isParticipant();
+
+        // Reakcje zapisuje backend.
+        allow create, update, delete:
+          if false;
+      }
+
+      match /messages/{messageId} {
+        function isParticipant() {
+          return request.auth != null
+              && request.auth.uid in get(
+                /databases/$(database)/documents/incidents/$(incidentId)
+              ).data.participantIds;
+        }
+
+        allow read:
+          if isParticipant();
+
+        // Wiadomości zapisuje backend.
+        allow create, update, delete:
+          if false;
+      }
+    }
+
+    match /cameraEvents/{eventId} {
+
+      // Event może zobaczyć wyłącznie
+      // właściciel kamery.
+      allow read:
+        if request.auth != null
+        && resource.data.ownerId
+           == request.auth.uid;
+
+      // Eventy tworzy wyłącznie backend.
+      allow create: if false;
+
+      // Eventów nie usuwamy z aplikacji.
+      allow delete: if false;
+
+      // Aplikacja może zmienić wyłącznie:
+      // status + updatedAt.
+      //
+      // Dozwolone:
+      // new -> viewed
+      // new -> dismissed
+      // viewed -> dismissed
+      //
+      // escalated będzie później
+      // ustawiał wyłącznie backend.
+      allow update:
+        if request.auth != null
+        && resource.data.ownerId
+           == request.auth.uid
+
+        && request.resource.data.ownerId
+           == resource.data.ownerId
+
+        && request.resource.data
+             .diff(resource.data)
+             .affectedKeys()
+             .hasOnly([
+               'status',
+               'updatedAt'
+             ])
+
+        && (
+          (
+            resource.data.status == 'new'
+            && request.resource.data.status
+               == 'viewed'
+          )
+          ||
+          (
+            (
+              resource.data.status == 'new'
+              || resource.data.status
+                 == 'viewed'
+            )
+            && request.resource.data.status
+               == 'dismissed'
+          )
+        );
+    }
+  }
+}

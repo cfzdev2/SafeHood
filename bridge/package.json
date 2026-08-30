@@ -1,0 +1,21 @@
+{
+  "name": "bridge",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node authenticated_index.js",
+    "check": "node --check index.js && node --check onvif_camera_session.js && node --check pair.js && node --check verify_pairing.js && node --check authenticated_index.js",
+    "pair": "node pair.js",
+    "verify-pairing": "node verify_pairing.js",
+    "start-authenticated": "node authenticated_index.js",
+    "start-legacy": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "firebase-admin": "^14.2.0"
+  },
+  "private": true
+}
