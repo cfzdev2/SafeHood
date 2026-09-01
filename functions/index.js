@@ -16,6 +16,7 @@ const {
 } = require("firebase-admin/app");
 
 const {
+  FieldValue,
   getFirestore,
   Timestamp,
 } = require("firebase-admin/firestore");
@@ -2419,6 +2420,202 @@ async function ingestCameraEventInternal(
  * Przypisuje kamery użytkownika do
  * wybranego, sparowanego Bridge’a.
  */
+/**
+ * Usuwa Bridge należący do użytkownika.
+ *
+ * Najpierw unieważnia jego sekret, następnie
+ * odpina kamery, a na końcu usuwa dokument.
+ */
+exports.removeBridge = onCall(
+    {
+      region: "europe-central2",
+    },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError(
+            "unauthenticated",
+            "Musisz być zalogowany.",
+        );
+      }
+
+      const ownerId =
+          request.auth.uid;
+
+      const data =
+          request.data || {};
+
+      const bridgeId =
+          typeof data.bridgeId === "string" ?
+            data.bridgeId.trim() :
+            "";
+
+      if (!bridgeId) {
+        throw new HttpsError(
+            "invalid-argument",
+            "Brak identyfikatora Bridge.",
+        );
+      }
+
+      const userRef =
+          db
+              .collection("users")
+              .doc(ownerId);
+
+      const bridgeRef =
+          userRef
+              .collection("bridges")
+              .doc(bridgeId);
+
+      const credentialsRef =
+          db
+              .collection("bridgeCredentials")
+              .doc(bridgeId);
+
+      const camerasQuery =
+          userRef
+              .collection("cameras")
+              .where(
+                  "bridgeId",
+                  "==",
+                  bridgeId,
+              );
+
+      const [
+        userSnapshot,
+        bridgeSnapshot,
+        credentialsSnapshot,
+        camerasSnapshot,
+      ] = await Promise.all([
+        userRef.get(),
+        bridgeRef.get(),
+        credentialsRef.get(),
+        camerasQuery.get(),
+      ]);
+
+      if (!bridgeSnapshot.exists) {
+        throw new HttpsError(
+            "not-found",
+            "Nie znaleziono Bridge.",
+        );
+      }
+
+      if (credentialsSnapshot.exists) {
+        const credentials =
+            credentialsSnapshot.data();
+
+        if (
+          credentials.ownerId !==
+          ownerId
+        ) {
+          throw new HttpsError(
+              "permission-denied",
+              "Bridge nie należy do użytkownika.",
+          );
+        }
+
+        await credentialsRef.update({
+          status:
+              "revoked",
+          secretHash:
+              FieldValue.delete(),
+          revokedAt:
+              Timestamp.now(),
+          updatedAt:
+              Timestamp.now(),
+        });
+      }
+
+      const timestamp =
+          Timestamp.now();
+
+      const batchSize = 400;
+
+      for (
+        let start = 0;
+        start < camerasSnapshot.docs.length;
+        start += batchSize
+      ) {
+        const batch =
+            db.batch();
+
+        const documents =
+            camerasSnapshot.docs.slice(
+                start,
+                start + batchSize,
+            );
+
+        for (const document of documents) {
+          batch.update(
+              document.ref,
+              {
+                bridgeId:
+                    FieldValue.delete(),
+                bridgeAssignedAt:
+                    FieldValue.delete(),
+                bridgeMonitoringStatus:
+                    "offline",
+                bridgeMonitoringUpdatedAt:
+                    timestamp,
+                updatedAt:
+                    timestamp,
+              },
+          );
+        }
+
+        await batch.commit();
+      }
+
+      const userData =
+          userSnapshot.data() || {};
+
+      const bridgeData =
+          bridgeSnapshot.data() || {};
+
+      const wasActive =
+          userData.activeBridgeId ===
+            bridgeId ||
+          bridgeData.isActive ===
+            true;
+
+      if (wasActive) {
+        await userRef.set(
+            {
+              activeBridgeId:
+                  FieldValue.delete(),
+              activeBridgeUpdatedAt:
+                  timestamp,
+            },
+            {
+              merge: true,
+            },
+        );
+      }
+
+      await bridgeRef.delete();
+
+      console.log(
+          "BRIDGE REMOVED:",
+          {
+            ownerId,
+            bridgeId,
+            removedCameraCount:
+                camerasSnapshot.docs.length,
+            credentialsRevoked:
+                credentialsSnapshot.exists,
+            wasActive,
+          },
+      );
+
+      return {
+        bridgeId,
+        removedCameraCount:
+            camerasSnapshot.docs.length,
+        credentialsRevoked:
+            credentialsSnapshot.exists,
+        wasActive,
+      };
+    },
+);
 exports.assignCamerasToBridge = onCall(
     {
       region: "europe-central2",

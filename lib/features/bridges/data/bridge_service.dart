@@ -87,6 +87,38 @@ class BridgeService {
     return assignedCameraCount.toInt();
   }
 
+  Future<int> removeBridge(String bridgeId) async {
+    final normalizedBridgeId = bridgeId.trim();
+
+    if (normalizedBridgeId.isEmpty) {
+      throw ArgumentError('Brak identyfikatora Bridge.');
+    }
+
+    final callable = _functions.httpsCallable('removeBridge');
+
+    final result = await callable.call({'bridgeId': normalizedBridgeId});
+
+    final data = result.data;
+
+    if (data is! Map) {
+      throw StateError(
+        'Backend zwrócił '
+        'nieprawidłowe dane.',
+      );
+    }
+
+    final removedCameraCount = data['removedCameraCount'];
+
+    if (removedCameraCount is! num) {
+      throw StateError(
+        'Backend nie zwrócił '
+        'liczby odpiętych kamer.',
+      );
+    }
+
+    return removedCameraCount.toInt();
+  }
+
   static String? _parseString(dynamic value) {
     if (value is! String) {
       return null;

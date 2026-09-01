@@ -23,6 +23,8 @@ class _BridgeManagementScreenState extends State<BridgeManagementScreen> {
 
   String? _assigningBridgeId;
 
+  String? _removingBridgeId;
+
   @override
   void initState() {
     super.initState();
@@ -52,7 +54,7 @@ class _BridgeManagementScreenState extends State<BridgeManagementScreen> {
   }
 
   Future<void> _assignCameras(BridgeStatus bridge) async {
-    if (_assigningBridgeId != null) {
+    if (_assigningBridgeId != null || _removingBridgeId != null) {
       return;
     }
 
@@ -127,9 +129,93 @@ class _BridgeManagementScreenState extends State<BridgeManagementScreen> {
     }
   }
 
+  Future<void> _removeBridge(BridgeStatus bridge) async {
+    if (_assigningBridgeId != null || _removingBridgeId != null) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        final warning = bridge.isActive
+            ? 'To jest aktualnie aktywny Bridge.\n\n'
+                  'Usunięcie zatrzyma monitoring i odłączy '
+                  'wszystkie przypisane do niego kamery.\n\n'
+                  'Aby wznowić monitoring, trzeba będzie '
+                  'sparować lub wybrać inny Bridge.'
+            : 'Urządzenie "${bridge.name}" zostanie '
+                  'usunięte z Twojego konta.\n\n'
+                  'Jeżeli posiada prywatny sekret, zostanie '
+                  'on trwale unieważniony.';
+
+        return AlertDialog(
+          title: const Text('Usunąć Bridge?'),
+          content: Text(warning),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(false);
+              },
+              child: const Text('Anuluj'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(dialogContext).colorScheme.error,
+                foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+              ),
+              onPressed: () {
+                Navigator.of(dialogContext).pop(true);
+              },
+              child: const Text('Usuń Bridge'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _removingBridgeId = bridge.id;
+    });
+
+    try {
+      final count = await _bridgeService.removeBridge(bridge.id);
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Usunięto Bridge. '
+            'Odpięto ${_cameraCountLabel(count)}.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_errorDescription(error))));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _removingBridgeId = null;
+        });
+      }
+    }
+  }
+
   String _errorDescription(Object error) {
     if (error is FirebaseFunctionsException) {
-      return error.message ?? 'Nie udało się przypisać kamer.';
+      return error.message ?? 'Nie udało się wykonać operacji Bridge.';
     }
 
     return error.toString();
@@ -207,6 +293,11 @@ class _BridgeManagementScreenState extends State<BridgeManagementScreen> {
 
     final isAssigning = _assigningBridgeId == bridge.id;
 
+    final isRemoving = _removingBridgeId == bridge.id;
+
+    final operationInProgress =
+        _assigningBridgeId != null || _removingBridgeId != null;
+
     final statusColor = isOnline
         ? Colors.green
         : Theme.of(context).colorScheme.error;
@@ -263,35 +354,54 @@ class _BridgeManagementScreenState extends State<BridgeManagementScreen> {
                   : 'Tryb deweloperski',
             ),
             const SizedBox(height: 16),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                onPressed:
-                    bridge.isSecurelyPaired &&
-                        !bridge.isActive &&
-                        isOnline &&
-                        !isAssigning &&
-                        _assigningBridgeId == null
-                    ? () {
-                        _assignCameras(bridge);
-                      }
-                    : null,
-                icon: isAssigning
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.videocam_outlined),
-                label: Text(
-                  bridge.isActive
-                      ? 'Aktywny Bridge'
-                      : bridge.isSecurelyPaired
-                      ? isOnline
-                            ? 'Przypisz kamery'
-                            : 'Bridge offline'
-                      : 'Tryb deweloperski',
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                  onPressed: operationInProgress
+                      ? null
+                      : () {
+                          _removeBridge(bridge);
+                        },
+                  icon: isRemoving
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.delete_outline),
+                  label: Text(isRemoving ? 'Usuwanie...' : 'Usuń'),
                 ),
-              ),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed:
+                      bridge.isSecurelyPaired &&
+                          !bridge.isActive &&
+                          isOnline &&
+                          !operationInProgress
+                      ? () {
+                          _assignCameras(bridge);
+                        }
+                      : null,
+                  icon: isAssigning
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.videocam_outlined),
+                  label: Text(
+                    bridge.isActive
+                        ? 'Aktywny Bridge'
+                        : bridge.isSecurelyPaired
+                        ? isOnline
+                              ? 'Przypisz kamery'
+                              : 'Bridge offline'
+                        : 'Tryb deweloperski',
+                  ),
+                ),
+              ],
             ),
           ],
         ),
