@@ -1,20 +1,32 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../data/debug_safe_ark_cloud_gateway.dart';
 import '../data/safe_ark_cloud_gateway.dart';
 import '../domain/manufacturer_cloud.dart';
 
 class SafeArkConnectionScreen extends StatelessWidget {
-  final ManufacturerCloudGateway gateway;
+  final ManufacturerCloudGateway? gateway;
 
-  const SafeArkConnectionScreen({
-    super.key,
-    this.gateway = const SafeArkCloudGateway(),
-  });
+  const SafeArkConnectionScreen({super.key, this.gateway});
+
+  ManufacturerCloudGateway get _effectiveGateway {
+    final providedGateway = gateway;
+
+    if (providedGateway != null) {
+      return providedGateway;
+    }
+
+    if (kDebugMode) {
+      return const DebugSafeArkCloudGateway();
+    }
+
+    return const SafeArkCloudGateway();
+  }
 
   Future<void> _beginAccountLink(BuildContext context) async {
     try {
-      final session = await gateway.beginAccountLink();
+      final session = await _effectiveGateway.beginAccountLink();
 
       if (!context.mounted) {
         return;
@@ -80,7 +92,7 @@ class SafeArkConnectionScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Połącz z SafeArk')),
       body: FutureBuilder<ManufacturerCloudAccountState>(
-        future: gateway.getAccountState(),
+        future: _effectiveGateway.getAccountState(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting &&
               !snapshot.hasData) {
@@ -118,10 +130,10 @@ class SafeArkConnectionScreen extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             children: [
               const SizedBox(height: 12),
-              Center(
+              const Center(
                 child: CircleAvatar(
                   radius: 38,
-                  child: const Icon(Icons.cloud_outlined, size: 38),
+                  child: Icon(Icons.cloud_outlined, size: 38),
                 ),
               ),
               const SizedBox(height: 18),
@@ -158,6 +170,13 @@ class SafeArkConnectionScreen extends StatelessWidget {
                           ),
                         ],
                       ),
+                      if (state.accountLabel != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          'Konto: '
+                          '${state.accountLabel}',
+                        ),
+                      ],
                       if (state.errorMessage != null) ...[
                         const SizedBox(height: 12),
                         Text(state.errorMessage!),
@@ -218,9 +237,9 @@ class SafeArkConnectionScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  'Pozwala przetestować '
-                  'formularz DEKCO bez '
-                  'prawdziwego konta SafeArk.',
+                  'Konto i kamera są '
+                  'symulowane wyłącznie '
+                  'do testowania SafeHood.',
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
