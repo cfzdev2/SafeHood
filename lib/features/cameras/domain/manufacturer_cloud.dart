@@ -2,6 +2,7 @@ import 'camera.dart';
 import 'camera_provider.dart';
 
 enum ManufacturerCloudAccountStatus {
+  unavailable,
   disconnected,
   linking,
   connected,
