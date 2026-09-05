@@ -9,6 +9,7 @@ import '../domain/camera.dart';
 import '../domain/camera_provider.dart';
 import '../../camera_events/presentation/camera_event_history_screen.dart';
 import 'camera_settings_screen.dart';
+import 'widgets/camera_controls_panel.dart';
 
 class CameraDetailsScreen extends StatefulWidget {
   final Camera camera;
@@ -27,6 +28,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
 
   bool _liveLoading = true;
   Object? _liveError;
+  bool _audioEnabled = true;
 
   @override
   void initState() {
@@ -78,6 +80,50 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
         _liveError = error;
         _liveLoading = false;
       });
+    }
+  }
+
+  Future<void> _toggleAudio() async {
+    final controller = _videoController;
+
+    if (controller == null || !controller.value.isInitialized) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Strumień LIVE nie jest '
+            'jeszcze gotowy.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    final nextValue = !_audioEnabled;
+
+    try {
+      await controller.setVolume(nextValue ? 1 : 0);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _audioEnabled = nextValue;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Nie udało się zmienić '
+            'dźwięku: $error',
+          ),
+        ),
+      );
     }
   }
 
@@ -341,29 +387,11 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
 
               const SizedBox(height: 24),
 
-              Row(
-                children: [
-                  if (capabilities.supportsAudio)
-                    Expanded(
-                      child: _ActionButton(
-                        icon: Icons.volume_up_outlined,
-                        label: 'Dźwięk',
-                        onTap: () {},
-                      ),
-                    ),
-
-                  if (capabilities.supportsAudio && capabilities.supportsTalk)
-                    const SizedBox(width: 12),
-
-                  if (capabilities.supportsTalk)
-                    Expanded(
-                      child: _ActionButton(
-                        icon: Icons.mic_outlined,
-                        label: 'Mów',
-                        onTap: () {},
-                      ),
-                    ),
-                ],
+              CameraControlsPanel(
+                provider: _cameraProvider,
+                state: state,
+                audioEnabled: _audioEnabled,
+                onToggleAudio: _toggleAudio,
               ),
 
               const SizedBox(height: 24),
@@ -461,22 +489,36 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
 
               if (capabilities.supportsSnapshot)
                 OutlinedButton.icon(
-                  onPressed: () async {
-                    await _cameraProvider.takeSnapshot();
+                  onPressed: state.isOnline
+                      ? () async {
+                          try {
+                            await _cameraProvider.takeSnapshot();
 
-                    if (!context.mounted) {
-                      return;
-                    }
+                            if (!context.mounted) {
+                              return;
+                            }
 
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Snapshot wykonany '
-                          '(mock).',
-                        ),
-                      ),
-                    );
-                  },
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Snapshot wykonany.'),
+                              ),
+                            );
+                          } catch (error) {
+                            if (!context.mounted) {
+                              return;
+                            }
+
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Nie udało się wykonać '
+                                  'snapshotu: $error',
+                                ),
+                              ),
+                            );
+                          }
+                        }
+                      : null,
                   icon: const Icon(Icons.camera_alt_outlined),
                   label: const Text('Zrób zdjęcie'),
                 ),
@@ -637,42 +679,6 @@ class _ReportIncidentDialogState extends State<_ReportIncidentDialog> {
           label: const Text('Utwórz zgłoszenie'),
         ),
       ],
-    );
-  }
-}
-
-class _ActionButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _ActionButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: Theme.of(context).colorScheme.outlineVariant,
-          ),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          children: [
-            Icon(icon),
-            const SizedBox(height: 8),
-            Text(label, textAlign: TextAlign.center),
-          ],
-        ),
-      ),
     );
   }
 }
