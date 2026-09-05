@@ -1,6 +1,8 @@
 enum CameraConnectionType { mock, rtsp, onvif, manufacturerCloud, unknown }
 
-enum CameraMonitoringMode { app, bridge }
+enum CameraCloudProvider { safeArk, unknown }
+
+enum CameraMonitoringMode { app, bridge, cloud }
 
 enum CameraMonitoringRuntimeStatus {
   unknown,
@@ -38,6 +40,17 @@ class Camera {
 
   final CameraConnectionType connectionType;
 
+  // Dostawca chmury producenta.
+  // Dla DEKCO L5P/DL5P będzie to SafeArk.
+  final CameraCloudProvider? cloudProvider;
+
+  // Identyfikator urządzenia zwrócony
+  // przez chmurę producenta.
+  //
+  // Nie zapisujemy tutaj hasła
+  // ani tokenu dostępowego użytkownika.
+  final String? cloudDeviceId;
+
   final CameraMonitoringMode monitoringMode;
 
   final String? bridgeId;
@@ -61,6 +74,8 @@ class Camera {
     this.openPorts = const {},
     this.discoverySources = const {},
     this.connectionType = CameraConnectionType.mock,
+    this.cloudProvider,
+    this.cloudDeviceId,
     this.monitoringMode = CameraMonitoringMode.bridge,
     this.bridgeId,
     this.bridgeMonitoringStatus = CameraMonitoringRuntimeStatus.unknown,
@@ -81,6 +96,8 @@ class Camera {
     bool? motionDetectionEnabled,
     bool? hasSdCard,
     CameraConnectionType? connectionType,
+    CameraCloudProvider? cloudProvider,
+    String? cloudDeviceId,
     CameraMonitoringMode? monitoringMode,
     String? bridgeId,
     CameraMonitoringRuntimeStatus? bridgeMonitoringStatus,
@@ -101,6 +118,8 @@ class Camera {
           motionDetectionEnabled ?? this.motionDetectionEnabled,
       hasSdCard: hasSdCard ?? this.hasSdCard,
       connectionType: connectionType ?? this.connectionType,
+      cloudProvider: cloudProvider ?? this.cloudProvider,
+      cloudDeviceId: cloudDeviceId ?? this.cloudDeviceId,
       monitoringMode: monitoringMode ?? this.monitoringMode,
       bridgeId: bridgeId ?? this.bridgeId,
       bridgeMonitoringStatus:
@@ -123,6 +142,8 @@ class Camera {
       'motionDetectionEnabled': motionDetectionEnabled,
       'hasSdCard': hasSdCard,
       'connectionType': connectionType.name,
+      'cloudProvider': cloudProvider?.name,
+      'cloudDeviceId': cloudDeviceId,
       'monitoringMode': monitoringMode.name,
       'bridgeId': bridgeId,
 
@@ -147,6 +168,8 @@ class Camera {
       motionDetectionEnabled: map['motionDetectionEnabled'] as bool? ?? true,
       hasSdCard: map['hasSdCard'] as bool? ?? false,
       connectionType: _parseConnectionType(map['connectionType'] as String?),
+      cloudProvider: _parseCloudProvider(map['cloudProvider']),
+      cloudDeviceId: _parseNullableString(map['cloudDeviceId']),
       monitoringMode: _parseMonitoringMode(map['monitoringMode'] as String?),
       bridgeId: _parseNullableString(map['bridgeId']),
       bridgeMonitoringStatus: _parseMonitoringStatus(
@@ -196,6 +219,23 @@ class Camera {
     return CameraConnectionType.values.firstWhere(
       (type) => type.name == value,
       orElse: () => CameraConnectionType.unknown,
+    );
+  }
+
+  static CameraCloudProvider? _parseCloudProvider(dynamic value) {
+    if (value is! String) {
+      return null;
+    }
+
+    final normalized = value.trim();
+
+    if (normalized.isEmpty) {
+      return null;
+    }
+
+    return CameraCloudProvider.values.firstWhere(
+      (provider) => provider.name == normalized,
+      orElse: () => CameraCloudProvider.unknown,
     );
   }
 
