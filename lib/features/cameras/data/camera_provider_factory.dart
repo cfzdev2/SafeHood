@@ -1,5 +1,8 @@
+import 'package:flutter/foundation.dart';
+
 import '../domain/camera.dart';
 import '../domain/camera_provider.dart';
+import 'debug_safe_ark_camera_provider.dart';
 import 'dekco_safeark_camera_provider.dart';
 import 'mock_camera_provider.dart';
 import 'onvif_camera_provider.dart';
@@ -40,6 +43,14 @@ class CameraProviderFactory {
   static CameraProvider _createManufacturerCloudProvider(Camera camera) {
     switch (camera.cloudProvider) {
       case CameraCloudProvider.safeArk:
+        final cloudDeviceId = camera.cloudDeviceId;
+
+        if (kDebugMode &&
+            cloudDeviceId != null &&
+            cloudDeviceId.startsWith('debug-')) {
+          return DebugSafeArkCameraProvider(camera: camera);
+        }
+
         return DekcoSafeArkCameraProvider(camera: camera);
 
       case CameraCloudProvider.unknown:
