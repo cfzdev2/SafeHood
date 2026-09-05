@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/camera_discovery_service.dart';
 import '../domain/camera.dart';
 import 'safe_ark_connection_screen.dart';
+import '../domain/manufacturer_cloud.dart';
 
 class AddCameraScreen extends StatefulWidget {
   const AddCameraScreen({super.key});
@@ -20,6 +21,8 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
 
   DetectedCamera? selectedCamera;
 
+  ManufacturerCloudDevice? selectedCloudDevice;
+
   bool isDekcoSafeArkSelected = false;
   bool isScanning = false;
 
@@ -34,20 +37,23 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
   }
 
   Future<void> _selectDekcoSafeArk() async {
-    final shouldContinue = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const SafeArkConnectionScreen()),
+    final device = await Navigator.of(context).push<ManufacturerCloudDevice>(
+      MaterialPageRoute<ManufacturerCloudDevice>(
+        builder: (_) => const SafeArkConnectionScreen(),
+      ),
     );
 
-    if (shouldContinue != true || !mounted) {
+    if (device == null || !mounted) {
       return;
     }
 
     setState(() {
       selectedCamera = null;
+      selectedCloudDevice = device;
       isDekcoSafeArkSelected = true;
       scanProgress = null;
 
-      nameController.clear();
+      nameController.text = device.name;
       locationController.clear();
     });
   }
@@ -60,6 +66,7 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
     setState(() {
       isScanning = true;
       selectedCamera = null;
+      selectedCloudDevice = null;
       isDekcoSafeArkSelected = false;
       scanProgress = null;
     });
@@ -188,7 +195,7 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
     setState(() {
       selectedCamera = result;
       isDekcoSafeArkSelected = false;
-
+      selectedCloudDevice = null;
       nameController.clear();
       locationController.clear();
     });
@@ -246,6 +253,7 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
   void _changeCamera() {
     setState(() {
       selectedCamera = null;
+      selectedCloudDevice = null;
       isDekcoSafeArkSelected = false;
 
       nameController.clear();
@@ -255,8 +263,9 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
 
   void _addCamera() {
     final detectedCamera = selectedCamera;
+    final cloudDevice = selectedCloudDevice;
 
-    if (detectedCamera == null && !isDekcoSafeArkSelected) {
+    if (detectedCamera == null && cloudDevice == null) {
       return;
     }
 
@@ -278,21 +287,8 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
       return;
     }
 
-    final camera = isDekcoSafeArkSelected
-        ? Camera(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
-            name: name,
-            locationName: location,
-            brand: 'DEKCO',
-            model: 'Floodlight Camera Pro L5P/DL5P',
-            isOnline: false,
-            motionDetectionEnabled: true,
-            hasSdCard: false,
-            connectionType: CameraConnectionType.manufacturerCloud,
-            cloudProvider: CameraCloudProvider.safeArk,
-            monitoringMode: CameraMonitoringMode.cloud,
-            discoverySources: const {'manufacturer-cloud', 'safeark'},
-          )
+    final camera = cloudDevice != null
+        ? cloudDevice.toCamera(name: name, locationName: location)
         : Camera(
             id: DateTime.now().millisecondsSinceEpoch.toString(),
             name: name,

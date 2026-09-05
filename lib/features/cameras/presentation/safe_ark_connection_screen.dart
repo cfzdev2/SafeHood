@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../data/debug_safe_ark_cloud_gateway.dart';
 import '../data/safe_ark_cloud_gateway.dart';
+import 'manufacturer_cloud_device_selection_screen.dart';
 import '../domain/manufacturer_cloud.dart';
 
 class SafeArkConnectionScreen extends StatelessWidget {
@@ -49,6 +50,21 @@ class SafeArkConnectionScreen extends StatelessWidget {
         context,
       ).showSnackBar(SnackBar(content: Text(_errorDescription(error))));
     }
+  }
+
+  Future<void> _openDevices(BuildContext context) async {
+    final device = await Navigator.of(context).push<ManufacturerCloudDevice>(
+      MaterialPageRoute<ManufacturerCloudDevice>(
+        builder: (_) =>
+            ManufacturerCloudDeviceSelectionScreen(gateway: _effectiveGateway),
+      ),
+    );
+
+    if (device == null || !context.mounted) {
+      return;
+    }
+
+    Navigator.of(context).pop(device);
   }
 
   String _errorDescription(Object error) {
@@ -213,18 +229,30 @@ class SafeArkConnectionScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: canBeginLink
-                    ? () {
-                        _beginAccountLink(context);
-                      }
-                    : null,
-                icon: const Icon(Icons.link),
-                label: const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 14),
-                  child: Text('Połącz konto SafeArk'),
+              if (state.isConnected)
+                FilledButton.icon(
+                  onPressed: () {
+                    _openDevices(context);
+                  },
+                  icon: const Icon(Icons.videocam_outlined),
+                  label: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 14),
+                    child: Text('Wybierz kamerę SafeArk'),
+                  ),
+                )
+              else
+                FilledButton.icon(
+                  onPressed: canBeginLink
+                      ? () {
+                          _beginAccountLink(context);
+                        }
+                      : null,
+                  icon: const Icon(Icons.link),
+                  label: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 14),
+                    child: Text('Połącz konto SafeArk'),
+                  ),
                 ),
-              ),
               if (kDebugMode) ...[
                 const SizedBox(height: 20),
                 const Divider(),
@@ -237,17 +265,9 @@ class SafeArkConnectionScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  'Konto i kamera są '
-                  'symulowane wyłącznie '
-                  'do testowania SafeHood.',
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pop(true);
-                  },
-                  icon: const Icon(Icons.science_outlined),
-                  label: const Text('Kontynuuj testowo'),
+                  'Konto i widoczna kamera '
+                  'pochodzą z bezpiecznego '
+                  'symulatora SafeArk.',
                 ),
               ],
             ],
