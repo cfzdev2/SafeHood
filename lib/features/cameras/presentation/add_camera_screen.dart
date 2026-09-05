@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/camera_discovery_service.dart';
 import '../domain/camera.dart';
+import 'safe_ark_connection_screen.dart';
 
 class AddCameraScreen extends StatefulWidget {
   const AddCameraScreen({super.key});
@@ -32,7 +33,15 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
     super.dispose();
   }
 
-  void _selectDekcoSafeArk() {
+  Future<void> _selectDekcoSafeArk() async {
+    final shouldContinue = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const SafeArkConnectionScreen()),
+    );
+
+    if (shouldContinue != true || !mounted) {
+      return;
+    }
+
     setState(() {
       selectedCamera = null;
       isDekcoSafeArkSelected = true;
