@@ -1,5 +1,7 @@
 import 'camera.dart';
 
+enum CameraPtzDirection { up, down, left, right }
+
 class CameraCapabilities {
   final bool supportsLive;
   final bool supportsAudio;
@@ -9,6 +11,8 @@ class CameraCapabilities {
   final bool supportsRecordings;
   final bool supportsSnapshot;
   final bool supportsPtz;
+  final bool supportsFloodlight;
+  final bool supportsSiren;
 
   const CameraCapabilities({
     required this.supportsLive,
@@ -19,6 +23,8 @@ class CameraCapabilities {
     required this.supportsRecordings,
     required this.supportsSnapshot,
     required this.supportsPtz,
+    this.supportsFloodlight = false,
+    this.supportsSiren = false,
   });
 }
 
@@ -74,19 +80,43 @@ class CameraDetection {
   });
 }
 
-/// Provider, który potrafi emitować
-/// wykrycia z kamery.
-///
-/// Nie każda kamera/provider musi
-/// implementować Events.
+/// Provider emitujący wykrycia kamery.
 abstract interface class CameraDetectionSource {
   Stream<CameraDetection> watchDetections();
 }
 
+/// Sterowanie uruchamianiem monitoringu
+/// zdarzeń kamery.
 abstract interface class CameraDetectionMonitoringController {
   Future<void> startDetectionMonitoring();
 
   Future<void> stopDetectionMonitoring();
+}
+
+/// Opcjonalna obsługa rozmowy
+/// dwukierunkowej.
+abstract interface class CameraTalkController {
+  Future<void> startTalk();
+
+  Future<void> stopTalk();
+}
+
+/// Opcjonalna obsługa obrotu
+/// i pochylenia kamery.
+abstract interface class CameraPtzController {
+  Future<void> movePtz(CameraPtzDirection direction);
+
+  Future<void> stopPtz();
+}
+
+/// Opcjonalna obsługa reflektora.
+abstract interface class CameraFloodlightController {
+  Future<void> setFloodlight(bool enabled);
+}
+
+/// Opcjonalna obsługa syreny.
+abstract interface class CameraSirenController {
+  Future<void> setSiren(bool enabled);
 }
 
 abstract class CameraProvider {
@@ -94,16 +124,14 @@ abstract class CameraProvider {
 
   CameraCapabilities get capabilities;
 
-  ///
   /// Aktualny adres strumienia LIVE.
   ///
   /// Dla ONVIF będzie to zwykle RTSP.
-  /// Inny provider może później zwracać
-  /// np. HLS/HTTPS.
+  /// Provider chmurowy może zwrócić
+  /// między innymi HLS albo WebRTC.
   ///
-  /// null oznacza, że provider nie ma
-  /// jeszcze dostępnego źródła LIVE.
-  ///
+  /// null oznacza brak dostępnego
+  /// źródła LIVE.
   Uri? get liveStreamUri => null;
 
   Stream<CameraRuntimeState> watchState();
