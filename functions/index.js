@@ -3763,6 +3763,289 @@ exports.ingestCameraEvent = onCall(
       };
     },
 );
+/**
+ * Normalizuje nazwę dostawcy chmury.
+ *
+ * @param {*} value Surowa wartość.
+ * @return {string} Kanoniczna nazwa.
+ */
+function normalizeManufacturerCloudProvider(
+    value,
+) {
+  const normalized =
+      typeof value === "string" ?
+        value.trim().toLowerCase() :
+        "";
+
+  if (normalized === "safeark") {
+    return "safeArk";
+  }
+
+  throw new HttpsError(
+      "invalid-argument",
+      "Nieobsługiwany dostawca chmury.",
+  );
+}
+
+/**
+ * Normalizuje identyfikator urządzenia
+ * nadany przez producenta.
+ *
+ * @param {*} value Surowa wartość.
+ * @return {string} Identyfikator urządzenia.
+ */
+function normalizeCloudDeviceId(value) {
+  const normalized =
+      typeof value === "string" ?
+        value.trim() :
+        "";
+
+  if (
+    !normalized ||
+    normalized.length > 256
+  ) {
+    throw new HttpsError(
+        "invalid-argument",
+        "Nieprawidłowy cloudDeviceId.",
+    );
+  }
+
+  return normalized;
+}
+
+/**
+ * Znajduje kamerę SafeHood na podstawie
+ * tożsamości urządzenia w chmurze.
+ *
+ * ownerId i cameraId nie pochodzą
+ * z zewnętrznego żądania.
+ *
+ * @param {Object} input Dane urządzenia.
+ * @param {string} input.provider Dostawca.
+ * @param {string} input.cloudDeviceId ID urządzenia.
+ * @return {Promise<Object>} Tożsamość kamery.
+ */
+async function resolveManufacturerCloudCamera({
+  provider,
+  cloudDeviceId,
+}) {
+  const snapshot =
+      await db
+          .collectionGroup("cameras")
+          .where(
+              "cloudDeviceId",
+              "==",
+              cloudDeviceId,
+          )
+          .get();
+
+  const matches =
+      snapshot.docs.filter(
+          (document) => {
+            const camera =
+                document.data();
+
+            return (
+              camera.connectionType ===
+                "manufacturerCloud" &&
+              camera.monitoringMode ===
+                "cloud" &&
+              camera.cloudProvider ===
+                provider
+            );
+          },
+      );
+
+  if (matches.length === 0) {
+    throw new HttpsError(
+        "not-found",
+        "Nie znaleziono kamery chmurowej.",
+    );
+  }
+
+  if (matches.length > 1) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Identyfikator urządzenia nie jest unikalny.",
+    );
+  }
+
+  const cameraDocument =
+      matches[0];
+
+  const ownerReference =
+      cameraDocument.ref.parent.parent;
+
+  if (ownerReference == null) {
+    throw new HttpsError(
+        "internal",
+        "Nie udało się ustalić właściciela kamery.",
+    );
+  }
+
+  return {
+    ownerId: ownerReference.id,
+    cameraId: cameraDocument.id,
+  };
+}
+
+/**
+ * TYLKO DEVELOPMENT.
+ *
+ * Symuluje webhook producenta kamery.
+ * Żądanie przekazuje wyłącznie provider
+ * i cloudDeviceId. Backend sam odnajduje
+ * właściciela oraz dokument kamery.
+ */
+exports.devIngestManufacturerCameraEvent =
+    onRequest(
+        {
+          region: "europe-central2",
+        },
+        async (request, response) => {
+          if (
+            process.env.FUNCTIONS_EMULATOR !==
+            "true"
+          ) {
+            response.status(404).json({
+              error: "Not found.",
+            });
+
+            return;
+          }
+
+          if (request.method !== "POST") {
+            response.status(405).json({
+              error: "POST required.",
+            });
+
+            return;
+          }
+
+          const expectedSecret =
+              process.env
+                  .SAFEHOOD_DEV_EVENT_SECRET ||
+              "";
+
+          const receivedSecret =
+              typeof request.headers[
+                  "x-safehood-dev-secret"
+              ] === "string" ?
+                request.headers[
+                    "x-safehood-dev-secret"
+                ] :
+                "";
+
+          if (
+            !expectedSecret ||
+            receivedSecret !== expectedSecret
+          ) {
+            response.status(401).json({
+              error:
+                  "Invalid development secret.",
+            });
+
+            return;
+          }
+
+          try {
+            const data =
+                request.body || {};
+
+            const provider =
+                normalizeManufacturerCloudProvider(
+                    data.provider,
+                );
+
+            const cloudDeviceId =
+                normalizeCloudDeviceId(
+                    data.cloudDeviceId,
+                );
+
+            const camera =
+                await resolveManufacturerCloudCamera({
+                  provider,
+                  cloudDeviceId,
+                });
+
+            const result =
+                await ingestCameraEventInternal({
+                  ownerId: camera.ownerId,
+                  cameraId: camera.cameraId,
+                  type: data.type,
+                  source: provider,
+                  confidence:
+                      data.confidence,
+                  snapshotUrl:
+                      data.snapshotUrl,
+                  clipUrl:
+                      data.clipUrl,
+                  occurredAt:
+                      data.occurredAt,
+                });
+
+            console.log(
+                "MANUFACTURER CAMERA EVENT:",
+                {
+                  provider,
+                  cloudDeviceId,
+                  cameraId:
+                      camera.cameraId,
+                  eventId:
+                      result.eventId,
+                  merged:
+                      result.merged,
+                },
+            );
+
+            response.status(200).json({
+              ok: true,
+              provider,
+              cloudDeviceId,
+              cameraId:
+                  camera.cameraId,
+              ...result,
+            });
+          } catch (error) {
+            console.error(
+                "MANUFACTURER CAMERA EVENT ERROR:",
+                error,
+            );
+
+            const code =
+                error &&
+                typeof error.code ===
+                    "string" ?
+                  error.code :
+                  "";
+
+            let status = 500;
+
+            if (code === "invalid-argument") {
+              status = 400;
+            }
+
+            if (code === "not-found") {
+              status = 404;
+            }
+
+            if (
+              code === "failed-precondition"
+            ) {
+              status = 409;
+            }
+
+            response.status(status).json({
+              error:
+                  error &&
+                  typeof error.message ===
+                      "string" ?
+                    error.message :
+                    "Nie udało się zapisać zdarzenia.",
+            });
+          }
+        },
+    );
 exports.devIngestCameraEvent = onRequest(
     {
       region: "europe-central2",
