@@ -12,6 +12,12 @@ const {
 } = require("firebase-functions/v2/https");
 
 const {
+  runManufacturerEventOnce,
+} = require(
+    "./manufacturer_event_deduplicator",
+);
+
+const {
   initializeApp,
 } = require("firebase-admin/app");
 
@@ -3962,26 +3968,48 @@ exports.devIngestManufacturerCameraEvent =
                     data.cloudDeviceId,
                 );
 
-            const camera =
-                await resolveManufacturerCloudCamera({
+            const result =
+                await runManufacturerEventOnce({
+                  db,
+                  Timestamp,
+                  HttpsError,
                   provider,
                   cloudDeviceId,
-                });
+                  externalEventId:
+                      data.externalEventId,
+                  handler: async () => {
+                    const camera =
+                        await resolveManufacturerCloudCamera({
+                          provider,
+                          cloudDeviceId,
+                        });
 
-            const result =
-                await ingestCameraEventInternal({
-                  ownerId: camera.ownerId,
-                  cameraId: camera.cameraId,
-                  type: data.type,
-                  source: provider,
-                  confidence:
-                      data.confidence,
-                  snapshotUrl:
-                      data.snapshotUrl,
-                  clipUrl:
-                      data.clipUrl,
-                  occurredAt:
-                      data.occurredAt,
+                    const eventResult =
+                        await ingestCameraEventInternal({
+                          ownerId:
+                              camera.ownerId,
+                          cameraId:
+                              camera.cameraId,
+                          type:
+                              data.type,
+                          source:
+                              provider,
+                          confidence:
+                              data.confidence,
+                          snapshotUrl:
+                              data.snapshotUrl,
+                          clipUrl:
+                              data.clipUrl,
+                          occurredAt:
+                              data.occurredAt,
+                        });
+
+                    return {
+                      ...eventResult,
+                      cameraId:
+                          camera.cameraId,
+                    };
+                  },
                 });
 
             console.log(
@@ -3989,12 +4017,16 @@ exports.devIngestManufacturerCameraEvent =
                 {
                   provider,
                   cloudDeviceId,
+                  externalEventId:
+                      result.externalEventId,
                   cameraId:
-                      camera.cameraId,
+                      result.cameraId,
                   eventId:
                       result.eventId,
                   merged:
                       result.merged,
+                  duplicate:
+                      result.duplicate,
                 },
             );
 
@@ -4002,8 +4034,6 @@ exports.devIngestManufacturerCameraEvent =
               ok: true,
               provider,
               cloudDeviceId,
-              cameraId:
-                  camera.cameraId,
               ...result,
             });
           } catch (error) {
@@ -4030,7 +4060,8 @@ exports.devIngestManufacturerCameraEvent =
             }
 
             if (
-              code === "failed-precondition"
+              code === "failed-precondition" ||
+              code === "aborted"
             ) {
               status = 409;
             }
