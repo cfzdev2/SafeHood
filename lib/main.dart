@@ -62,21 +62,35 @@ void _showForegroundPush(RemoteMessage message) {
 
     final body = _normalizedPushText(message.notification?.body);
 
-    messenger.hideCurrentSnackBar();
+    final canOpen = _canOpenPush(message);
+
+    messenger.removeCurrentSnackBar();
 
     messenger.showSnackBar(
       SnackBar(
-        content: Text(body == null ? title : '$title\n$body'),
-        duration: const Duration(seconds: 8),
-        action: _canOpenPush(message)
-            ? SnackBarAction(
-                label: 'ZOBACZ',
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
+        showCloseIcon: true,
+        content: Row(
+          children: [
+            Expanded(child: Text(body == null ? title : '$title\n$body')),
+            if (canOpen) ...[
+              const SizedBox(width: 8),
+              TextButton(
                 onPressed: () {
+                  messenger.hideCurrentSnackBar();
+
                   PushNotificationService.instance
                       .handleForegroundMessageAction(message);
                 },
-              )
-            : null,
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.lightBlueAccent,
+                ),
+                child: const Text('ZOBACZ'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   });
