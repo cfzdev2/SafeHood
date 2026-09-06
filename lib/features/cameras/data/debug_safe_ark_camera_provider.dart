@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../domain/camera.dart';
+import '../domain/camera_recording.dart';
 import '../domain/camera_provider.dart';
 
 class DebugSafeArkCameraProvider
@@ -11,7 +12,8 @@ class DebugSafeArkCameraProvider
         CameraTalkController,
         CameraPtzController,
         CameraFloodlightController,
-        CameraSirenController {
+        CameraSirenController,
+        CameraRecordingsSource {
   static const _liveStreamUrl = String.fromEnvironment(
     'SAFEHOOD_DEBUG_RTSP_URL',
     defaultValue: 'rtsp://192.168.1.10:8554/fake-stream',
@@ -52,6 +54,10 @@ class DebugSafeArkCameraProvider
 
   @override
   Uri? get liveStreamUri => Uri.parse(_liveStreamUrl);
+  static const _mediaBaseUrl = String.fromEnvironment(
+    'SAFEHOOD_DEBUG_CAMERA_HTTP_URL',
+    defaultValue: 'http://192.168.1.10:8899',
+  );
 
   @override
   Stream<CameraRuntimeState> watchState() async* {
@@ -226,6 +232,143 @@ class DebugSafeArkCameraProvider
       'SAFEARK DEBUG [${camera.id}]: '
       'siren = $_sirenEnabled',
     );
+  }
+
+  Uri _snapshotUri(String recordingId) {
+    return Uri.parse(
+      '$_mediaBaseUrl/snapshot.png',
+    ).replace(queryParameters: {'recording': recordingId});
+  }
+
+  @override
+  Future<CameraRecordingPage> loadRecordings({
+    DateTime? from,
+    DateTime? to,
+    String? pageToken,
+    int limit = 30,
+  }) async {
+    if (_disposed) {
+      throw StateError('Provider kamery został zamknięty.');
+    }
+
+    await _simulateRequest();
+
+    final now = DateTime.now();
+
+    final allRecordings = <CameraRecording>[
+      CameraRecording(
+        id: 'debug-recording-person-1',
+        cameraId: camera.id,
+        startedAt: now.subtract(const Duration(minutes: 4)),
+        duration: const Duration(seconds: 18),
+        storage: CameraRecordingStorage.cloud,
+        trigger: CameraRecordingTrigger.person,
+        thumbnailUri: _snapshotUri('debug-recording-person-1'),
+      ),
+      CameraRecording(
+        id: 'debug-recording-motion-1',
+        cameraId: camera.id,
+        startedAt: now.subtract(const Duration(minutes: 37)),
+        duration: const Duration(seconds: 22),
+        storage: camera.hasSdCard
+            ? CameraRecordingStorage.sdCard
+            : CameraRecordingStorage.cloud,
+        trigger: CameraRecordingTrigger.motion,
+        thumbnailUri: _snapshotUri('debug-recording-motion-1'),
+      ),
+      CameraRecording(
+        id: 'debug-recording-vehicle-1',
+        cameraId: camera.id,
+        startedAt: now.subtract(const Duration(hours: 2)),
+        duration: const Duration(seconds: 35),
+        storage: CameraRecordingStorage.cloud,
+        trigger: CameraRecordingTrigger.vehicle,
+        thumbnailUri: _snapshotUri('debug-recording-vehicle-1'),
+      ),
+      CameraRecording(
+        id: 'debug-recording-motion-2',
+        cameraId: camera.id,
+        startedAt: now.subtract(const Duration(days: 1)),
+        duration: const Duration(seconds: 47),
+        storage: camera.hasSdCard
+            ? CameraRecordingStorage.sdCard
+            : CameraRecordingStorage.cloud,
+        trigger: CameraRecordingTrigger.motion,
+        thumbnailUri: _snapshotUri('debug-recording-motion-2'),
+      ),
+    ];
+
+    final filtered = allRecordings.where((recording) {
+      if (from != null && recording.startedAt.isBefore(from)) {
+        return false;
+      }
+
+      if (to != null && recording.startedAt.isAfter(to)) {
+        return false;
+      }
+
+      return true;
+    }).toList();
+
+    final normalizedToken = pageToken?.trim() ?? '';
+
+    final parsedOffset = normalizedToken.isEmpty
+        ? 0
+        : int.tryParse(normalizedToken);
+
+    if (parsedOffset == null || parsedOffset < 0) {
+      throw StateError('Nieprawidłowy token strony nagrań.');
+    }
+
+    final normalizedLimit = limit < 1
+        ? 1
+        : limit > 100
+        ? 100
+        : limit;
+
+    final start = parsedOffset > filtered.length
+        ? filtered.length
+        : parsedOffset;
+
+    final requestedEnd = start + normalizedLimit;
+
+    final end = requestedEnd > filtered.length ? filtered.length : requestedEnd;
+
+    final recordings = filtered.sublist(start, end);
+
+    final nextPageToken = end < filtered.length ? '$end' : null;
+
+    debugPrint(
+      'SAFEARK DEBUG [${camera.id}]: '
+      'pobrano ${recordings.length} nagrań',
+    );
+
+    return CameraRecordingPage(
+      recordings: recordings,
+      nextPageToken: nextPageToken,
+    );
+  }
+
+  @override
+  Future<Uri> getRecordingPlaybackUri(CameraRecording recording) async {
+    if (_disposed) {
+      throw StateError('Provider kamery został zamknięty.');
+    }
+
+    if (recording.cameraId != camera.id) {
+      throw StateError('Nagranie nie należy do tej kamery.');
+    }
+
+    await _simulateRequest();
+
+    debugPrint(
+      'SAFEARK DEBUG [${camera.id}]: '
+      'odtwarzanie ${recording.id}',
+    );
+
+    return Uri.parse(
+      '$_mediaBaseUrl/clip.mp4',
+    ).replace(queryParameters: {'recording': recording.id});
   }
 
   @override

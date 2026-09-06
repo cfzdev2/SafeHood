@@ -1,4 +1,5 @@
 import 'camera.dart';
+import 'camera_recording.dart';
 
 enum CameraPtzDirection { up, down, left, right }
 
@@ -117,6 +118,24 @@ abstract interface class CameraFloodlightController {
 /// Opcjonalna obsługa syreny.
 abstract interface class CameraSirenController {
   Future<void> setSiren(bool enabled);
+}
+
+/// Opcjonalne źródło nagrań
+/// chmurowych lub z karty SD.
+abstract interface class CameraRecordingsSource {
+  Future<CameraRecordingPage> loadRecordings({
+    DateTime? from,
+    DateTime? to,
+    String? pageToken,
+    int limit = 30,
+  });
+
+  /// Pobiera aktualny adres odtwarzania.
+  ///
+  /// Adres może być tymczasowy, dlatego
+  /// pobieramy go dopiero po wybraniu
+  /// konkretnego nagrania.
+  Future<Uri> getRecordingPlaybackUri(CameraRecording recording);
 }
 
 abstract class CameraProvider {

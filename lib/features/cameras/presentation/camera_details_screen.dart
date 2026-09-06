@@ -10,6 +10,7 @@ import '../domain/camera_provider.dart';
 import '../../camera_events/presentation/camera_event_history_screen.dart';
 import 'camera_settings_screen.dart';
 import 'widgets/camera_controls_panel.dart';
+import 'camera_recordings_screen.dart';
 
 class CameraDetailsScreen extends StatefulWidget {
   final Camera camera;
@@ -306,6 +307,34 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
     );
   }
 
+  Future<void> _openRecordings() async {
+    final CameraRecordingsSource? source =
+        _cameraProvider is CameraRecordingsSource
+        ? _cameraProvider as CameraRecordingsSource
+        : null;
+
+    if (source == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ta kamera nie udostępnia '
+            'jeszcze nagrań.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          return CameraRecordingsScreen(camera: widget.camera, source: source);
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final capabilities = _cameraProvider.capabilities;
@@ -444,11 +473,15 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
 
                     if (capabilities.supportsRecordings)
                       ListTile(
-                        leading: const Icon(Icons.sd_card_outlined),
+                        leading: const Icon(Icons.video_library_outlined),
                         title: const Text('Nagrania'),
-                        trailing: Text(
-                          widget.camera.hasSdCard ? 'Dostępne' : 'Brak',
+                        subtitle: Text(
+                          widget.camera.hasSdCard
+                              ? 'Chmura i karta SD'
+                              : 'Nagrania w chmurze',
                         ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: state.isOnline ? _openRecordings : null,
                       ),
 
                     const Divider(height: 1),
