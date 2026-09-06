@@ -1,5 +1,6 @@
 import 'camera.dart';
 import 'camera_recording.dart';
+import 'camera_snapshot.dart';
 
 enum CameraPtzDirection { up, down, left, right }
 
@@ -136,6 +137,12 @@ abstract interface class CameraRecordingsSource {
   /// pobieramy go dopiero po wybraniu
   /// konkretnego nagrania.
   Future<Uri> getRecordingPlaybackUri(CameraRecording recording);
+}
+
+/// Opcjonalny provider zwracający
+/// wykonane zdjęcie do podglądu.
+abstract interface class CameraSnapshotSource {
+  Future<CameraSnapshot> captureSnapshot();
 }
 
 abstract class CameraProvider {

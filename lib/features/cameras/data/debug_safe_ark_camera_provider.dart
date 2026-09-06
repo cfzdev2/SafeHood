@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../domain/camera.dart';
 import '../domain/camera_recording.dart';
 import '../domain/camera_provider.dart';
+import '../domain/camera_snapshot.dart';
 
 class DebugSafeArkCameraProvider
     implements
@@ -13,7 +14,8 @@ class DebugSafeArkCameraProvider
         CameraPtzController,
         CameraFloodlightController,
         CameraSirenController,
-        CameraRecordingsSource {
+        CameraRecordingsSource,
+        CameraSnapshotSource {
   static const _liveStreamUrl = String.fromEnvironment(
     'SAFEHOOD_DEBUG_RTSP_URL',
     defaultValue: 'rtsp://192.168.1.10:8554/fake-stream',
@@ -161,11 +163,37 @@ class DebugSafeArkCameraProvider
 
   @override
   Future<void> takeSnapshot() async {
+    await captureSnapshot();
+  }
+
+  @override
+  Future<CameraSnapshot> captureSnapshot() async {
+    if (_disposed) {
+      throw StateError('Provider kamery został zamknięty.');
+    }
+
     await _simulateRequest();
+
+    final capturedAt = DateTime.now();
+
+    final snapshotId =
+        'debug-snapshot-'
+        '${capturedAt.millisecondsSinceEpoch}';
+
+    final imageUri = Uri.parse(
+      '$_mediaBaseUrl/snapshot.png',
+    ).replace(queryParameters: {'event': snapshotId});
 
     debugPrint(
       'SAFEARK DEBUG [${camera.id}]: '
-      'snapshot',
+      'snapshot = $imageUri',
+    );
+
+    return CameraSnapshot(
+      id: snapshotId,
+      cameraId: camera.id,
+      capturedAt: capturedAt,
+      imageUri: imageUri,
     );
   }
 

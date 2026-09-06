@@ -11,6 +11,7 @@ import '../../camera_events/presentation/camera_event_history_screen.dart';
 import 'camera_settings_screen.dart';
 import 'widgets/camera_controls_panel.dart';
 import 'camera_recordings_screen.dart';
+import 'camera_snapshot_preview_screen.dart';
 
 class CameraDetailsScreen extends StatefulWidget {
   final Camera camera;
@@ -30,6 +31,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
   bool _liveLoading = true;
   Object? _liveError;
   bool _audioEnabled = true;
+  bool _snapshotLoading = false;
 
   @override
   void initState() {
@@ -125,6 +127,62 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
           ),
         ),
       );
+    }
+  }
+
+  Future<void> _takeSnapshot() async {
+    if (_snapshotLoading) {
+      return;
+    }
+
+    setState(() {
+      _snapshotLoading = true;
+    });
+
+    try {
+      if (_cameraProvider is CameraSnapshotSource) {
+        final source = _cameraProvider as CameraSnapshotSource;
+        final snapshot = await source.captureSnapshot();
+
+        if (!mounted) {
+          return;
+        }
+
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => CameraSnapshotPreviewScreen(
+              camera: widget.camera,
+              snapshot: snapshot,
+            ),
+          ),
+        );
+
+        return;
+      }
+
+      await _cameraProvider.takeSnapshot();
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Snapshot wykonany.')));
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nie udało się wykonać snapshotu: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _snapshotLoading = false;
+        });
+      }
     }
   }
 
@@ -522,38 +580,20 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
 
               if (capabilities.supportsSnapshot)
                 OutlinedButton.icon(
-                  onPressed: state.isOnline
-                      ? () async {
-                          try {
-                            await _cameraProvider.takeSnapshot();
-
-                            if (!context.mounted) {
-                              return;
-                            }
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Snapshot wykonany.'),
-                              ),
-                            );
-                          } catch (error) {
-                            if (!context.mounted) {
-                              return;
-                            }
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Nie udało się wykonać '
-                                  'snapshotu: $error',
-                                ),
-                              ),
-                            );
-                          }
-                        }
+                  onPressed: state.isOnline && !_snapshotLoading
+                      ? _takeSnapshot
                       : null,
-                  icon: const Icon(Icons.camera_alt_outlined),
-                  label: const Text('Zrób zdjęcie'),
+                  icon: _snapshotLoading
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.camera_alt_outlined),
+                  label: Text(
+                    _snapshotLoading
+                        ? 'Wykonywanie zdjęcia...'
+                        : 'Zrób zdjęcie',
+                  ),
                 ),
 
               const SizedBox(height: 10),
