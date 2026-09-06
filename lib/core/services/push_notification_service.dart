@@ -173,6 +173,15 @@ class PushNotificationService {
     }
   }
 
+  void handleForegroundMessageAction(RemoteMessage message) {
+    debugPrint(
+      'PUSH FOREGROUND ACTION: '
+      '${message.data}',
+    );
+
+    _handleOpenedMessage(message);
+  }
+
   void _handleOpenedMessage(RemoteMessage message) {
     final type = message.data['type']?.trim();
 
