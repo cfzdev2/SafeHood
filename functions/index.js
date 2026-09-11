@@ -2000,6 +2000,44 @@ function isCameraEventNotificationEnabled(
  * @param {string} eventType Typ zdarzenia.
  * @return {Promise<void>}
  */
+/**
+ * Zwraca tytuł powiadomienia
+ * odpowiedni dla typu zdarzenia.
+ *
+ * @param {string} eventType Typ zdarzenia.
+ * @return {string}
+ */
+function getCameraEventNotificationTitle(
+    eventType,
+) {
+  switch (eventType) {
+    case "person":
+      return "Wykryto osobę";
+
+    case "motion":
+      return "Wykryto ruch";
+
+    case "vehicle":
+      return "Wykryto pojazd";
+
+    case "sound":
+      return "Wykryto dźwięk";
+
+    default:
+      return "Wykryto aktywność";
+  }
+}
+/**
+ * Wysyła powiadomienie o wykryciu
+ * tylko do właściciela kamery.
+ *
+ * @param {string} ownerId UID właściciela.
+ * @param {string} cameraId ID kamery.
+ * @param {string} cameraName Nazwa kamery.
+ * @param {string} eventId ID zdarzenia.
+ * @param {string} eventType Typ zdarzenia.
+ * @return {Promise<void>}
+ */
 async function sendCameraEventNotification({
   ownerId,
   cameraId,
@@ -2020,7 +2058,10 @@ async function sendCameraEventNotification({
 
   const notificationSettings =
       cameraData.notificationSettings;
-
+  const notificationTitle =
+    getCameraEventNotificationTitle(
+        eventType,
+    );
   if (!isCameraEventNotificationEnabled(
       notificationSettings,
       eventType,
@@ -2063,7 +2104,7 @@ async function sendCameraEventNotification({
 
     messages.push({
       notification: {
-        title: "Wykryto aktywność",
+        title: notificationTitle,
         body:
             `${cameraName} • ` +
             "sprawdź, co się dzieje",
@@ -2073,6 +2114,7 @@ async function sendCameraEventNotification({
         type: "camera_event",
         eventId,
         cameraId,
+        cameraEventType: eventType,
       },
 
       android: {
