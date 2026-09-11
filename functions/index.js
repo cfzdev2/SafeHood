@@ -1944,6 +1944,60 @@ function mergeConfidence(
  * @param {string} cameraId ID kamery.
  * @param {string} cameraName Nazwa kamery.
  * @param {string} eventId ID CameraEvent.
+ * @param {string} eventType Typ zdarzenia.
+ * @return {Promise<void>}
+ */
+
+/**
+ * Sprawdza, czy dla danego typu
+ * zdarzenia należy wysłać push.
+ *
+ * Brak ustawień oznacza zgodę,
+ * żeby zachować zgodność ze
+ * starszymi kamerami.
+ *
+ * @param {Object|undefined} settings Ustawienia kamery.
+ * @param {string} eventType Typ zdarzenia.
+ * @return {boolean}
+ */
+function isCameraEventNotificationEnabled(
+    settings,
+    eventType,
+) {
+  if (!settings ||
+      typeof settings !== "object") {
+    return true;
+  }
+
+  if (settings.enabled === false) {
+    return false;
+  }
+
+  const settingKeyByType = {
+    motion: "motion",
+    person: "person",
+    vehicle: "vehicle",
+    sound: "sound",
+  };
+
+  const settingKey =
+      settingKeyByType[eventType];
+
+  if (!settingKey) {
+    return true;
+  }
+
+  return settings[settingKey] !== false;
+}
+/**
+ * Wysyła powiadomienie o wykryciu
+ * tylko do właściciela kamery.
+ *
+ * @param {string} ownerId UID właściciela.
+ * @param {string} cameraId ID kamery.
+ * @param {string} cameraName Nazwa kamery.
+ * @param {string} eventId ID zdarzenia.
+ * @param {string} eventType Typ zdarzenia.
  * @return {Promise<void>}
  */
 async function sendCameraEventNotification({
@@ -1951,7 +2005,33 @@ async function sendCameraEventNotification({
   cameraId,
   cameraName,
   eventId,
+  eventType,
 }) {
+  const cameraDocument =
+      await db
+          .collection("users")
+          .doc(ownerId)
+          .collection("cameras")
+          .doc(cameraId)
+          .get();
+
+  const cameraData =
+      cameraDocument.data() || {};
+
+  const notificationSettings =
+      cameraData.notificationSettings;
+
+  if (!isCameraEventNotificationEnabled(
+      notificationSettings,
+      eventType,
+  )) {
+    console.log(
+        "CAMERA PUSH: wyłączone dla typu",
+        eventType,
+    );
+
+    return;
+  }
   const devicesSnapshot =
       await db
           .collection("users")
@@ -2383,9 +2463,11 @@ async function ingestCameraEventInternal(
         ownerId,
         cameraId,
         cameraName:
-          result.cameraName,
+    result.cameraName,
         eventId:
-          result.eventId,
+    result.eventId,
+        eventType:
+    result.type,
       });
     } catch (error) {
       console.error(

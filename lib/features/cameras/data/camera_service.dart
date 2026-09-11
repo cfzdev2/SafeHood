@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../domain/camera.dart';
+import '../domain/camera_notification_settings.dart';
 
 class CameraService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -89,6 +90,30 @@ class CameraService {
   }) {
     return _camerasCollection.doc(cameraId).update({
       'motionDetectionEnabled': enabled,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<CameraNotificationSettings> getNotificationSettings(
+    String cameraId,
+  ) async {
+    final document = await _camerasCollection.doc(cameraId).get();
+
+    if (!document.exists) {
+      throw StateError('Kamera nie istnieje.');
+    }
+
+    final data = document.data();
+
+    return CameraNotificationSettings.fromMap(data?['notificationSettings']);
+  }
+
+  Future<void> setNotificationSettings({
+    required String cameraId,
+    required CameraNotificationSettings settings,
+  }) {
+    return _camerasCollection.doc(cameraId).update({
+      'notificationSettings': settings.toMap(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }

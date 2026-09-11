@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../data/camera_service.dart';
 import '../domain/camera.dart';
+import '../domain/camera_notification_settings.dart';
 
 class CameraSettingsScreen extends StatefulWidget {
   final Camera camera;
@@ -19,9 +20,15 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
 
   late bool _monitoringEnabled;
 
+  CameraNotificationSettings _notificationSettings =
+      const CameraNotificationSettings();
+
   bool _loadingMonitoring = true;
   bool _savingMonitoring = false;
   bool _deleting = false;
+
+  bool _loadingNotifications = true;
+  bool _savingNotifications = false;
 
   @override
   void initState() {
@@ -36,20 +43,28 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     try {
       final currentCamera = await _cameraService.getCamera(widget.camera.id);
 
+      final notificationSettings = await _cameraService.getNotificationSettings(
+        widget.camera.id,
+      );
+
       if (!mounted) {
         return;
       }
 
-      if (currentCamera != null) {
-        _monitoringEnabled = currentCamera.motionDetectionEnabled;
-      }
+      setState(() {
+        if (currentCamera != null) {
+          _monitoringEnabled = currentCamera.motionDetectionEnabled;
+        }
+
+        _notificationSettings = notificationSettings;
+      });
     } catch (_) {
-      // Pozostawiamy wartość przekazaną
-      // z ekranu szczegółów.
+      // Pozostawiamy wartości domyślne.
     } finally {
       if (mounted) {
         setState(() {
           _loadingMonitoring = false;
+          _loadingNotifications = false;
         });
       }
     }
@@ -109,6 +124,46 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
       if (mounted) {
         setState(() {
           _savingMonitoring = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _setNotificationSettings(
+    CameraNotificationSettings settings,
+  ) async {
+    if (_savingNotifications || _deleting) {
+      return;
+    }
+
+    final previousSettings = _notificationSettings;
+
+    setState(() {
+      _notificationSettings = settings;
+      _savingNotifications = true;
+    });
+
+    try {
+      await _cameraService.setNotificationSettings(
+        cameraId: widget.camera.id,
+        settings: settings,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _notificationSettings = previousSettings;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nie udało się zapisać powiadomień: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _savingNotifications = false;
         });
       }
     }
@@ -191,6 +246,11 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final bridgeId = widget.camera.bridgeId;
+    final notificationsBusy =
+        _loadingNotifications || _savingNotifications || _deleting;
+
+    final notificationTypesEnabled =
+        _notificationSettings.enabled && !notificationsBusy;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Ustawienia kamery')),
@@ -222,10 +282,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                 ListTile(
                   leading: const Icon(Icons.hub_outlined),
                   title: const Text('Bridge'),
-                                    subtitle: Text(
-                    bridgeId ??
-                        'Nieprzypisany',
-                  ),
+                  subtitle: Text(bridgeId ?? 'Nieprzypisany'),
                 ),
               ],
             ),
@@ -246,10 +303,10 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                   title: const Text('Monitoring przez SafeHood'),
                   subtitle: Text(
                     _monitoringEnabled
-                        ? 'Bridge odbiera '
+                        ? 'SafeHood odbiera i zapisuje '
                               'zdarzenia z kamery.'
-                        : 'Zdarzenia z kamery '
-                              'nie są odbierane.',
+                        : 'Zdarzenia z kamery nie są '
+                              'odbierane ani zapisywane.',
                   ),
                   value: _monitoringEnabled,
                   onChanged:
@@ -258,6 +315,110 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                       : _setMonitoringEnabled,
                 ),
                 if (_loadingMonitoring || _savingMonitoring)
+                  const LinearProgressIndicator(),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            'Powiadomienia',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Column(
+              children: [
+                SwitchListTile.adaptive(
+                  secondary: const Icon(Icons.notifications_outlined),
+                  title: const Text('Powiadomienia z kamery'),
+                  subtitle: Text(
+                    _notificationSettings.enabled
+                        ? 'SafeHood wyśle wybrane alerty.'
+                        : 'Zdarzenia będą zapisywane, '
+                              'ale bez powiadomień.',
+                  ),
+                  value: _notificationSettings.enabled,
+                  onChanged: notificationsBusy
+                      ? null
+                      : (enabled) {
+                          unawaited(
+                            _setNotificationSettings(
+                              _notificationSettings.copyWith(enabled: enabled),
+                            ),
+                          );
+                        },
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  secondary: const Icon(Icons.sensors),
+                  title: const Text('Wykrycie ruchu'),
+                  value: _notificationSettings.motionEnabled,
+                  onChanged: notificationTypesEnabled
+                      ? (enabled) {
+                          unawaited(
+                            _setNotificationSettings(
+                              _notificationSettings.copyWith(
+                                motionEnabled: enabled,
+                              ),
+                            ),
+                          );
+                        }
+                      : null,
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  secondary: const Icon(Icons.person_outline),
+                  title: const Text('Wykrycie osoby'),
+                  value: _notificationSettings.personEnabled,
+                  onChanged: notificationTypesEnabled
+                      ? (enabled) {
+                          unawaited(
+                            _setNotificationSettings(
+                              _notificationSettings.copyWith(
+                                personEnabled: enabled,
+                              ),
+                            ),
+                          );
+                        }
+                      : null,
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  secondary: const Icon(Icons.directions_car_outlined),
+                  title: const Text('Wykrycie pojazdu'),
+                  value: _notificationSettings.vehicleEnabled,
+                  onChanged: notificationTypesEnabled
+                      ? (enabled) {
+                          unawaited(
+                            _setNotificationSettings(
+                              _notificationSettings.copyWith(
+                                vehicleEnabled: enabled,
+                              ),
+                            ),
+                          );
+                        }
+                      : null,
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  secondary: const Icon(Icons.volume_up_outlined),
+                  title: const Text('Wykrycie dźwięku'),
+                  value: _notificationSettings.soundEnabled,
+                  onChanged: notificationTypesEnabled
+                      ? (enabled) {
+                          unawaited(
+                            _setNotificationSettings(
+                              _notificationSettings.copyWith(
+                                soundEnabled: enabled,
+                              ),
+                            ),
+                          );
+                        }
+                      : null,
+                ),
+                if (_loadingNotifications || _savingNotifications)
                   const LinearProgressIndicator(),
               ],
             ),
