@@ -45,6 +45,8 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
   }
 
   Future<void> _initializeLive() async {
+    VideoPlayerController? nextController;
+
     try {
       await _cameraProvider.connect();
 
@@ -59,31 +61,82 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
 
       await _cameraProvider.startLive();
 
-      final controller = VideoPlayerController.networkUrl(streamUri);
+      nextController = VideoPlayerController.networkUrl(streamUri);
 
-      _videoController = controller;
-
-      await controller.initialize();
-      await controller.setLooping(false);
-      await controller.play();
+      await nextController.initialize();
+      await nextController.setLooping(false);
+      await nextController.setVolume(_audioEnabled ? 1 : 0);
+      await nextController.play();
 
       if (!mounted) {
+        await nextController.dispose();
         return;
       }
 
+      final previousController = _videoController;
+
+      _videoController = nextController;
+
       setState(() {
+        _liveError = null;
         _liveLoading = false;
       });
+
+      if (previousController != null) {
+        await previousController.dispose();
+      }
     } catch (error) {
+      await nextController?.dispose();
+
+      debugPrint(
+        'CAMERA LIVE ERROR '
+        '[${widget.camera.id}]: $error',
+      );
+
       if (!mounted) {
         return;
       }
 
       setState(() {
+        _videoController = null;
         _liveError = error;
         _liveLoading = false;
       });
     }
+  }
+
+  Future<void> _retryLive() async {
+    if (_liveLoading) {
+      return;
+    }
+
+    final controller = _videoController;
+    _videoController = null;
+
+    setState(() {
+      _liveLoading = true;
+      _liveError = null;
+    });
+
+    if (controller != null) {
+      try {
+        await controller.dispose();
+      } catch (error) {
+        debugPrint('CAMERA LIVE DISPOSE ERROR: $error');
+      }
+    }
+
+    try {
+      await _cameraProvider.stopLive();
+    } catch (error) {
+      debugPrint('CAMERA LIVE STOP ERROR: $error');
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    await _initializeLive();
   }
 
   Future<void> _toggleAudio() async {
@@ -331,11 +384,32 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
     }
 
     if (_liveError != null) {
-      return const Center(
-        child: Icon(
-          Icons.videocam_off_outlined,
-          size: 56,
-          color: Colors.white70,
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.videocam_off_outlined,
+                size: 56,
+                color: Colors.white70,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Nie udało się połączyć '
+                'ze strumieniem LIVE.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: _retryLive,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Połącz ponownie'),
+              ),
+            ],
+          ),
         ),
       );
     }
