@@ -84,6 +84,37 @@ class CameraService {
     });
   }
 
+  Future<void> updateCameraDetails({
+    required String cameraId,
+    required String name,
+    required String locationName,
+  }) {
+    final normalizedName = name.trim();
+    final normalizedLocationName = locationName.trim();
+
+    if (normalizedName.isEmpty) {
+      throw ArgumentError('Nazwa kamery nie może być pusta.');
+    }
+
+    if (normalizedLocationName.isEmpty) {
+      throw ArgumentError('Lokalizacja kamery nie może być pusta.');
+    }
+
+    if (normalizedName.length > 60) {
+      throw ArgumentError('Nazwa kamery może mieć maksymalnie 60 znaków.');
+    }
+
+    if (normalizedLocationName.length > 100) {
+      throw ArgumentError('Lokalizacja może mieć maksymalnie 100 znaków.');
+    }
+
+    return _camerasCollection.doc(cameraId).update({
+      'name': normalizedName,
+      'locationName': normalizedLocationName,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
   Future<void> setMonitoringEnabled({
     required String cameraId,
     required bool enabled,

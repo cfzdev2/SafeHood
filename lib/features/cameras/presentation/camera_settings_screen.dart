@@ -20,6 +20,9 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
 
   late bool _monitoringEnabled;
 
+  late String _cameraName;
+  late String _locationName;
+
   CameraNotificationSettings _notificationSettings =
       const CameraNotificationSettings();
 
@@ -29,12 +32,14 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
 
   bool _loadingNotifications = true;
   bool _savingNotifications = false;
-
+  bool _savingDetails = false;
   @override
   void initState() {
     super.initState();
 
     _monitoringEnabled = widget.camera.motionDetectionEnabled;
+    _cameraName = widget.camera.name;
+    _locationName = widget.camera.locationName;
 
     unawaited(_loadCurrentCamera());
   }
@@ -53,6 +58,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
 
       setState(() {
         if (currentCamera != null) {
+          _cameraName = currentCamera.name;
+          _locationName = currentCamera.locationName;
           _monitoringEnabled = currentCamera.motionDetectionEnabled;
         }
 
@@ -65,6 +72,129 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         setState(() {
           _loadingMonitoring = false;
           _loadingNotifications = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _editCameraDetails() async {
+    if (_savingDetails || _deleting) {
+      return;
+    }
+
+    final formKey = GlobalKey<FormState>();
+
+    final nameController = TextEditingController(text: _cameraName);
+
+    final locationController = TextEditingController(text: _locationName);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Edytuj kamerę'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: nameController,
+                  autofocus: true,
+                  maxLength: 60,
+                  decoration: const InputDecoration(
+                    labelText: 'Nazwa kamery',
+                    prefixIcon: Icon(Icons.videocam_outlined),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Podaj nazwę kamery.';
+                    }
+
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: locationController,
+                  maxLength: 100,
+                  decoration: const InputDecoration(
+                    labelText: 'Lokalizacja',
+                    prefixIcon: Icon(Icons.place_outlined),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Podaj lokalizację kamery.';
+                    }
+
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(false);
+              },
+              child: const Text('Anuluj'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (formKey.currentState?.validate() ?? false) {
+                  Navigator.of(dialogContext).pop(true);
+                }
+              },
+              child: const Text('Zapisz'),
+            ),
+          ],
+        );
+      },
+    );
+
+    final newName = nameController.text.trim();
+    final newLocationName = locationController.text.trim();
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _savingDetails = true;
+    });
+
+    try {
+      await _cameraService.updateCameraDetails(
+        cameraId: widget.camera.id,
+        name: newName,
+        locationName: newLocationName,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _cameraName = newName;
+        _locationName = newLocationName;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Dane kamery zostały zapisane.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nie udało się zapisać danych kamery: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _savingDetails = false;
         });
       }
     }
@@ -180,7 +310,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         return AlertDialog(
           title: const Text('Usunąć kamerę?'),
           content: Text(
-            'Kamera „${widget.camera.name}” '
+            'Kamera „$_cameraName” '
             'zostanie usunięta z SafeHood. '
             'Bridge natychmiast zakończy '
             'jej monitoring.',
@@ -270,13 +400,34 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                 ListTile(
                   leading: const Icon(Icons.videocam_outlined),
                   title: const Text('Nazwa'),
-                  subtitle: Text(widget.camera.name),
+                  subtitle: Text(_cameraName),
                 ),
                 const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.place_outlined),
                   title: const Text('Lokalizacja'),
-                  subtitle: Text(widget.camera.locationName),
+                  subtitle: Text(_locationName),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  enabled: !_savingDetails && !_deleting,
+                  leading: _savingDetails
+                      ? const SizedBox.square(
+                          dimension: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.edit_outlined),
+                  title: Text(
+                    _savingDetails
+                        ? 'Zapisywanie zmian...'
+                        : 'Edytuj nazwę i lokalizację',
+                  ),
+                  trailing: _savingDetails
+                      ? null
+                      : const Icon(Icons.chevron_right),
+                  onTap: _savingDetails || _deleting
+                      ? null
+                      : _editCameraDetails,
                 ),
                 const Divider(height: 1),
                 ListTile(
