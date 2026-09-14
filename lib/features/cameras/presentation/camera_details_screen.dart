@@ -22,11 +22,17 @@ class CameraDetailsScreen extends StatefulWidget {
   State<CameraDetailsScreen> createState() => _CameraDetailsScreenState();
 }
 
-class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
+class _CameraDetailsScreenState extends State<CameraDetailsScreen>
+    with WidgetsBindingObserver {
   late final CameraProvider _cameraProvider;
   late final Stream<CameraRuntimeState> _cameraStateStream;
 
   VideoPlayerController? _videoController;
+
+  Timer? _liveWatchdogTimer;
+  bool _reconnectLiveOnResume = false;
+  Duration? _lastLivePosition;
+  int _liveStalledChecks = 0;
 
   bool _liveLoading = true;
   Object? _liveError;
@@ -36,7 +42,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
   @override
   void initState() {
     super.initState();
-
+    WidgetsBinding.instance.addObserver(this);
     _cameraProvider = CameraProviderFactory.create(widget.camera);
 
     _cameraStateStream = _cameraProvider.watchState();
@@ -75,7 +81,12 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
 
       final previousController = _videoController;
 
+      previousController?.removeListener(_handleLiveControllerChanged);
+
       _videoController = nextController;
+
+      nextController.addListener(_handleLiveControllerChanged);
+      _startLiveWatchdog();
 
       setState(() {
         _liveError = null;
@@ -87,7 +98,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
       }
     } catch (error) {
       await nextController?.dispose();
-
+      _stopLiveWatchdog();
       debugPrint(
         'CAMERA LIVE ERROR '
         '[${widget.camera.id}]: $error',
@@ -105,10 +116,106 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
     }
   }
 
+  void _handleLiveControllerChanged() {
+    final controller = _videoController;
+
+    if (controller == null || !mounted || _liveLoading || _liveError != null) {
+      return;
+    }
+
+    final value = controller.value;
+
+    if (!value.hasError) {
+      return;
+    }
+
+    final description =
+        value.errorDescription ?? 'Strumień LIVE został przerwany.';
+
+    debugPrint(
+      'CAMERA LIVE PLAYBACK ERROR '
+      '[${widget.camera.id}]: $description',
+    );
+    _stopLiveWatchdog();
+    setState(() {
+      _liveError = StateError(description);
+    });
+  }
+
+  void _startLiveWatchdog() {
+    _liveWatchdogTimer?.cancel();
+
+    _lastLivePosition = _videoController?.value.position;
+    _liveStalledChecks = 0;
+
+    _liveWatchdogTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _checkLiveWatchdog(),
+    );
+  }
+
+  void _stopLiveWatchdog() {
+    _liveWatchdogTimer?.cancel();
+    _liveWatchdogTimer = null;
+    _lastLivePosition = null;
+    _liveStalledChecks = 0;
+  }
+
+  void _checkLiveWatchdog() {
+    final controller = _videoController;
+
+    if (!mounted ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed ||
+        _liveLoading ||
+        _liveError != null ||
+        controller == null ||
+        !controller.value.isInitialized) {
+      _lastLivePosition = controller?.value.position;
+      _liveStalledChecks = 0;
+      return;
+    }
+
+    if (controller.value.hasError) {
+      _handleLiveControllerChanged();
+      return;
+    }
+
+    final currentPosition = controller.value.position;
+    final previousPosition = _lastLivePosition;
+
+    _lastLivePosition = currentPosition;
+
+    if (previousPosition == null || currentPosition > previousPosition) {
+      _liveStalledChecks = 0;
+      return;
+    }
+
+    _liveStalledChecks += 1;
+
+    if (_liveStalledChecks < 3) {
+      return;
+    }
+
+    const message = 'Strumień LIVE przestał przesyłać obraz.';
+
+    debugPrint(
+      'CAMERA LIVE WATCHDOG '
+      '[${widget.camera.id}]: $message',
+    );
+
+    _stopLiveWatchdog();
+
+    setState(() {
+      _liveError = StateError(message);
+    });
+  }
+
   Future<void> _retryLive() async {
     if (_liveLoading) {
       return;
     }
+
+    _stopLiveWatchdog();
 
     final controller = _videoController;
     _videoController = null;
@@ -119,6 +226,8 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
     });
 
     if (controller != null) {
+      controller.removeListener(_handleLiveControllerChanged);
+
       try {
         await controller.dispose();
       } catch (error) {
@@ -240,14 +349,45 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      final controller = _videoController;
+
+      _stopLiveWatchdog();
+
+      if (controller != null &&
+          controller.value.isInitialized &&
+          _liveError == null) {
+        _reconnectLiveOnResume = true;
+        unawaited(controller.pause());
+      } else {
+        _reconnectLiveOnResume = false;
+      }
+
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed && _reconnectLiveOnResume) {
+      _reconnectLiveOnResume = false;
+      unawaited(_retryLive());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _reconnectLiveOnResume = false;
+    _stopLiveWatchdog();
     final controller = _videoController;
     _videoController = null;
 
     if (controller != null) {
+      controller.removeListener(_handleLiveControllerChanged);
+
       unawaited(controller.dispose());
     }
-
     unawaited(_cameraProvider.stopLive());
 
     unawaited(_cameraProvider.disconnect());
