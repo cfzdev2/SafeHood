@@ -12,6 +12,7 @@ import 'camera_settings_screen.dart';
 import 'widgets/camera_controls_panel.dart';
 import 'camera_recordings_screen.dart';
 import 'camera_snapshot_preview_screen.dart';
+import '../data/camera_service.dart';
 
 class CameraDetailsScreen extends StatefulWidget {
   final Camera camera;
@@ -26,6 +27,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     with WidgetsBindingObserver {
   late final CameraProvider _cameraProvider;
   late final Stream<CameraRuntimeState> _cameraStateStream;
+  final CameraService _cameraService = CameraService();
 
   VideoPlayerController? _videoController;
 
@@ -48,6 +50,20 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     _cameraStateStream = _cameraProvider.watchState();
 
     unawaited(_initializeLive());
+  }
+
+  Future<void> _persistCameraAvailability(bool isOnline) async {
+    try {
+      await _cameraService.updateCameraAvailability(
+        cameraId: widget.camera.id,
+        isOnline: isOnline,
+      );
+    } catch (error) {
+      debugPrint(
+        'CAMERA AVAILABILITY ERROR '
+        '[${widget.camera.id}]: $error',
+      );
+    }
   }
 
   Future<void> _initializeLive() async {
@@ -92,7 +108,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
         _liveError = null;
         _liveLoading = false;
       });
-
+      unawaited(_persistCameraAvailability(true));
       if (previousController != null) {
         await previousController.dispose();
       }
@@ -113,6 +129,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
         _liveError = error;
         _liveLoading = false;
       });
+      unawaited(_persistCameraAvailability(false));
     }
   }
 
@@ -140,6 +157,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     setState(() {
       _liveError = StateError(description);
     });
+    unawaited(_persistCameraAvailability(false));
   }
 
   void _startLiveWatchdog() {
@@ -208,6 +226,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     setState(() {
       _liveError = StateError(message);
     });
+    unawaited(_persistCameraAvailability(false));
   }
 
   Future<void> _retryLive() async {

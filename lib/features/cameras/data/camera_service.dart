@@ -149,6 +149,17 @@ class CameraService {
     });
   }
 
+  Future<void> updateCameraAvailability({
+    required String cameraId,
+    required bool isOnline,
+  }) {
+    return _camerasCollection.doc(cameraId).update({
+      'isOnline': isOnline,
+      'availabilityCheckedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
   Future<void> deleteCamera(String cameraId) {
     return _camerasCollection.doc(cameraId).delete();
   }
