@@ -38,19 +38,7 @@ class CameraCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AspectRatio(
-              aspectRatio: 16 / 9,
-              child: Container(
-                color: Colors.black87,
-                child: const Center(
-                  child: Icon(
-                    Icons.videocam_outlined,
-                    color: Colors.white70,
-                    size: 48,
-                  ),
-                ),
-              ),
-            ),
+            AspectRatio(aspectRatio: 16 / 9, child: _buildPreview(context)),
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -120,6 +108,133 @@ class CameraCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Widget _buildPreview(BuildContext context) {
+    final snapshotUrl = camera.latestSnapshotUrl?.trim();
+
+    if (snapshotUrl == null || snapshotUrl.isEmpty) {
+      return _buildPreviewPlaceholder();
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.network(
+          snapshotUrl,
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.medium,
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) {
+              return child;
+            }
+
+            return _buildPreviewPlaceholder(loading: true);
+          },
+          errorBuilder: (_, _, _) {
+            return _buildPreviewPlaceholder();
+          },
+        ),
+        Positioned(
+          left: 8,
+          right: 8,
+          bottom: 8,
+          child: Align(
+            alignment: Alignment.bottomLeft,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                _snapshotLabel(context),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPreviewPlaceholder({bool loading = false}) {
+    return ColoredBox(
+      color: Colors.black87,
+      child: Center(
+        child: loading
+            ? const SizedBox.square(
+                dimension: 30,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white70,
+                ),
+              )
+            : const Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.videocam_outlined,
+                    color: Colors.white70,
+                    size: 48,
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Brak ostatniego snapshotu',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  String _snapshotLabel(BuildContext context) {
+    final eventType = _eventTypeLabel(camera.latestEventType);
+    final snapshotAt = camera.latestSnapshotAt;
+
+    if (snapshotAt == null) {
+      return eventType;
+    }
+
+    final localDate = snapshotAt.toLocal();
+    final localizations = MaterialLocalizations.of(context);
+
+    final date = localizations.formatShortDate(localDate);
+    final time = localizations.formatTimeOfDay(
+      TimeOfDay.fromDateTime(localDate),
+      alwaysUse24HourFormat: true,
+    );
+
+    return '$eventType • $date, $time';
+  }
+
+  String _eventTypeLabel(String? type) {
+    switch (type) {
+      case 'person':
+        return 'Wykryto osobę';
+
+      case 'vehicle':
+        return 'Wykryto pojazd';
+
+      case 'motion':
+        return 'Wykryto ruch';
+
+      case 'sound':
+        return 'Wykryto dźwięk';
+
+      case 'tampering':
+        return 'Naruszenie kamery';
+
+      default:
+        return 'Ostatnie zdarzenie';
+    }
   }
 
   String _statusLabel(CameraCardStatus status) {

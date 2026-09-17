@@ -2421,7 +2421,24 @@ async function ingestCameraEventInternal(
                       nowTimestamp,
                   },
               );
-
+              if (snapshotUrl) {
+                transaction.set(
+                    cameraRef,
+                    {
+                      latestSnapshotUrl:
+                        snapshotUrl,
+                      latestSnapshotAt:
+                        occurredAtTimestamp,
+                      latestEventType:
+                        mergedType,
+                      updatedAt:
+                        nowTimestamp,
+                    },
+                    {
+                      merge: true,
+                    },
+                );
+              }
               transaction.set(
                   stateRef,
                   {
@@ -2474,7 +2491,24 @@ async function ingestCameraEventInternal(
               eventRef,
               eventData,
           );
-
+          if (snapshotUrl) {
+            transaction.set(
+                cameraRef,
+                {
+                  latestSnapshotUrl:
+                    snapshotUrl,
+                  latestSnapshotAt:
+                    occurredAtTimestamp,
+                  latestEventType:
+                    type,
+                  updatedAt:
+                    nowTimestamp,
+                },
+                {
+                  merge: true,
+                },
+            );
+          }
           if (canMerge) {
             transaction.set(
                 stateRef,

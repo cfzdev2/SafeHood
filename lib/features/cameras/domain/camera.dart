@@ -34,6 +34,9 @@ class Camera {
   // zmieniać tego pola.
   final bool isOnline;
   final DateTime? availabilityCheckedAt;
+  final String? latestSnapshotUrl;
+  final DateTime? latestSnapshotAt;
+  final String? latestEventType;
 
   // Określa, czy SafeHood ma
   // monitorować zdarzenia kamery.
@@ -83,6 +86,9 @@ class Camera {
     this.monitoringMode = CameraMonitoringMode.bridge,
     this.bridgeId,
     this.bridgeMonitoringStatus = CameraMonitoringRuntimeStatus.unknown,
+    this.latestSnapshotUrl,
+    this.latestSnapshotAt,
+    this.latestEventType,
   });
 
   Camera copyWith({
@@ -106,6 +112,9 @@ class Camera {
     CameraMonitoringMode? monitoringMode,
     String? bridgeId,
     CameraMonitoringRuntimeStatus? bridgeMonitoringStatus,
+    String? latestSnapshotUrl,
+    DateTime? latestSnapshotAt,
+    String? latestEventType,
   }) {
     return Camera(
       id: id ?? this.id,
@@ -131,6 +140,9 @@ class Camera {
       bridgeId: bridgeId ?? this.bridgeId,
       bridgeMonitoringStatus:
           bridgeMonitoringStatus ?? this.bridgeMonitoringStatus,
+      latestSnapshotUrl: latestSnapshotUrl ?? this.latestSnapshotUrl,
+      latestSnapshotAt: latestSnapshotAt ?? this.latestSnapshotAt,
+      latestEventType: latestEventType ?? this.latestEventType,
     );
   }
 
@@ -154,6 +166,11 @@ class Camera {
       'cloudDeviceId': cloudDeviceId,
       'monitoringMode': monitoringMode.name,
       'bridgeId': bridgeId,
+      'latestSnapshotUrl': latestSnapshotUrl,
+      'latestSnapshotAt': latestSnapshotAt == null
+          ? null
+          : Timestamp.fromDate(latestSnapshotAt!),
+      'latestEventType': latestEventType,
 
       // bridgeMonitoringStatus
       // zapisuje wyłącznie Bridge.
@@ -185,6 +202,9 @@ class Camera {
       bridgeMonitoringStatus: _parseMonitoringStatus(
         map['bridgeMonitoringStatus'] as String?,
       ),
+      latestSnapshotUrl: _parseNullableString(map['latestSnapshotUrl']),
+      latestSnapshotAt: (map['latestSnapshotAt'] as Timestamp?)?.toDate(),
+      latestEventType: _parseNullableString(map['latestEventType']),
     );
   }
 
