@@ -2281,7 +2281,15 @@ async function ingestCameraEventInternal(
 
           const cameraData =
             cameraSnapshot.data();
-
+          if (
+            cameraData.deletionPending ===
+            true
+          ) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Kamera jest usuwana.",
+            );
+          }
           const cameraName =
             typeof cameraData.name ===
                 "string" &&
@@ -2550,6 +2558,229 @@ async function ingestCameraEventInternal(
  * Przypisuje kamery użytkownika do
  * wybranego, sparowanego Bridge’a.
  */
+/**
+ * Bezpiecznie usuwa kamerę zalogowanego
+ * użytkownika i jej dane robocze.
+ *
+ * Zdarzenia połączone ze zgłoszeniami
+ * pozostają zachowane jako dowody.
+ */
+exports.deleteCamera = onCall(
+    {
+      region: "europe-central2",
+    },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError(
+            "unauthenticated",
+            "Musisz być zalogowany.",
+        );
+      }
+
+      const ownerId =
+          request.auth.uid;
+
+      const data =
+          request.data || {};
+
+      const cameraId =
+          typeof data.cameraId ===
+          "string" ?
+            data.cameraId.trim() :
+            "";
+
+      if (!cameraId) {
+        throw new HttpsError(
+            "invalid-argument",
+            "Brak identyfikatora kamery.",
+        );
+      }
+
+      const cameraRef =
+          db
+              .collection("users")
+              .doc(ownerId)
+              .collection("cameras")
+              .doc(cameraId);
+
+      const stateRef =
+          db
+              .collection(
+                  "cameraEventStates",
+              )
+              .doc(
+                  `${ownerId}_${cameraId}_detection`,
+              );
+
+      const deletionTimestamp =
+          Timestamp.now();
+
+      const cameraName =
+          await db.runTransaction(
+              async (transaction) => {
+                const cameraSnapshot =
+                    await transaction.get(
+                        cameraRef,
+                    );
+
+                if (!cameraSnapshot.exists) {
+                  throw new HttpsError(
+                      "not-found",
+                      "Nie znaleziono kamery.",
+                  );
+                }
+
+                const cameraData =
+                    cameraSnapshot.data() ||
+                    {};
+
+                const name =
+                    typeof cameraData.name ===
+                        "string" &&
+                    cameraData.name.trim() ?
+                      cameraData.name.trim() :
+                      "Usunięta kamera";
+
+                transaction.update(
+                    cameraRef,
+                    {
+                      deletionPending:
+                          true,
+                      motionDetectionEnabled:
+                          false,
+                      updatedAt:
+                          deletionTimestamp,
+                    },
+                );
+
+                return name;
+              },
+          );
+
+      const eventsQuery =
+          db
+              .collection("cameraEvents")
+              .where(
+                  "ownerId",
+                  "==",
+                  ownerId,
+              )
+              .where(
+                  "cameraId",
+                  "==",
+                  cameraId,
+              );
+
+      const batchSize = 400;
+
+      let lastEventDocument = null;
+      let removedEventCount = 0;
+      let preservedEventCount = 0;
+      let hasMoreEvents = true;
+
+      while (hasMoreEvents) {
+        const pageQuery =
+            lastEventDocument === null ?
+              eventsQuery.limit(
+                  batchSize,
+              ) :
+              eventsQuery
+                  .startAfter(
+                      lastEventDocument,
+                  )
+                  .limit(
+                      batchSize,
+                  );
+
+        const eventsSnapshot =
+            await pageQuery.get();
+
+        if (eventsSnapshot.empty) {
+          break;
+        }
+
+        lastEventDocument =
+            eventsSnapshot.docs[
+                eventsSnapshot.docs.length -
+                1
+            ];
+
+        const batch =
+            db.batch();
+
+        for (const eventDocument of
+          eventsSnapshot.docs) {
+          const eventData =
+              eventDocument.data();
+
+          const incidentId =
+              typeof eventData.incidentId ===
+                  "string" &&
+              eventData.incidentId.trim() ?
+                eventData.incidentId.trim() :
+                null;
+
+          if (incidentId !== null) {
+            batch.update(
+                eventDocument.ref,
+                {
+                  cameraDeleted:
+                      true,
+                  cameraDeletedAt:
+                      deletionTimestamp,
+                  cameraName,
+                  updatedAt:
+                      deletionTimestamp,
+                },
+            );
+
+            preservedEventCount += 1;
+          } else {
+            batch.delete(
+                eventDocument.ref,
+            );
+
+            removedEventCount += 1;
+          }
+        }
+
+        await batch.commit();
+
+        hasMoreEvents =
+            eventsSnapshot.size ===
+            batchSize;
+      }
+
+      const finalBatch =
+          db.batch();
+
+      finalBatch.delete(
+          stateRef,
+      );
+
+      finalBatch.delete(
+          cameraRef,
+      );
+
+      await finalBatch.commit();
+
+      console.log(
+          "CAMERA REMOVED:",
+          {
+            ownerId,
+            cameraId,
+            removedEventCount,
+            preservedEventCount,
+          },
+      );
+
+      return {
+        cameraId,
+        removedEventCount,
+        preservedEventCount,
+      };
+    },
+);
 /**
  * Usuwa Bridge należący do użytkownika.
  *

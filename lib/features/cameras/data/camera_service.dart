@@ -1,11 +1,15 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/camera.dart';
 import '../domain/camera_notification_settings.dart';
 
 class CameraService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
+    region: 'europe-central2',
+  );
 
   String get _uid {
     final user = FirebaseAuth.instance.currentUser;
@@ -160,7 +164,15 @@ class CameraService {
     });
   }
 
-  Future<void> deleteCamera(String cameraId) {
-    return _camerasCollection.doc(cameraId).delete();
+  Future<void> deleteCamera(String cameraId) async {
+    final normalizedCameraId = cameraId.trim();
+
+    if (normalizedCameraId.isEmpty) {
+      throw ArgumentError('Brak identyfikatora kamery.');
+    }
+
+    final callable = _functions.httpsCallable('deleteCamera');
+
+    await callable.call<void>({'cameraId': normalizedCameraId});
   }
 }
