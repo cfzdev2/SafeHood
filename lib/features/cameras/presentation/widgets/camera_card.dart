@@ -27,6 +27,10 @@ class CameraCard extends StatelessWidget {
 
     final statusColor = _statusColor(context, effectiveStatus);
 
+    final availabilityColor = camera.isOnline
+        ? Colors.green
+        : Theme.of(context).colorScheme.error;
+
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -62,6 +66,31 @@ class CameraCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(camera.locationName),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.circle,
+                              size: 8,
+                              color: availabilityColor,
+                            ),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                camera.isOnline
+                                    ? 'Kamera online'
+                                    : 'Kamera offline',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: availabilityColor,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),

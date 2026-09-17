@@ -185,7 +185,20 @@ class _CamerasScreenState extends State<CamerasScreen> {
       return CameraCardStatus.monitoringDisabled;
     }
 
-    if (camera.monitoringMode != CameraMonitoringMode.bridge) {
+    if (camera.monitoringMode == CameraMonitoringMode.cloud) {
+      final cloudDeviceId = camera.cloudDeviceId;
+
+      final isCloudCameraLinked =
+          camera.cloudProvider != null &&
+          cloudDeviceId != null &&
+          cloudDeviceId.trim().isNotEmpty;
+
+      return isCloudCameraLinked
+          ? CameraCardStatus.monitoringActive
+          : CameraCardStatus.monitoringUnavailable;
+    }
+
+    if (camera.monitoringMode == CameraMonitoringMode.app) {
       return camera.isOnline
           ? CameraCardStatus.monitoringActive
           : CameraCardStatus.monitoringUnavailable;

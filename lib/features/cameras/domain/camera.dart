@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 enum CameraConnectionType { mock, rtsp, onvif, manufacturerCloud, unknown }
 
 enum CameraCloudProvider { safeArk, unknown }
@@ -31,6 +33,7 @@ class Camera {
   // Bridge Events nie powinien
   // zmieniać tego pola.
   final bool isOnline;
+  final DateTime? availabilityCheckedAt;
 
   // Określa, czy SafeHood ma
   // monitorować zdarzenia kamery.
@@ -66,6 +69,7 @@ class Camera {
     required this.brand,
     required this.model,
     required this.isOnline,
+    this.availabilityCheckedAt,
     required this.motionDetectionEnabled,
     required this.hasSdCard,
     this.ipAddress,
@@ -93,6 +97,7 @@ class Camera {
     Set<int>? openPorts,
     Set<String>? discoverySources,
     bool? isOnline,
+    DateTime? availabilityCheckedAt,
     bool? motionDetectionEnabled,
     bool? hasSdCard,
     CameraConnectionType? connectionType,
@@ -114,6 +119,8 @@ class Camera {
       openPorts: openPorts ?? this.openPorts,
       discoverySources: discoverySources ?? this.discoverySources,
       isOnline: isOnline ?? this.isOnline,
+      availabilityCheckedAt:
+          availabilityCheckedAt ?? this.availabilityCheckedAt,
       motionDetectionEnabled:
           motionDetectionEnabled ?? this.motionDetectionEnabled,
       hasSdCard: hasSdCard ?? this.hasSdCard,
@@ -139,6 +146,7 @@ class Camera {
       'openPorts': openPorts.toList()..sort(),
       'discoverySources': discoverySources.toList()..sort(),
       'isOnline': isOnline,
+      'availabilityCheckedAt': availabilityCheckedAt,
       'motionDetectionEnabled': motionDetectionEnabled,
       'hasSdCard': hasSdCard,
       'connectionType': connectionType.name,
@@ -165,6 +173,8 @@ class Camera {
       openPorts: _parsePorts(map['openPorts']),
       discoverySources: _parseSources(map['discoverySources']),
       isOnline: map['isOnline'] as bool? ?? false,
+      availabilityCheckedAt: (map['availabilityCheckedAt'] as Timestamp?)
+          ?.toDate(),
       motionDetectionEnabled: map['motionDetectionEnabled'] as bool? ?? true,
       hasSdCard: map['hasSdCard'] as bool? ?? false,
       connectionType: _parseConnectionType(map['connectionType'] as String?),
