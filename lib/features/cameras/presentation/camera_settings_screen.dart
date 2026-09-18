@@ -84,67 +84,81 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
 
     final formKey = GlobalKey<FormState>();
 
-    final nameController = TextEditingController(text: _cameraName);
+    var editedName = _cameraName;
+    var editedLocationName = _locationName;
 
-    final locationController = TextEditingController(text: _locationName);
-
-    final confirmed = await showDialog<bool>(
+    final editResult = await showDialog<_CameraDetailsEditResult>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
           title: const Text('Edytuj kamerę'),
-          content: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: nameController,
-                  autofocus: true,
-                  maxLength: 60,
-                  decoration: const InputDecoration(
-                    labelText: 'Nazwa kamery',
-                    prefixIcon: Icon(Icons.videocam_outlined),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Podaj nazwę kamery.';
-                    }
+          content: SingleChildScrollView(
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    initialValue: editedName,
+                    autofocus: true,
+                    maxLength: 60,
+                    decoration: const InputDecoration(
+                      labelText: 'Nazwa kamery',
+                      prefixIcon: Icon(Icons.videocam_outlined),
+                    ),
+                    onChanged: (value) {
+                      editedName = value;
+                    },
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Podaj nazwę kamery.';
+                      }
 
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: locationController,
-                  maxLength: 100,
-                  decoration: const InputDecoration(
-                    labelText: 'Lokalizacja',
-                    prefixIcon: Icon(Icons.place_outlined),
+                      return null;
+                    },
                   ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Podaj lokalizację kamery.';
-                    }
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    initialValue: editedLocationName,
+                    maxLength: 100,
+                    decoration: const InputDecoration(
+                      labelText: 'Lokalizacja',
+                      prefixIcon: Icon(Icons.place_outlined),
+                    ),
+                    onChanged: (value) {
+                      editedLocationName = value;
+                    },
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Podaj lokalizację kamery.';
+                      }
 
-                    return null;
-                  },
-                ),
-              ],
+                      return null;
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.of(dialogContext).pop(false);
+                Navigator.of(dialogContext).pop();
               },
               child: const Text('Anuluj'),
             ),
             FilledButton(
               onPressed: () {
-                if (formKey.currentState?.validate() ?? false) {
-                  Navigator.of(dialogContext).pop(true);
+                if (!(formKey.currentState?.validate() ?? false)) {
+                  return;
                 }
+
+                Navigator.of(dialogContext).pop(
+                  _CameraDetailsEditResult(
+                    name: editedName.trim(),
+                    locationName: editedLocationName.trim(),
+                  ),
+                );
               },
               child: const Text('Zapisz'),
             ),
@@ -153,10 +167,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
       },
     );
 
-    final newName = nameController.text.trim();
-    final newLocationName = locationController.text.trim();
-
-    if (confirmed != true || !mounted) {
+    if (editResult == null || !mounted) {
       return;
     }
 
@@ -167,8 +178,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     try {
       await _cameraService.updateCameraDetails(
         cameraId: widget.camera.id,
-        name: newName,
-        locationName: newLocationName,
+        name: editResult.name,
+        locationName: editResult.locationName,
       );
 
       if (!mounted) {
@@ -176,8 +187,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
       }
 
       setState(() {
-        _cameraName = newName;
-        _locationName = newLocationName;
+        _cameraName = editResult.name;
+        _locationName = editResult.locationName;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -613,4 +624,14 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
       ),
     );
   }
+}
+
+class _CameraDetailsEditResult {
+  final String name;
+  final String locationName;
+
+  const _CameraDetailsEditResult({
+    required this.name,
+    required this.locationName,
+  });
 }
