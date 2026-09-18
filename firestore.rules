@@ -4,9 +4,113 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     match /users/{userId} {
-      allow read, write:
-        if request.auth != null
+  function isUserOwner() {
+    return request.auth != null
         && request.auth.uid == userId;
+  }
+
+  function isValidUserProfile() {
+    return request.resource.data.firstName
+             is string
+        && request.resource.data.firstName.size() > 0
+        && request.resource.data.firstName.size() <= 60
+
+        && request.resource.data.phoneNumber
+           is string
+        && request.resource.data.phoneNumber.size() <= 32
+
+        && request.resource.data.address
+           is string
+        && request.resource.data.address.size() <= 200
+
+        && request.resource.data.notificationsEnabled
+           is bool
+
+        && (
+          request.resource.data.email == null
+          || (
+            request.resource.data.email
+              is string
+            && request.resource.data.email.size() <= 320
+          )
+        )
+
+        && (
+          (
+            request.resource.data.latitude == null
+            && request.resource.data.longitude == null
+            && request.resource.data.geo == null
+          )
+          ||
+          (
+            request.resource.data.latitude
+              is number
+            && request.resource.data.latitude >= -90
+            && request.resource.data.latitude <= 90
+
+            && request.resource.data.longitude
+               is number
+            && request.resource.data.longitude >= -180
+            && request.resource.data.longitude <= 180
+
+            && request.resource.data.geo
+               is map
+          )
+        )
+
+        && request.resource.data.updatedAt
+           == request.time;
+  }
+
+  allow read:
+    if isUserOwner();
+
+  allow create:
+    if isUserOwner()
+    && request.resource.data.keys().hasAll([
+      'firstName',
+      'phoneNumber',
+      'address',
+      'latitude',
+      'longitude',
+      'notificationsEnabled',
+      'email',
+      'geo',
+      'updatedAt'
+    ])
+    && request.resource.data.keys().hasOnly([
+      'firstName',
+      'phoneNumber',
+      'address',
+      'latitude',
+      'longitude',
+      'notificationsEnabled',
+      'email',
+      'geo',
+      'updatedAt'
+    ])
+    && isValidUserProfile();
+
+  allow update:
+    if isUserOwner()
+    && request.resource.data
+         .diff(resource.data)
+         .affectedKeys()
+         .hasOnly([
+           'firstName',
+           'phoneNumber',
+           'address',
+           'latitude',
+           'longitude',
+           'notificationsEnabled',
+           'email',
+           'geo',
+           'updatedAt'
+         ])
+    && isValidUserProfile();
+
+  allow delete:
+    if false;
 
       match /cameras/{cameraId} {
   function isCameraOwner() {
@@ -140,13 +244,56 @@ service cloud.firestore {
     }
 
     match /communityProfiles/{userId} {
-      allow read:
-        if request.auth != null;
-
-      allow write:
-        if request.auth != null
+  function isCommunityProfileOwner() {
+    return request.auth != null
         && request.auth.uid == userId;
-    }
+  }
+
+  function isValidCommunityProfile() {
+    return request.resource.data.firstName
+             is string
+        && request.resource.data.firstName.size() > 0
+        && request.resource.data.firstName.size() <= 60
+
+        && request.resource.data.notificationsEnabled
+           is bool
+
+        && request.resource.data.updatedAt
+           == request.time;
+  }
+
+  allow read:
+    if isCommunityProfileOwner();
+
+  allow create:
+    if isCommunityProfileOwner()
+    && request.resource.data.keys().hasAll([
+      'firstName',
+      'notificationsEnabled',
+      'updatedAt'
+    ])
+    && request.resource.data.keys().hasOnly([
+      'firstName',
+      'notificationsEnabled',
+      'updatedAt'
+    ])
+    && isValidCommunityProfile();
+
+  allow update:
+    if isCommunityProfileOwner()
+    && request.resource.data
+         .diff(resource.data)
+         .affectedKeys()
+         .hasOnly([
+           'firstName',
+           'notificationsEnabled',
+           'updatedAt'
+         ])
+    && isValidCommunityProfile();
+
+  allow delete:
+    if false;
+}
 
     match /incidents/{incidentId} {
       allow read:
