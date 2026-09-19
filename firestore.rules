@@ -339,18 +339,10 @@ service cloud.firestore {
         && request.auth.uid
            in resource.data.participantIds;
 
-      allow create: if false;
-
-      allow update:
-        if request.auth != null
-        && request.auth.uid
-           == resource.data.reporterId
-        && request.resource.data.reporterId
-           == resource.data.reporterId
-        && request.resource.data.participantIds
-           == resource.data.participantIds;
-
-      allow delete: if false;
+      // Zgłoszenia tworzy i modyfikuje
+// wyłącznie backend SafeHood.
+allow create, update, delete:
+  if false;
 
       match /responses/{responseUserId} {
         function isParticipant() {
