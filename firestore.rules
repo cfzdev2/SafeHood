@@ -221,26 +221,64 @@ service cloud.firestore {
       }
 
       match /devices/{deviceId} {
-        allow read:
-          if request.auth != null
-          && request.auth.uid == userId;
+  function isDeviceOwner() {
+    return request.auth != null
+        && request.auth.uid == userId;
+  }
 
-        allow create, update:
-          if request.auth != null
-          && request.auth.uid == userId
-          && request.resource.data.fid
-             == deviceId
-          && request.resource.data.fcmToken
-             is string
-          && request.resource.data.platform
-             is string
-          && request.resource.data.notificationsAllowed
-             is bool;
+  function isValidDevice() {
+    return request.resource.data.keys().hasAll([
+          'fid',
+          'fcmToken',
+          'platform',
+          'notificationsAllowed',
+          'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'fid',
+          'fcmToken',
+          'platform',
+          'notificationsAllowed',
+          'updatedAt'
+        ])
 
-        allow delete:
-          if request.auth != null
-          && request.auth.uid == userId;
-      }
+        && request.resource.data.fid
+           is string
+        && request.resource.data.fid
+           == deviceId
+        && request.resource.data.fid.size() > 0
+        && request.resource.data.fid.size() <= 200
+
+        && request.resource.data.fcmToken
+           is string
+        && request.resource.data.fcmToken.size() > 0
+        && request.resource.data.fcmToken.size() <= 4096
+
+        && request.resource.data.platform
+           in [
+             'android',
+             'iOS'
+           ]
+
+        && request.resource.data.notificationsAllowed
+           is bool
+
+        && request.resource.data.updatedAt
+           == request.time;
+  }
+
+  allow read:
+    if isDeviceOwner();
+
+  allow create, update:
+    if isDeviceOwner()
+    && isValidDevice();
+
+  // Wylogowanie może usunąć wyłącznie
+  // urządzenie zalogowanego użytkownika.
+  allow delete:
+    if isDeviceOwner();
+}
     }
 
     match /communityProfiles/{userId} {
