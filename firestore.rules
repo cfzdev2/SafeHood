@@ -177,10 +177,9 @@ service cloud.firestore {
             'availabilityCheckedAt'
           ])
           || (
-            changedKeys.hasAll([
-              'isOnline',
-              'availabilityCheckedAt'
-            ])
+            changedKeys.hasAny([
+  'availabilityCheckedAt'
+])
             && request.resource.data.isOnline
                is bool
             && request.resource.data.availabilityCheckedAt
@@ -403,38 +402,44 @@ allow create, update, delete:
       // escalated będzie później
       // ustawiał wyłącznie backend.
       allow update:
-        if request.auth != null
-        && resource.data.ownerId
-           == request.auth.uid
+  if request.auth != null
+  && resource.data.ownerId
+     == request.auth.uid
 
-        && request.resource.data.ownerId
-           == resource.data.ownerId
+  && request.resource.data.ownerId
+     == resource.data.ownerId
 
-        && request.resource.data
-             .diff(resource.data)
-             .affectedKeys()
-             .hasOnly([
-               'status',
-               'updatedAt'
-             ])
+  && request.resource.data
+       .diff(resource.data)
+       .affectedKeys()
+       .hasOnly([
+         'status',
+         'updatedAt'
+       ])
 
-        && (
-          (
-            resource.data.status == 'new'
-            && request.resource.data.status
-               == 'viewed'
-          )
-          ||
-          (
-            (
-              resource.data.status == 'new'
-              || resource.data.status
-                 == 'viewed'
-            )
-            && request.resource.data.status
-               == 'dismissed'
-          )
-        );
+  && request.resource.data.status
+     is string
+
+  && request.resource.data.updatedAt
+     == request.time
+
+  && (
+    (
+      resource.data.status == 'new'
+      && request.resource.data.status
+         == 'viewed'
+    )
+    ||
+    (
+      (
+        resource.data.status == 'new'
+        || resource.data.status
+           == 'viewed'
+      )
+      && request.resource.data.status
+         == 'dismissed'
+    )
+  );
     }
   }
 }

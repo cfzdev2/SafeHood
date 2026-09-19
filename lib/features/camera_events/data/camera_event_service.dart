@@ -150,33 +150,29 @@ class CameraEventService {
 
     final ref = _events.doc(eventId);
 
-    await _firestore.runTransaction((transaction) async {
-      final snapshot = await transaction.get(ref);
+    final snapshot = await ref.get();
 
-      if (!snapshot.exists) {
-        throw StateError('Wykrycie nie istnieje.');
-      }
+    if (!snapshot.exists) {
+      throw StateError('Wykrycie nie istnieje.');
+    }
 
-      final data = snapshot.data();
+    final data = snapshot.data();
 
-      if (data == null) {
-        throw StateError('Brak danych wykrycia.');
-      }
+    if (data == null) {
+      throw StateError('Brak danych wykrycia.');
+    }
 
-      if (data['ownerId'] != uid) {
-        throw StateError('Brak dostępu do wykrycia.');
-      }
+    if (data['ownerId'] != uid) {
+      throw StateError('Brak dostępu do wykrycia.');
+    }
 
-      final status = data['status'] as String?;
+    if (data['status'] != 'new') {
+      return;
+    }
 
-      if (status != 'new') {
-        return;
-      }
-
-      transaction.update(ref, {
-        'status': 'viewed',
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+    await ref.update({
+      'status': 'viewed',
+      'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
@@ -185,40 +181,38 @@ class CameraEventService {
 
     final ref = _events.doc(eventId);
 
-    await _firestore.runTransaction((transaction) async {
-      final snapshot = await transaction.get(ref);
+    final snapshot = await ref.get();
 
-      if (!snapshot.exists) {
-        throw StateError('Wykrycie nie istnieje.');
-      }
+    if (!snapshot.exists) {
+      throw StateError('Wykrycie nie istnieje.');
+    }
 
-      final data = snapshot.data();
+    final data = snapshot.data();
 
-      if (data == null) {
-        throw StateError('Brak danych wykrycia.');
-      }
+    if (data == null) {
+      throw StateError('Brak danych wykrycia.');
+    }
 
-      if (data['ownerId'] != uid) {
-        throw StateError('Brak dostępu do wykrycia.');
-      }
+    if (data['ownerId'] != uid) {
+      throw StateError('Brak dostępu do wykrycia.');
+    }
 
-      final status = data['status'] as String?;
+    final status = data['status'] as String?;
 
-      if (status == 'escalated') {
-        throw StateError(
-          'Wykrycie zostało już '
-          'powiązane ze zgłoszeniem.',
-        );
-      }
+    if (status == 'escalated') {
+      throw StateError(
+        'Wykrycie zostało już '
+        'powiązane ze zgłoszeniem.',
+      );
+    }
 
-      if (status == 'dismissed') {
-        return;
-      }
+    if (status == 'dismissed') {
+      return;
+    }
 
-      transaction.update(ref, {
-        'status': 'dismissed',
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+    await ref.update({
+      'status': 'dismissed',
+      'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
