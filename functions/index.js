@@ -4258,7 +4258,7 @@ async function resolveManufacturerCloudCamera({
  * i cloudDeviceId. Backend sam odnajduje
  * właściciela oraz dokument kamery.
  */
-exports.devIngestManufacturerCameraEvent =
+const devIngestManufacturerCameraEvent =
     onRequest(
         {
           region: "europe-central2",
@@ -4432,7 +4432,7 @@ exports.devIngestManufacturerCameraEvent =
           }
         },
     );
-exports.devIngestCameraEvent = onRequest(
+const devIngestCameraEvent = onRequest(
     {
       region: "europe-central2",
     },
@@ -4527,3 +4527,10 @@ exports.devIngestCameraEvent = onRequest(
       }
     },
 );
+if (process.env.FUNCTIONS_EMULATOR === "true") {
+  exports.devIngestManufacturerCameraEvent =
+      devIngestManufacturerCameraEvent;
+
+  exports.devIngestCameraEvent =
+      devIngestCameraEvent;
+}
