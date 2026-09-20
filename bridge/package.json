@@ -2,13 +2,13 @@
   "name": "bridge",
   "version": "1.0.0",
   "description": "",
-  "main": "authenticated_index.js",
+  "main": "supervisor.js",
   "scripts": {
-    "start": "node authenticated_index.js",
-    "check": "node --check onvif_camera_session.js && node --check pair.js && node --check verify_pairing.js && node --check authenticated_index.js",
+    "start": "node supervisor.js",
+    "check": "node --check onvif_camera_session.js && node --check pair.js && node --check verify_pairing.js && node --check authenticated_index.js && node --check supervisor.js",
     "pair": "node pair.js",
     "verify-pairing": "node verify_pairing.js",
-    "start-authenticated": "node authenticated_index.js"
+    "start-worker": "node authenticated_index.js"
   },
   "keywords": [],
   "author": "",
