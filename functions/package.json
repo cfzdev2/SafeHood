@@ -9,7 +9,7 @@
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "test:rules": "node --test test/firestore_rules.test.js"
+    "test:rules": "node --test --test-concurrency=1 test/firestore_rules.test.js test/user_device_rules.test.js"
   },
   "engines": {
     "node": "22"
