@@ -3,26 +3,28 @@
   "description": "Cloud Functions for Firebase",
   "scripts": {
     "lint": "eslint .",
-    "test": "node --test",
+    "test": "node --test test/manufacturer_event_deduplicator.test.js",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "test:rules": "node --test test/firestore_rules.test.js"
   },
   "engines": {
     "node": "22"
   },
   "main": "index.js",
   "dependencies": {
-    "firebase-admin": "^14.2.0",
-    "firebase-functions": "^7.0.0",
+    "firebase-admin": "^14.4.0",
+    "firebase-functions": "^7.4.0",
     "geofire-common": "^6.0.0"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "eslint": "^8.15.0",
     "eslint-config-google": "^0.14.0",
-    "firebase-functions-test": "^3.4.1"
+    "firebase": "^12.19.0"
   },
   "private": true
 }
