@@ -5,57 +5,45 @@ import '../domain/app_user.dart';
 import 'package:geoflutterfire_plus/geoflutterfire_plus.dart';
 
 class UserProfileService {
-  final FirebaseFirestore _firestore =
-      FirebaseFirestore.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  DocumentReference<Map<String, dynamic>> _userDocument(
-    String uid,
-  ) {
+  DocumentReference<Map<String, dynamic>> _userDocument(String uid) {
     return _firestore.collection('users').doc(uid);
   }
 
   Stream<AppUser?> watchProfile(String uid) {
-    return _userDocument(uid).snapshots().map(
-      (snapshot) {
-        final data = snapshot.data();
+    return _userDocument(uid)
+        .snapshots(includeMetadataChanges: true)
+        .where((snapshot) {
+          return snapshot.exists || !snapshot.metadata.isFromCache;
+        })
+        .map((snapshot) {
+          final data = snapshot.data();
 
-        if (!snapshot.exists || data == null) {
-          return null;
-        }
+          if (!snapshot.exists || data == null) {
+            return null;
+          }
 
-        return AppUser.fromMap(
-          snapshot.id,
-          data,
-        );
-      },
-    );
+          return AppUser.fromMap(snapshot.id, data);
+        });
   }
 
   Future<void> saveProfile(AppUser profile) async {
-    final firebaseUser =
-        FirebaseAuth.instance.currentUser;
+    final firebaseUser = FirebaseAuth.instance.currentUser;
 
     if (firebaseUser == null) {
-      throw StateError(
-        'Użytkownik nie jest zalogowany.',
-      );
+      throw StateError('Użytkownik nie jest zalogowany.');
     }
 
     if (firebaseUser.uid != profile.id) {
-      throw StateError(
-        'Nieprawidłowy identyfikator użytkownika.',
-      );
+      throw StateError('Nieprawidłowy identyfikator użytkownika.');
     }
 
     Map<String, dynamic>? geoData;
 
-    if (profile.latitude != null &&
-        profile.longitude != null) {
+    if (profile.latitude != null && profile.longitude != null) {
       final geoPoint = GeoFirePoint(
-        GeoPoint(
-          profile.latitude!,
-          profile.longitude!,
-        ),
+        GeoPoint(profile.latitude!, profile.longitude!),
       );
 
       geoData = geoPoint.data;
