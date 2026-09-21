@@ -19,12 +19,9 @@ class AuthGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: authService.authStateChanges,
       builder: (context, authSnapshot) {
-        if (authSnapshot.connectionState ==
-            ConnectionState.waiting) {
+        if (authSnapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
-            body: Center(
-              child: CircularProgressIndicator(),
-            ),
+            body: Center(child: CircularProgressIndicator()),
           );
         }
 
@@ -35,17 +32,10 @@ class AuthGate extends StatelessWidget {
         }
 
         return StreamBuilder<AppUser?>(
-          stream: profileService.watchProfile(
-            firebaseUser.uid,
-          ),
+          stream: profileService.watchProfile(firebaseUser.uid),
           builder: (context, profileSnapshot) {
-            if (profileSnapshot.connectionState ==
-                ConnectionState.waiting) {
-              return const Scaffold(
-                body: Center(
-                  child: CircularProgressIndicator(),
-                ),
-              );
+            if (profileSnapshot.connectionState == ConnectionState.waiting) {
+              return const _ProfileLoadingScreen();
             }
 
             if (profileSnapshot.hasError) {
@@ -62,17 +52,49 @@ class AuthGate extends StatelessWidget {
             final profile = profileSnapshot.data;
 
             if (profile == null) {
-              return const AccountSetupScreen(
-                isOnboarding: true,
-              );
+              return const AccountSetupScreen(isOnboarding: true);
             }
 
-            return AppShell(
-              currentUser: profile,
-            );
+            return AppShell(currentUser: profile);
           },
         );
       },
+    );
+  }
+}
+
+class _ProfileLoadingScreen extends StatelessWidget {
+  const _ProfileLoadingScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 20),
+                Text(
+                  'Łączenie z profilem...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Jeżeli trwa to dłużej, sprawdź połączenie '
+                  'z internetem. Aplikacja spróbuje ponownie '
+                  'automatycznie.',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
