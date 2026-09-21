@@ -11,6 +11,50 @@ import 'app/app.dart';
 import 'core/services/push_notification_service.dart';
 import 'firebase_options.dart';
 
+const _useFirebaseEmulators = bool.fromEnvironment(
+  'USE_FIREBASE_EMULATORS',
+  defaultValue: false,
+);
+
+const _firebaseEmulatorHost = String.fromEnvironment(
+  'FIREBASE_EMULATOR_HOST',
+  defaultValue: '',
+);
+
+void _configureFirebaseBackend() {
+  if (!_useFirebaseEmulators) {
+    debugPrint('FIREBASE: backend chmurowy');
+
+    return;
+  }
+
+  if (!kDebugMode) {
+    throw StateError(
+      'Emulatory Firebase są dozwolone wyłącznie w trybie debug.',
+    );
+  }
+
+  final emulatorHost = _firebaseEmulatorHost.trim();
+
+  if (emulatorHost.isEmpty) {
+    throw StateError(
+      'Podaj FIREBASE_EMULATOR_HOST, gdy '
+      'USE_FIREBASE_EMULATORS=true.',
+    );
+  }
+
+  final firestore = FirebaseFirestore.instance;
+
+  firestore.useFirestoreEmulator(emulatorHost, 8080);
+  firestore.settings = const Settings(persistenceEnabled: false);
+
+  FirebaseFunctions.instanceFor(
+    region: 'europe-central2',
+  ).useFunctionsEmulator(emulatorHost, 5001);
+
+  debugPrint('FIREBASE: emulatory na $emulatorHost');
+}
+
 String? _normalizedPushText(Object? value) {
   if (value is! String) {
     return null;
@@ -115,6 +159,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  _configureFirebaseBackend();
 
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
@@ -144,20 +189,6 @@ Future<void> main() async {
     'PUSH MAIN: listener foreground '
     'zarejestrowany',
   );
-
-  if (kDebugMode && defaultTargetPlatform == TargetPlatform.android) {
-    const emulatorHost = '192.168.1.10';
-
-    final firestore = FirebaseFirestore.instance;
-
-    firestore.useFirestoreEmulator(emulatorHost, 8080);
-
-    firestore.settings = const Settings(persistenceEnabled: false);
-
-    FirebaseFunctions.instanceFor(
-      region: 'europe-central2',
-    ).useFunctionsEmulator(emulatorHost, 5001);
-  }
 
   runApp(const SafeHoodApp());
 
