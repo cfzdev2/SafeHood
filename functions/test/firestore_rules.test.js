@@ -26,7 +26,7 @@ const {
   updateDoc,
 } = require("firebase/firestore");
 
-const projectId = "safehood-security-app";
+const projectId = "demo-safehood-rules-test";
 const ownerId = "rules-owner";
 const strangerId = "rules-stranger";
 const cameraId = "rules-camera";
@@ -44,6 +44,21 @@ const initialTimestamp = Timestamp.fromMillis(
 );
 
 let testEnvironment;
+
+/**
+ * Zwraca Firestore wskazanego użytkownika.
+ * @param {string} userId Identyfikator użytkownika.
+ * @param {boolean} emailVerified Stan weryfikacji e-maila.
+ * @return {Object} Klient Firestore.
+ */
+function firestoreFor(userId, emailVerified = true) {
+  return testEnvironment
+      .authenticatedContext(
+          userId,
+          {email_verified: emailVerified},
+      )
+      .firestore();
+}
 
 before(async () => {
   testEnvironment =
@@ -111,9 +126,7 @@ after(async () => {
 test(
     "właściciel odczytuje swoją kamerę",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(ownerId)
-          .firestore();
+      const db = firestoreFor(ownerId);
 
       await assertSucceeds(
           getDoc(
@@ -130,11 +143,28 @@ test(
 );
 
 test(
+    "niezweryfikowany właściciel nie odczytuje kamery",
+    async () => {
+      const db = firestoreFor(ownerId, false);
+
+      await assertFails(
+          getDoc(
+              doc(
+                  db,
+                  "users",
+                  ownerId,
+                  "cameras",
+                  cameraId,
+              ),
+          ),
+      );
+    },
+);
+
+test(
     "obcy użytkownik nie odczytuje kamery",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(strangerId)
-          .firestore();
+      const db = firestoreFor(strangerId);
 
       await assertFails(
           getDoc(
@@ -174,9 +204,7 @@ test(
 test(
     "właściciel odświeża dostępność kamery",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(ownerId)
-          .firestore();
+      const db = firestoreFor(ownerId);
 
       const reference = doc(
           db,
@@ -207,9 +235,7 @@ test(
 test(
     "właściciel zmienia dostępność kamery",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(ownerId)
-          .firestore();
+      const db = firestoreFor(ownerId);
 
       const reference = doc(
           db,
@@ -240,9 +266,7 @@ test(
 test(
     "nie można zmienić online bez czasu kontroli",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(ownerId)
-          .firestore();
+      const db = firestoreFor(ownerId);
 
       const reference = doc(
           db,
@@ -264,9 +288,7 @@ test(
 test(
     "obcy użytkownik nie zmienia kamery",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(strangerId)
-          .firestore();
+      const db = firestoreFor(strangerId);
 
       const reference = doc(
           db,
@@ -290,9 +312,7 @@ test(
 test(
     "właściciel odczytuje swoje wykrycie",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(ownerId)
-          .firestore();
+      const db = firestoreFor(ownerId);
 
       await assertSucceeds(
           getDoc(
@@ -309,9 +329,7 @@ test(
 test(
     "obcy użytkownik nie odczytuje wykrycia",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(strangerId)
-          .firestore();
+      const db = firestoreFor(strangerId);
 
       await assertFails(
           getDoc(
@@ -328,9 +346,7 @@ test(
 test(
     "właściciel zmienia new na viewed",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(ownerId)
-          .firestore();
+      const db = firestoreFor(ownerId);
 
       const reference = doc(
           db,
@@ -357,9 +373,7 @@ test(
 test(
     "właściciel zmienia viewed na dismissed",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(ownerId)
-          .firestore();
+      const db = firestoreFor(ownerId);
 
       const reference = doc(
           db,
@@ -393,9 +407,7 @@ test(
 test(
     "klient nie może ustawić escalated",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(ownerId)
-          .firestore();
+      const db = firestoreFor(ownerId);
 
       const reference = doc(
           db,
@@ -415,9 +427,7 @@ test(
 test(
     "obcy użytkownik nie zmienia wykrycia",
     async () => {
-      const db = testEnvironment
-          .authenticatedContext(strangerId)
-          .firestore();
+      const db = firestoreFor(strangerId);
 
       const reference = doc(
           db,

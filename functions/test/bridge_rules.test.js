@@ -25,7 +25,7 @@ const {
   updateDoc,
 } = require("firebase/firestore");
 
-const projectId = "safehood-security-app";
+const projectId = "demo-safehood-rules-test";
 const ownerId = "rules-bridge-owner";
 const strangerId = "rules-bridge-stranger";
 const bridgeId = "rules-bridge";
@@ -35,11 +35,15 @@ let testEnvironment;
 /**
  * Zwraca Firestore zalogowanego użytkownika.
  * @param {string} userId Identyfikator użytkownika.
+ * @param {boolean} emailVerified Stan weryfikacji e-maila.
  * @return {Object} Klient Firestore.
  */
-function firestoreFor(userId) {
+function firestoreFor(userId, emailVerified = true) {
   return testEnvironment
-      .authenticatedContext(userId)
+      .authenticatedContext(
+          userId,
+          {email_verified: emailVerified},
+      )
       .firestore();
 }
 
@@ -128,6 +132,17 @@ beforeEach(async () => {
 after(async () => {
   await testEnvironment.cleanup();
 });
+
+test(
+    "niezweryfikowany właściciel nie odczytuje Bridge",
+    async () => {
+      const db = firestoreFor(ownerId, false);
+
+      await assertFails(
+          getDoc(bridgeRef(db)),
+      );
+    },
+);
 
 test(
     "właściciel odczytuje swój Bridge",

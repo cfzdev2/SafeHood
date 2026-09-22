@@ -79,7 +79,15 @@ class AuthService {
 
     await user.reload();
 
-    return _auth.currentUser?.emailVerified ?? false;
+    final refreshedUser = _auth.currentUser;
+
+    if (refreshedUser == null || !refreshedUser.emailVerified) {
+      return false;
+    }
+
+    await refreshedUser.getIdToken(true);
+
+    return true;
   }
 
   Future<void> sendPasswordResetEmail({required String email}) async {

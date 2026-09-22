@@ -26,7 +26,7 @@ const {
   updateDoc,
 } = require("firebase/firestore");
 
-const projectId = "safehood-security-app";
+const projectId = "demo-safehood-rules-test";
 const ownerId = "rules-owner";
 const strangerId = "rules-stranger";
 const deviceId = "rules-device";
@@ -48,11 +48,15 @@ let testEnvironment;
  * Zwraca bazę działającą jako wskazany użytkownik.
  *
  * @param {string} userId Identyfikator użytkownika.
+ * @param {boolean} emailVerified Stan weryfikacji e-maila.
  * @return {Object} Klient Firestore.
  */
-function firestoreFor(userId) {
+function firestoreFor(userId, emailVerified = true) {
   return testEnvironment
-      .authenticatedContext(userId)
+      .authenticatedContext(
+          userId,
+          {email_verified: emailVerified},
+      )
       .firestore();
 }
 
@@ -138,6 +142,19 @@ test(
       const db = firestoreFor(ownerId);
 
       await assertSucceeds(
+          getDoc(
+              doc(db, "users", ownerId),
+          ),
+      );
+    },
+);
+
+test(
+    "niezweryfikowany właściciel nie odczytuje profilu",
+    async () => {
+      const db = firestoreFor(ownerId, false);
+
+      await assertFails(
           getDoc(
               doc(db, "users", ownerId),
           ),

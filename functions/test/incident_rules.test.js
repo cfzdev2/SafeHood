@@ -27,7 +27,7 @@ const {
   where,
 } = require("firebase/firestore");
 
-const projectId = "safehood-security-app";
+const projectId = "demo-safehood-rules-test";
 
 const participantId = "rules-participant";
 const strangerId = "rules-stranger";
@@ -43,11 +43,15 @@ let testEnvironment;
 /**
  * Zwraca Firestore zalogowanego użytkownika.
  * @param {string} userId Identyfikator użytkownika.
+ * @param {boolean} emailVerified Stan weryfikacji e-maila.
  * @return {Object} Klient Firestore.
  */
-function firestoreFor(userId) {
+function firestoreFor(userId, emailVerified = true) {
   return testEnvironment
-      .authenticatedContext(userId)
+      .authenticatedContext(
+          userId,
+          {email_verified: emailVerified},
+      )
       .firestore();
 }
 
@@ -201,6 +205,20 @@ test(
       );
 
       assert.equal(snapshot.exists(), true);
+    },
+);
+
+test(
+    "niezweryfikowany uczestnik nie odczytuje zgłoszenia",
+    async () => {
+      const db = firestoreFor(
+          participantId,
+          false,
+      );
+
+      await assertFails(
+          getDoc(incidentRef(db)),
+      );
     },
 );
 

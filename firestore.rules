@@ -3,9 +3,14 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isVerifiedUser() {
+      return request.auth != null
+          && request.auth.token.email_verified == true;
+    }
+
     match /users/{userId} {
   function isUserOwner() {
-    return request.auth != null
+    return isVerifiedUser()
         && request.auth.uid == userId;
   }
 
@@ -114,7 +119,7 @@ service cloud.firestore {
 
       match /cameras/{cameraId} {
   function isCameraOwner() {
-    return request.auth != null
+    return isVerifiedUser()
         && request.auth.uid == userId;
   }
 
@@ -210,7 +215,7 @@ service cloud.firestore {
         // Status Bridge może odczytać
         // wyłącznie jego właściciel.
         allow read:
-          if request.auth != null
+          if isVerifiedUser()
           && request.auth.uid == userId;
 
         // Status zapisuje wyłącznie Bridge
@@ -221,7 +226,7 @@ service cloud.firestore {
 
       match /devices/{deviceId} {
   function isDeviceOwner() {
-    return request.auth != null
+    return isVerifiedUser()
         && request.auth.uid == userId;
   }
 
@@ -282,7 +287,7 @@ service cloud.firestore {
 
     match /communityProfiles/{userId} {
   function isCommunityProfileOwner() {
-    return request.auth != null
+    return isVerifiedUser()
         && request.auth.uid == userId;
   }
 
@@ -334,7 +339,7 @@ service cloud.firestore {
 
     match /incidents/{incidentId} {
       allow read:
-        if request.auth != null
+        if isVerifiedUser()
         && request.auth.uid
            in resource.data.participantIds;
 
@@ -345,7 +350,7 @@ allow create, update, delete:
 
       match /responses/{responseUserId} {
         function isParticipant() {
-          return request.auth != null
+          return isVerifiedUser()
               && request.auth.uid in get(
                 /databases/$(database)/documents/incidents/$(incidentId)
               ).data.participantIds;
@@ -361,7 +366,7 @@ allow create, update, delete:
 
       match /messages/{messageId} {
         function isParticipant() {
-          return request.auth != null
+          return isVerifiedUser()
               && request.auth.uid in get(
                 /databases/$(database)/documents/incidents/$(incidentId)
               ).data.participantIds;
@@ -381,7 +386,7 @@ allow create, update, delete:
       // Event może zobaczyć wyłącznie
       // właściciel kamery.
       allow read:
-        if request.auth != null
+        if isVerifiedUser()
         && resource.data.ownerId
            == request.auth.uid;
 
@@ -402,7 +407,7 @@ allow create, update, delete:
       // escalated będzie później
       // ustawiał wyłącznie backend.
       allow update:
-  if request.auth != null
+  if isVerifiedUser()
   && resource.data.ownerId
      == request.auth.uid
 

@@ -1,0 +1,2 @@
+# ESLint wymaga LF w plikach JavaScript.
+*.js text eol=lf
