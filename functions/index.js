@@ -18,8 +18,18 @@ const {
 );
 
 const {
+  deleteAccountData,
+} = require(
+    "./account_deletion",
+);
+
+const {
   initializeApp,
 } = require("firebase-admin/app");
+
+const {
+  getAuth,
+} = require("firebase-admin/auth");
 
 const {
   FieldValue,
@@ -4524,6 +4534,96 @@ const devIngestCameraEvent = onRequest(
                 error.message :
                 "Nie udało się zapisać eventu.",
         });
+      }
+    },
+);
+exports.deleteAccount = onCall(
+    {
+      region: "europe-central2",
+      timeoutSeconds: 540,
+      memory: "512MiB",
+    },
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError(
+            "unauthenticated",
+            "Musisz być zalogowany.",
+        );
+      }
+
+      if (
+        request.auth.token.email_verified !==
+        true
+      ) {
+        throw new HttpsError(
+            "permission-denied",
+            "Najpierw zweryfikuj adres e-mail.",
+        );
+      }
+
+      const authTimeSeconds =
+          Number(
+              request.auth.token.auth_time,
+          );
+
+      const currentTimeSeconds =
+          Math.floor(Date.now() / 1000);
+
+      const authenticationAgeSeconds =
+          currentTimeSeconds -
+          authTimeSeconds;
+
+      if (
+        !Number.isFinite(authTimeSeconds) ||
+        authenticationAgeSeconds < -60 ||
+        authenticationAgeSeconds > 5 * 60
+      ) {
+        throw new HttpsError(
+            "failed-precondition",
+            "Potwierdź ponownie swoje hasło.",
+        );
+      }
+
+      const uid = request.auth.uid;
+
+      try {
+        const result =
+            await deleteAccountData({
+              db,
+              uid,
+            });
+
+        await getAuth().deleteUser(uid);
+
+        console.log(
+            "ACCOUNT DELETED:",
+            {
+              uid,
+              ...result,
+            },
+        );
+
+        return {
+          deleted: true,
+          ...result,
+        };
+      } catch (error) {
+        console.error(
+            "ACCOUNT DELETION ERROR:",
+            {
+              uid,
+              error,
+            },
+        );
+
+        if (error instanceof HttpsError) {
+          throw error;
+        }
+
+        throw new HttpsError(
+            "internal",
+            "Nie udało się usunąć konta. Spróbuj ponownie.",
+        );
       }
     },
 );

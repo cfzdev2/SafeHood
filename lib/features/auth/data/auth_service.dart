@@ -1,6 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-
+import 'package:cloud_functions/cloud_functions.dart';
 import '../../../core/services/push_notification_service.dart';
 
 class AuthService {
@@ -120,6 +120,32 @@ class AuthService {
 
     await refreshedUser.updatePassword(newPassword);
     await refreshedUser.getIdToken(true);
+  }
+
+  Future<void> deleteAccount({required String currentPassword}) async {
+    final user = _auth.currentUser;
+    final email = user?.email;
+
+    if (user == null || email == null || email.trim().isEmpty) {
+      throw StateError('Użytkownik nie jest zalogowany.');
+    }
+
+    final credential = EmailAuthProvider.credential(
+      email: email,
+      password: currentPassword,
+    );
+
+    await user.reauthenticateWithCredential(credential);
+    await user.getIdToken(true);
+
+    final callable = FirebaseFunctions.instanceFor(region: 'europe-central2')
+        .httpsCallable(
+          'deleteAccount',
+          options: HttpsCallableOptions(timeout: const Duration(minutes: 10)),
+        );
+
+    await callable.call();
+    await _auth.signOut();
   }
 
   Future<void> sendPasswordResetEmail({required String email}) async {
