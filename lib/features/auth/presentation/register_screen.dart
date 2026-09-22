@@ -7,8 +7,7 @@ class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
 
   @override
-  State<RegisterScreen> createState() =>
-      _RegisterScreenState();
+  State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
@@ -33,24 +32,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final password = passwordController.text;
     final repeatPassword = repeatPasswordController.text;
 
-    if (email.isEmpty ||
-        password.isEmpty ||
-        repeatPassword.isEmpty) {
+    if (email.isEmpty || password.isEmpty || repeatPassword.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Uzupełnij wszystkie pola.'),
-        ),
+        const SnackBar(content: Text('Uzupełnij wszystkie pola.')),
+      );
+
+      return;
+    }
+    if (password.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Hasło musi mieć co najmniej 6 znaków.')),
       );
 
       return;
     }
 
+    FocusScope.of(context).unfocus();
+
     if (password != repeatPassword) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Hasła nie są takie same.'),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Hasła nie są takie same.')));
 
       return;
     }
@@ -60,10 +62,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
 
     try {
-      await authService.register(
-        email: email,
-        password: password,
-      );
+      await authService.register(email: email, password: password);
 
       if (!mounted) return;
 
@@ -71,28 +70,56 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
 
-      debugPrint('BŁĄD REJESTRACJI: ${e.code} - ${e.message}');
+      debugPrint(
+        'AUTH REGISTER ERROR: '
+        '${e.code} | ${e.message}',
+      );
 
       String message;
 
-      if (e.code == 'weak-password') {
-        message = 'Hasło jest zbyt słabe.';
-      } else if (e.code == 'email-already-in-use') {
-        message = 'Konto z tym e-mailem już istnieje.';
-      } else if (e.code == 'invalid-email') {
-        message = 'Nieprawidłowy adres e-mail.';
-      } else {
-        message =
-            'Błąd: ${e.code}\n${e.message ?? ''}';
+      switch (e.code) {
+        case 'weak-password':
+          message = 'Hasło jest zbyt słabe.';
+          break;
+
+        case 'email-already-in-use':
+          message = 'Konto z tym adresem e-mail już istnieje.';
+          break;
+
+        case 'invalid-email':
+          message = 'Podaj poprawny adres e-mail.';
+          break;
+
+        case 'network-request-failed':
+          message = 'Brak połączenia. Spróbuj ponownie.';
+          break;
+
+        case 'too-many-requests':
+          message = 'Zbyt wiele prób. Spróbuj ponownie później.';
+          break;
+
+        case 'operation-not-allowed':
+          message = 'Rejestracja przez e-mail jest obecnie niedostępna.';
+          break;
+
+        default:
+          message = 'Nie udało się utworzyć konta. Spróbuj ponownie.';
       }
 
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      if (!mounted) return;
+
+      debugPrint('AUTH REGISTER ERROR: $error');
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
+        const SnackBar(
+          content: Text('Nie udało się utworzyć konta. Spróbuj ponownie.'),
         ),
       );
-    }
-    finally {
+    } finally {
       if (mounted) {
         setState(() {
           isLoading = false;
@@ -104,20 +131,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Rejestracja'),
-      ),
+      appBar: AppBar(title: const Text('Rejestracja')),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
           Text(
             'Utwórz konto SafeHood',
-            style: Theme.of(context)
-                .textTheme
-                .headlineSmall
-                ?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
           ),
 
           const SizedBox(height: 24),
@@ -158,20 +180,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
           FilledButton(
             onPressed: isLoading ? null : register,
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                vertical: 14,
-              ),
+              padding: const EdgeInsets.symmetric(vertical: 14),
               child: isLoading
                   ? const SizedBox(
                       width: 22,
                       height: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                      ),
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Text(
-                      'Utwórz konto',
-                    ),
+                  : const Text('Utwórz konto'),
             ),
           ),
         ],
