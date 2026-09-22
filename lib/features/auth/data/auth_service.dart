@@ -3,8 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../../core/services/push_notification_service.dart';
 
 class AuthService {
-  final FirebaseAuth _auth =
-      FirebaseAuth.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
 
   Stream<User?> get authStateChanges {
     return _auth.authStateChanges();
@@ -18,20 +17,15 @@ class AuthService {
     required String email,
     required String password,
   }) async {
-    final credential =
-        await _auth
-            .createUserWithEmailAndPassword(
+    final credential = await _auth.createUserWithEmailAndPassword(
       email: email,
       password: password,
     );
 
-    final user =
-        credential.user;
+    final user = credential.user;
 
     if (user != null) {
-      await PushNotificationService
-          .instance
-          .registerCurrentDevice(
+      await PushNotificationService.instance.registerCurrentDevice(
         uid: user.uid,
       );
     }
@@ -43,20 +37,15 @@ class AuthService {
     required String email,
     required String password,
   }) async {
-    final credential =
-        await _auth
-            .signInWithEmailAndPassword(
+    final credential = await _auth.signInWithEmailAndPassword(
       email: email,
       password: password,
     );
 
-    final user =
-        credential.user;
+    final user = credential.user;
 
     if (user != null) {
-      await PushNotificationService
-          .instance
-          .registerCurrentDevice(
+      await PushNotificationService.instance.registerCurrentDevice(
         uid: user.uid,
       );
     }
@@ -64,14 +53,16 @@ class AuthService {
     return credential;
   }
 
+  Future<void> sendPasswordResetEmail({required String email}) async {
+    await _auth.setLanguageCode('pl');
+    await _auth.sendPasswordResetEmail(email: email);
+  }
+
   Future<void> logout() async {
-    final user =
-        _auth.currentUser;
+    final user = _auth.currentUser;
 
     if (user != null) {
-      await PushNotificationService
-          .instance
-          .unregisterCurrentDevice(
+      await PushNotificationService.instance.unregisterCurrentDevice(
         uid: user.uid,
       );
     }
