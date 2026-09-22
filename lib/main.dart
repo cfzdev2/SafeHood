@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
@@ -21,7 +22,7 @@ const _firebaseEmulatorHost = String.fromEnvironment(
   defaultValue: '',
 );
 
-void _configureFirebaseBackend() {
+Future<void> _configureFirebaseBackend() async {
   if (!_useFirebaseEmulators) {
     debugPrint('FIREBASE: backend chmurowy');
 
@@ -42,6 +43,11 @@ void _configureFirebaseBackend() {
       'USE_FIREBASE_EMULATORS=true.',
     );
   }
+  await FirebaseAuth.instance.useAuthEmulator(
+    emulatorHost,
+    9099,
+    automaticHostMapping: false,
+  );
 
   final firestore = FirebaseFirestore.instance;
 
@@ -159,7 +165,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  _configureFirebaseBackend();
+  await _configureFirebaseBackend();
 
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
