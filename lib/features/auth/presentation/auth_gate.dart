@@ -7,6 +7,7 @@ import '../../profile/domain/app_user.dart';
 import '../../profile/presentation/account_setup_screen.dart';
 import '../data/auth_service.dart';
 import 'login_screen.dart';
+import 'email_verification_screen.dart';
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
@@ -17,7 +18,7 @@ class AuthGate extends StatelessWidget {
     final profileService = UserProfileService();
 
     return StreamBuilder<User?>(
-      stream: authService.authStateChanges,
+      stream: authService.userChanges,
       builder: (context, authSnapshot) {
         if (authSnapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
@@ -29,6 +30,9 @@ class AuthGate extends StatelessWidget {
 
         if (firebaseUser == null) {
           return const LoginScreen();
+        }
+        if (!firebaseUser.emailVerified) {
+          return EmailVerificationScreen(email: firebaseUser.email ?? '');
         }
 
         return StreamBuilder<AppUser?>(

@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../../core/services/push_notification_service.dart';
 
@@ -7,6 +8,10 @@ class AuthService {
 
   Stream<User?> get authStateChanges {
     return _auth.authStateChanges();
+  }
+
+  Stream<User?> get userChanges {
+    return _auth.userChanges();
   }
 
   User? get currentUser {
@@ -25,9 +30,8 @@ class AuthService {
     final user = credential.user;
 
     if (user != null) {
-      await PushNotificationService.instance.registerCurrentDevice(
-        uid: user.uid,
-      );
+      await _sendEmailVerificationSafely(user);
+      await _registerCurrentDeviceSafely(user);
     }
 
     return credential;
@@ -45,12 +49,37 @@ class AuthService {
     final user = credential.user;
 
     if (user != null) {
-      await PushNotificationService.instance.registerCurrentDevice(
-        uid: user.uid,
-      );
+      await _registerCurrentDeviceSafely(user);
     }
 
     return credential;
+  }
+
+  Future<void> sendEmailVerification() async {
+    final user = _auth.currentUser;
+
+    if (user == null) {
+      throw StateError('Użytkownik nie jest zalogowany.');
+    }
+
+    if (user.emailVerified) {
+      return;
+    }
+
+    await _auth.setLanguageCode('pl');
+    await user.sendEmailVerification();
+  }
+
+  Future<bool> reloadEmailVerificationStatus() async {
+    final user = _auth.currentUser;
+
+    if (user == null) {
+      return false;
+    }
+
+    await user.reload();
+
+    return _auth.currentUser?.emailVerified ?? false;
   }
 
   Future<void> sendPasswordResetEmail({required String email}) async {
@@ -62,11 +91,47 @@ class AuthService {
     final user = _auth.currentUser;
 
     if (user != null) {
-      await PushNotificationService.instance.unregisterCurrentDevice(
-        uid: user.uid,
-      );
+      await _unregisterCurrentDeviceSafely(user);
     }
 
     await _auth.signOut();
+  }
+
+  Future<void> _sendEmailVerificationSafely(User user) async {
+    if (user.emailVerified) {
+      return;
+    }
+
+    try {
+      await _auth.setLanguageCode('pl');
+      await user.sendEmailVerification();
+    } on FirebaseAuthException catch (error) {
+      debugPrint(
+        'AUTH EMAIL VERIFICATION ERROR: '
+        '${error.code} | ${error.message}',
+      );
+    } catch (error) {
+      debugPrint('AUTH EMAIL VERIFICATION ERROR: $error');
+    }
+  }
+
+  Future<void> _registerCurrentDeviceSafely(User user) async {
+    try {
+      await PushNotificationService.instance.registerCurrentDevice(
+        uid: user.uid,
+      );
+    } catch (error) {
+      debugPrint('PUSH DEVICE REGISTER ERROR: $error');
+    }
+  }
+
+  Future<void> _unregisterCurrentDeviceSafely(User user) async {
+    try {
+      await PushNotificationService.instance.unregisterCurrentDevice(
+        uid: user.uid,
+      );
+    } catch (error) {
+      debugPrint('PUSH DEVICE UNREGISTER ERROR: $error');
+    }
   }
 }
