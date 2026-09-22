@@ -90,6 +90,38 @@ class AuthService {
     return true;
   }
 
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = _auth.currentUser;
+
+    if (user == null) {
+      throw StateError('Użytkownik nie jest zalogowany.');
+    }
+
+    final email = user.email;
+
+    if (email == null || email.trim().isEmpty) {
+      throw StateError('Konto nie ma adresu e-mail.');
+    }
+
+    final credential = EmailAuthProvider.credential(
+      email: email,
+      password: currentPassword,
+    );
+
+    final result = await user.reauthenticateWithCredential(credential);
+    final refreshedUser = result.user ?? _auth.currentUser;
+
+    if (refreshedUser == null) {
+      throw StateError('Nie udało się odświeżyć sesji użytkownika.');
+    }
+
+    await refreshedUser.updatePassword(newPassword);
+    await refreshedUser.getIdToken(true);
+  }
+
   Future<void> sendPasswordResetEmail({required String email}) async {
     await _auth.setLanguageCode('pl');
     await _auth.sendPasswordResetEmail(email: email);
