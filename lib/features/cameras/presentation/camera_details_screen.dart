@@ -62,7 +62,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     } catch (error) {
       debugPrint(
         'CAMERA AVAILABILITY ERROR '
-        '[${widget.camera.id}]: $error',
+        '[${widget.camera.id}]: ${error.runtimeType}',
       );
     }
   }
@@ -118,7 +118,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       _stopLiveWatchdog();
       debugPrint(
         'CAMERA LIVE ERROR '
-        '[${widget.camera.id}]: $error',
+        '[${widget.camera.id}]: ${error.runtimeType}',
       );
 
       if (!mounted) {
@@ -251,14 +251,14 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       try {
         await controller.dispose();
       } catch (error) {
-        debugPrint('CAMERA LIVE DISPOSE ERROR: $error');
+        debugPrint('CAMERA LIVE DISPOSE ERROR: ${error.runtimeType}');
       }
     }
 
     try {
       await _cameraProvider.stopLive();
     } catch (error) {
-      debugPrint('CAMERA LIVE STOP ERROR: $error');
+      debugPrint('CAMERA LIVE STOP ERROR: ${error.runtimeType}');
     }
 
     if (!mounted) {
@@ -305,7 +305,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
         SnackBar(
           content: Text(
             'Nie udało się zmienić '
-            'dźwięku: $error',
+            'dźwięku. Spróbuj ponownie.',
           ),
         ),
       );
@@ -357,7 +357,9 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Nie udało się wykonać snapshotu: $error')),
+        SnackBar(
+          content: Text('Nie udało się wykonać zdjęcia. Spróbuj ponownie.'),
+        ),
       );
     } finally {
       if (mounted) {
@@ -461,7 +463,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
         SnackBar(
           content: Text(
             'Nie udało się zmienić '
-            'wykrywania ruchu: $error',
+            'wykrywania ruchu. Spróbuj ponownie.',
           ),
         ),
       );
@@ -519,7 +521,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
         SnackBar(
           content: Text(
             'Nie udało się utworzyć '
-            'zgłoszenia: $error',
+            'zgłoszenia. Spróbuj ponownie.',
           ),
         ),
       );

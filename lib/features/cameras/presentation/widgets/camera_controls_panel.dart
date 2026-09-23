@@ -76,9 +76,13 @@ class _CameraControlsPanelState extends State<CameraControlsPanel> {
       return;
     }
 
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('$action: $error')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Nie udało się wykonać polecenia „$action”. Spróbuj ponownie.',
+        ),
+      ),
+    );
   }
 
   Future<void> _startTalk() async {

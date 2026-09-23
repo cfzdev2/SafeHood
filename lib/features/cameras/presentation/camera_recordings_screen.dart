@@ -128,7 +128,7 @@ class _CameraRecordingsScreenState extends State<CameraRecordingsScreen> {
         SnackBar(
           content: Text(
             'Nie udało się otworzyć '
-            'nagrania: $error',
+            'nagrania. Spróbuj ponownie.',
           ),
         ),
       );
@@ -174,7 +174,10 @@ class _CameraRecordingsScreenState extends State<CameraRecordingsScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
-              Text('$_error', textAlign: TextAlign.center),
+              const Text(
+                'Spróbuj ponownie później.',
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 20),
               FilledButton.icon(
                 onPressed: () {
@@ -532,7 +535,7 @@ class _CameraRecordingPlayerScreenState
           padding: const EdgeInsets.all(24),
           child: Text(
             'Nie udało się odtworzyć '
-            'nagrania.\n\n$_error',
+            'nagrania. Spróbuj ponownie.',
             textAlign: TextAlign.center,
           ),
         ),

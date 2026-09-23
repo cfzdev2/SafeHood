@@ -9,6 +9,10 @@ const configPath =
     __dirname,
     'config.json',
   );
+  
+const {
+  requireSecureEndpoint,
+} = require('./secure_endpoint');
 
 function loadConfig() {
   if (
@@ -73,7 +77,10 @@ async function main() {
 
   const response =
     await fetch(
-      endpoint,
+      requireSecureEndpoint(
+        endpoint,
+        'Endpoint konfiguracji Bridge',
+      ),
       {
         method:
           'POST',

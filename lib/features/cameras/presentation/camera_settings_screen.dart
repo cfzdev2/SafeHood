@@ -200,7 +200,11 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Nie udało się zapisać danych kamery: $error')),
+        SnackBar(
+          content: Text(
+            'Nie udało się zapisać danych kamery. Spróbuj ponownie.',
+          ),
+        ),
       );
     } finally {
       if (mounted) {
@@ -257,7 +261,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         SnackBar(
           content: Text(
             'Nie udało się zmienić '
-            'monitoringu: $error',
+            'monitoringu. Spróbuj ponownie.',
           ),
         ),
       );
@@ -299,7 +303,9 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Nie udało się zapisać powiadomień: $error')),
+        SnackBar(
+          content: Text('Nie udało się zapisać powiadomień. Spróbuj ponownie.'),
+        ),
       );
     } finally {
       if (mounted) {
@@ -377,7 +383,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         SnackBar(
           content: Text(
             'Nie udało się usunąć '
-            'kamery: $error',
+            'kamery. Spróbuj ponownie.',
           ),
         ),
       );

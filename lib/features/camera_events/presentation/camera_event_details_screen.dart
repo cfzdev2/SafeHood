@@ -152,7 +152,7 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
         SnackBar(
           content: Text(
             'Nie udało się otworzyć '
-            'LIVE: $error',
+            'LIVE. Spróbuj ponownie.',
           ),
         ),
       );
@@ -177,7 +177,7 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
     } catch (error) {
       debugPrint(
         'CAMERA EVENT MARK VIEWED ERROR: '
-        '$error',
+        '${error.runtimeType}',
       );
 
       _markViewedRequested = false;
@@ -225,7 +225,7 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
         SnackBar(
           content: Text(
             'Nie udało się odrzucić '
-            'wykrycia: $error',
+            'wykrycia. Spróbuj ponownie.',
           ),
         ),
       );
@@ -291,7 +291,7 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
     } catch (error, stackTrace) {
       debugPrint(
         'CAMERA EVENT ESCALATE ERROR: '
-        '$error',
+        '${error.runtimeType}',
       );
 
       debugPrint(
@@ -311,7 +311,7 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
         SnackBar(
           content: Text(
             'Nie udało się utworzyć '
-            'zgłoszenia: $error',
+            'zgłoszenia. Spróbuj ponownie.',
           ),
         ),
       );
@@ -880,7 +880,7 @@ class _CameraEventClipPlayerState extends State<_CameraEventClipPlayer> {
             ),
             const SizedBox(height: 6),
             Text(
-              '$_error',
+              'Spróbuj ponownie później.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),

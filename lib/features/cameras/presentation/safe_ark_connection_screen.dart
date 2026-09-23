@@ -68,11 +68,9 @@ class SafeArkConnectionScreen extends StatelessWidget {
   }
 
   String _errorDescription(Object error) {
-    if (error is StateError) {
-      return error.message;
-    }
+    debugPrint('SAFEARK CONNECTION ERROR TYPE: ${error.runtimeType}');
 
-    return error.toString();
+    return 'Nie udało się połączyć z SafeArk. Spróbuj ponownie.';
   }
 
   String _statusLabel(ManufacturerCloudAccountStatus status) {

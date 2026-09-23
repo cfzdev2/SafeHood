@@ -121,7 +121,7 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
         SnackBar(
           content: Text(
             'Nie udało się przeskanować '
-            'sieci.\n$error',
+            'sieci. Spróbuj ponownie.',
           ),
         ),
       );

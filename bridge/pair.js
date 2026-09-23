@@ -7,6 +7,10 @@ const os =
 const path =
   require('path');
 
+const {
+  requireSecureEndpoint,
+} = require('./secure_endpoint');
+
 const PROJECT_ID =
   process.env
     .SAFEHOOD_PROJECT_ID ||
@@ -53,7 +57,10 @@ async function main() {
 
   const response =
     await fetch(
-      PAIR_ENDPOINT,
+      requireSecureEndpoint(
+        PAIR_ENDPOINT,
+        'Endpoint parowania',
+      ),
       {
         method:
           'POST',

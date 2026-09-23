@@ -4056,12 +4056,7 @@ exports.ingestBridgeCameraEvent =
 
             response.status(status).json({
               error:
-                  error &&
-                  typeof error.message ===
-                    "string" ?
-                    error.message :
-                    "Nie udało się zapisać " +
-                    "zdarzenia.",
+                "Nie udało się zapisać zdarzenia.",
             });
           }
         },
@@ -4433,11 +4428,7 @@ const devIngestManufacturerCameraEvent =
 
             response.status(status).json({
               error:
-                  error &&
-                  typeof error.message ===
-                      "string" ?
-                    error.message :
-                    "Nie udało się zapisać zdarzenia.",
+                "Nie udało się zapisać zdarzenia.",
             });
           }
         },
@@ -4528,11 +4519,7 @@ const devIngestCameraEvent = onRequest(
 
         response.status(status).json({
           error:
-              error &&
-              typeof error.message ===
-              "string" ?
-                error.message :
-                "Nie udało się zapisać eventu.",
+            "Nie udało się zapisać zdarzenia.",
         });
       }
     },

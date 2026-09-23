@@ -11,6 +11,10 @@ const {
   connectionFingerprint,
 } = require('./onvif_camera_session');
 
+const {
+  requireSecureEndpoint,
+} = require('./secure_endpoint');
+
 const CONFIG_PATH =
   path.join(
     __dirname,
@@ -84,6 +88,11 @@ const functionsBaseUrl =
     /\/+$/,
     '',
   );
+
+requireSecureEndpoint(
+  functionsBaseUrl,
+  'Bazowy adres Firebase Functions',
+);
 
 const sessions =
   new Map();
