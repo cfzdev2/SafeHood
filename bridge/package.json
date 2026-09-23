@@ -5,7 +5,7 @@
   "main": "supervisor.js",
   "scripts": {
     "start": "node supervisor.js",
-    "check": "node --check secure_endpoint.js && node --check ai/yolox_detector.js && node --check ai/yolox_postprocess.js && node --check test/yolox_postprocess.test.js && node --check onvif_camera_session.js && node --check pair.js && node --check verify_pairing.js && node --check authenticated_index.js && node --check supervisor.js",
+    "check": "node --check secure_endpoint.js && node --check ai/ffmpeg_frame_source.js && node --check ai/yolox_detector.js && node --check ai/yolox_postprocess.js && node --check test/yolox_postprocess.test.js && node --check onvif_camera_session.js && node --check pair.js && node --check verify_pairing.js && node --check authenticated_index.js && node --check supervisor.js",
     "pair": "node pair.js",
     "verify-pairing": "node verify_pairing.js",
     "start-worker": "node authenticated_index.js",
