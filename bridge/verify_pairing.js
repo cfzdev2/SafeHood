@@ -9,7 +9,7 @@ const configPath =
     __dirname,
     'config.json',
   );
-  
+
 const {
   requireSecureEndpoint,
 } = require('./secure_endpoint');
