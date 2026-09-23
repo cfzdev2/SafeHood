@@ -828,6 +828,26 @@ class _CameraEventClipPlayerState extends State<_CameraEventClipPlayer> {
     }
   }
 
+  Future<void> _openFullscreen() async {
+    final controller = _controller;
+
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          return CameraFullscreenLiveView(controller: controller);
+        },
+      ),
+    );
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -891,6 +911,19 @@ class _CameraEventClipPlayerState extends State<_CameraEventClipPlayer> {
               alignment: Alignment.center,
               children: [
                 VideoPlayer(controller),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton(
+                    onPressed: _openFullscreen,
+                    tooltip: 'Pełny ekran',
+                    style: IconButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.black54,
+                    ),
+                    icon: const Icon(Icons.fullscreen),
+                  ),
+                ),
 
                 Material(
                   color: Colors.transparent,

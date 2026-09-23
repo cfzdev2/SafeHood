@@ -6,6 +6,7 @@ import 'package:video_player/video_player.dart';
 import '../domain/camera.dart';
 import '../domain/camera_provider.dart';
 import '../domain/camera_recording.dart';
+import '../../camera_events/presentation/camera_event_live_screen.dart';
 
 class CameraRecordingsScreen extends StatefulWidget {
   final Camera camera;
@@ -492,6 +493,26 @@ class _CameraRecordingPlayerScreenState
     }
   }
 
+  Future<void> _openFullscreen() async {
+    final controller = _controller;
+
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          return CameraFullscreenLiveView(controller: controller);
+        },
+      ),
+    );
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -539,6 +560,19 @@ class _CameraRecordingPlayerScreenState
               alignment: Alignment.center,
               children: [
                 Positioned.fill(child: VideoPlayer(controller)),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton(
+                    onPressed: _openFullscreen,
+                    tooltip: 'Pełny ekran',
+                    style: IconButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.black54,
+                    ),
+                    icon: const Icon(Icons.fullscreen),
+                  ),
+                ),
                 IconButton.filled(
                   onPressed: _togglePlayback,
                   iconSize: 42,
