@@ -13,6 +13,7 @@ import 'widgets/camera_controls_panel.dart';
 import 'camera_recordings_screen.dart';
 import 'camera_snapshot_preview_screen.dart';
 import '../data/camera_service.dart';
+import '../../camera_events/presentation/camera_event_live_screen.dart';
 
 class CameraDetailsScreen extends StatefulWidget {
   final Camera camera;
@@ -525,6 +526,26 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     }
   }
 
+  Future<void> _openLiveFullscreen() async {
+    final controller = _videoController;
+
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          return CameraFullscreenLiveView(controller: controller);
+        },
+      ),
+    );
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   Widget _buildLivePreview() {
     if (_liveLoading) {
       return const Center(
@@ -587,13 +608,31 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
-      child: FittedBox(
-        fit: BoxFit.contain,
-        child: SizedBox(
-          width: controller.value.size.width,
-          height: controller.value.size.height,
-          child: VideoPlayer(controller),
-        ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          FittedBox(
+            fit: BoxFit.contain,
+            child: SizedBox(
+              width: controller.value.size.width,
+              height: controller.value.size.height,
+              child: VideoPlayer(controller),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton(
+              onPressed: _openLiveFullscreen,
+              tooltip: 'Pełny ekran',
+              style: IconButton.styleFrom(
+                foregroundColor: Colors.white,
+                backgroundColor: Colors.black54,
+              ),
+              icon: const Icon(Icons.fullscreen),
+            ),
+          ),
+        ],
       ),
     );
   }

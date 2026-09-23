@@ -6,6 +6,7 @@ import 'package:video_player/video_player.dart';
 import '../../cameras/data/camera_provider_factory.dart';
 import '../../cameras/domain/camera.dart';
 import '../../cameras/domain/camera_provider.dart';
+import 'package:flutter/services.dart';
 
 class CameraEventLiveScreen extends StatefulWidget {
   final Camera camera;
@@ -33,7 +34,6 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
     unawaited(_initializeLive());
   }
 
-
   Future<void> _initializeLive() async {
     try {
       debugPrint(
@@ -51,11 +51,6 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
           'strumienia LIVE.',
         );
       }
-
-      debugPrint(
-        'LIVE: stream URI = '
-        '$streamUri',
-      );
 
       await _cameraProvider.startLive();
 
@@ -77,13 +72,9 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
         _loading = false;
       });
     } catch (error, stackTrace) {
-      debugPrint('LIVE ERROR: $error');
+      debugPrint('LIVE ERROR TYPE: ${error.runtimeType}');
 
-      debugPrint(
-        'LIVE STACKTRACE: '
-        '$stackTrace',
-      );
-
+      debugPrintStack(label: 'LIVE STACKTRACE', stackTrace: stackTrace);
       if (!mounted) {
         return;
       }
@@ -113,8 +104,28 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
     }
   }
 
+  Future<void> _openFullscreen() async {
+    final controller = _videoController;
+
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          return CameraFullscreenLiveView(controller: controller);
+        },
+      ),
+    );
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   Future<void> _shutdown() async {
-  final controller = _videoController;
+    final controller = _videoController;
 
     _videoController = null;
 
@@ -186,7 +197,7 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
               ),
               const SizedBox(height: 12),
               Text(
-                '$_error',
+                'Sprawdź połączenie z kamerą i spróbuj ponownie.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
@@ -245,6 +256,19 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
               children: [
                 Positioned.fill(child: Container(color: Colors.black)),
                 VideoPlayer(controller),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton(
+                    onPressed: _openFullscreen,
+                    tooltip: 'Pełny ekran',
+                    style: IconButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.black54,
+                    ),
+                    icon: const Icon(Icons.fullscreen),
+                  ),
+                ),
                 Material(
                   color: Colors.transparent,
                   child: InkWell(
@@ -278,6 +302,146 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
           style: Theme.of(context).textTheme.bodySmall,
         ),
       ],
+    );
+  }
+}
+
+class CameraFullscreenLiveView extends StatefulWidget {
+  final VideoPlayerController controller;
+
+  const CameraFullscreenLiveView({super.key, required this.controller});
+
+  @override
+  State<CameraFullscreenLiveView> createState() {
+    return _CameraFullscreenLiveViewState();
+  }
+}
+
+class _CameraFullscreenLiveViewState extends State<CameraFullscreenLiveView> {
+  late final Future<void> _enterFullscreenFuture;
+
+  bool _systemUiRestored = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _enterFullscreenFuture = _enterFullscreen();
+  }
+
+  Future<void> _enterFullscreen() async {
+    try {
+      await SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } catch (error) {
+      debugPrint(
+        'LIVE FULLSCREEN ENTER ERROR: '
+        '${error.runtimeType}',
+      );
+    }
+  }
+
+  Future<void> _restoreSystemUi() async {
+    if (_systemUiRestored) {
+      return;
+    }
+
+    _systemUiRestored = true;
+
+    await _enterFullscreenFuture;
+
+    try {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+      await SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.portraitUp,
+      ]);
+    } catch (error) {
+      debugPrint(
+        'LIVE FULLSCREEN RESTORE ERROR: '
+        '${error.runtimeType}',
+      );
+    }
+  }
+
+  Future<void> _closeFullscreen() async {
+    await _restoreSystemUi();
+
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> _togglePlayback() async {
+    if (widget.controller.value.isPlaying) {
+      await widget.controller.pause();
+    } else {
+      await widget.controller.play();
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_restoreSystemUi());
+
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final aspectRatio = widget.controller.value.aspectRatio > 0
+        ? widget.controller.value.aspectRatio
+        : 16 / 9;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        alignment: Alignment.center,
+        children: [
+          Center(
+            child: AspectRatio(
+              aspectRatio: aspectRatio,
+              child: VideoPlayer(widget.controller),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: SafeArea(
+              child: IconButton(
+                onPressed: _closeFullscreen,
+                tooltip: 'Wyjdź z pełnego ekranu',
+                style: IconButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  backgroundColor: Colors.black54,
+                ),
+                icon: const Icon(Icons.fullscreen_exit),
+              ),
+            ),
+          ),
+          Center(
+            child: ValueListenableBuilder<VideoPlayerValue>(
+              valueListenable: widget.controller,
+              builder: (context, value, child) {
+                return IconButton(
+                  onPressed: _togglePlayback,
+                  style: IconButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    backgroundColor: Colors.black54,
+                  ),
+                  iconSize: 42,
+                  icon: Icon(value.isPlaying ? Icons.pause : Icons.play_arrow),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
