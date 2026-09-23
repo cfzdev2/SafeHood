@@ -72,3 +72,8 @@ bridge/config.json.tmp
 
 # Emulator exports in every project directory
 **/emulator-data/
+
+# Lokalne modele AI Bridge.
+bridge/models/*.onnx
+bridge/models/*.ort
+bridge/test-data/
