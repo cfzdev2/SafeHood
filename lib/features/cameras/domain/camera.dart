@@ -38,6 +38,10 @@ class Camera {
   // Określa, czy SafeHood ma
   // monitorować zdarzenia kamery.
   final bool motionDetectionEnabled;
+  final bool aiEnabled;
+  final bool aiPersonEnabled;
+  final bool aiVehicleEnabled;
+  final String aiSensitivity;
 
   final bool hasSdCard;
 
@@ -71,6 +75,10 @@ class Camera {
     required this.isOnline,
     this.availabilityCheckedAt,
     required this.motionDetectionEnabled,
+    this.aiEnabled = false,
+    this.aiPersonEnabled = true,
+    this.aiVehicleEnabled = true,
+    this.aiSensitivity = 'standard',
     required this.hasSdCard,
     this.ipAddress,
     this.macAddress,
@@ -99,6 +107,10 @@ class Camera {
     bool? isOnline,
     DateTime? availabilityCheckedAt,
     bool? motionDetectionEnabled,
+    bool? aiEnabled,
+    bool? aiPersonEnabled,
+    bool? aiVehicleEnabled,
+    String? aiSensitivity,
     bool? hasSdCard,
     CameraConnectionType? connectionType,
     CameraCloudProvider? cloudProvider,
@@ -123,6 +135,10 @@ class Camera {
           availabilityCheckedAt ?? this.availabilityCheckedAt,
       motionDetectionEnabled:
           motionDetectionEnabled ?? this.motionDetectionEnabled,
+      aiEnabled: aiEnabled ?? this.aiEnabled,
+      aiPersonEnabled: aiPersonEnabled ?? this.aiPersonEnabled,
+      aiVehicleEnabled: aiVehicleEnabled ?? this.aiVehicleEnabled,
+      aiSensitivity: aiSensitivity ?? this.aiSensitivity,
       hasSdCard: hasSdCard ?? this.hasSdCard,
       connectionType: connectionType ?? this.connectionType,
       cloudProvider: cloudProvider ?? this.cloudProvider,
@@ -148,6 +164,10 @@ class Camera {
       'isOnline': isOnline,
       'availabilityCheckedAt': availabilityCheckedAt,
       'motionDetectionEnabled': motionDetectionEnabled,
+      'aiEnabled': aiEnabled,
+      'aiPersonEnabled': aiPersonEnabled,
+      'aiVehicleEnabled': aiVehicleEnabled,
+      'aiSensitivity': aiSensitivity,
       'hasSdCard': hasSdCard,
       'connectionType': connectionType.name,
       'cloudProvider': cloudProvider?.name,
@@ -176,6 +196,14 @@ class Camera {
       availabilityCheckedAt: (map['availabilityCheckedAt'] as Timestamp?)
           ?.toDate(),
       motionDetectionEnabled: map['motionDetectionEnabled'] as bool? ?? true,
+      aiEnabled: map['aiEnabled'] == true,
+      aiPersonEnabled: map['aiPersonEnabled'] is bool
+          ? map['aiPersonEnabled'] as bool
+          : true,
+      aiVehicleEnabled: map['aiVehicleEnabled'] is bool
+          ? map['aiVehicleEnabled'] as bool
+          : true,
+      aiSensitivity: _parseAiSensitivity(map['aiSensitivity']),
       hasSdCard: map['hasSdCard'] as bool? ?? false,
       connectionType: _parseConnectionType(map['connectionType'] as String?),
       cloudProvider: _parseCloudProvider(map['cloudProvider']),
@@ -186,6 +214,17 @@ class Camera {
         map['bridgeMonitoringStatus'] as String?,
       ),
     );
+  }
+
+  static String _parseAiSensitivity(dynamic value) {
+    switch (value) {
+      case 'low':
+      case 'standard':
+      case 'high':
+        return value as String;
+      default:
+        return 'standard';
+    }
   }
 
   static String? _parseNullableString(dynamic value) {

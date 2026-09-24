@@ -56,4 +56,17 @@ class UserProfileService {
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
+
+  Future<void> setLocalAiEnabled(bool enabled) async {
+    final firebaseUser = FirebaseAuth.instance.currentUser;
+
+    if (firebaseUser == null) {
+      throw StateError('Użytkownik nie jest zalogowany.');
+    }
+
+    await _userDocument(firebaseUser.uid).set({
+      'localAiEnabled': enabled,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
 }

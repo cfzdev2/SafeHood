@@ -264,6 +264,95 @@ test(
 );
 
 test(
+    "właściciel zapisuje poprawne ustawienia AI kamery",
+    async () => {
+      const db = firestoreFor(ownerId);
+
+      const reference = doc(
+          db,
+          "users",
+          ownerId,
+          "cameras",
+          cameraId,
+      );
+
+      await assertSucceeds(
+          updateDoc(reference, {
+            aiEnabled: true,
+            aiPersonEnabled: true,
+            aiVehicleEnabled: false,
+            aiSensitivity: "high",
+            updatedAt: serverTimestamp(),
+          }),
+      );
+
+      const snapshot = await getDoc(reference);
+
+      assert.equal(
+          snapshot.data().aiEnabled,
+          true,
+      );
+
+      assert.equal(
+          snapshot.data().aiSensitivity,
+          "high",
+      );
+    },
+);
+
+test(
+    "kamera odrzuca nieprawidłową czułość AI",
+    async () => {
+      const db = firestoreFor(ownerId);
+
+      await assertFails(
+          updateDoc(
+              doc(
+                  db,
+                  "users",
+                  ownerId,
+                  "cameras",
+                  cameraId,
+              ),
+              {
+                aiEnabled: true,
+                aiPersonEnabled: true,
+                aiVehicleEnabled: true,
+                aiSensitivity: "extreme",
+                updatedAt: serverTimestamp(),
+              },
+          ),
+      );
+    },
+);
+
+test(
+    "kamera odrzuca AI bez typu wykrywania",
+    async () => {
+      const db = firestoreFor(ownerId);
+
+      await assertFails(
+          updateDoc(
+              doc(
+                  db,
+                  "users",
+                  ownerId,
+                  "cameras",
+                  cameraId,
+              ),
+              {
+                aiEnabled: true,
+                aiPersonEnabled: false,
+                aiVehicleEnabled: false,
+                aiSensitivity: "standard",
+                updatedAt: serverTimestamp(),
+              },
+          ),
+      );
+    },
+);
+
+test(
     "nie można zmienić online bez czasu kontroli",
     async () => {
       const db = firestoreFor(ownerId);

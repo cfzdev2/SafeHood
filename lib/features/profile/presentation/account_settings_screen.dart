@@ -3,6 +3,8 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 
 import '../../auth/data/auth_service.dart';
+import '../data/user_profile_service.dart';
+import '../domain/app_user.dart';
 
 class AccountSettingsScreen extends StatefulWidget {
   const AccountSettingsScreen({super.key});
@@ -17,8 +19,9 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
   final repeatPasswordController = TextEditingController();
 
   final authService = AuthService();
-
+  final profileService = UserProfileService();
   bool isLoading = false;
+  bool isAiSaving = false;
 
   @override
   void dispose() {
@@ -32,6 +35,40 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> setLocalAiEnabled(bool enabled) async {
+    if (isAiSaving) {
+      return;
+    }
+
+    setState(() {
+      isAiSaving = true;
+    });
+
+    try {
+      await profileService.setLocalAiEnabled(enabled);
+
+      if (!mounted) return;
+
+      showMessage(
+        enabled
+            ? 'Lokalna analiza AI została włączona.'
+            : 'Lokalna analiza AI została wyłączona.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      debugPrint('LOCAL AI SETTING ERROR: $error');
+
+      showMessage('Nie udało się zapisać ustawienia AI.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          isAiSaving = false;
+        });
+      }
+    }
   }
 
   Future<void> changePassword() async {
@@ -350,6 +387,46 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
               ),
             ),
           ),
+          const SizedBox(height: 16),
+          if (user != null)
+            StreamBuilder<AppUser?>(
+              stream: profileService.watchProfile(user.uid),
+              builder: (context, snapshot) {
+                final profile = snapshot.data;
+                final localAiEnabled = profile?.localAiEnabled == true;
+
+                String subtitle;
+
+                if (snapshot.hasError) {
+                  subtitle = 'Nie udało się pobrać ustawienia AI.';
+                } else if (profile == null) {
+                  subtitle = 'Wczytywanie ustawienia...';
+                } else if (localAiEnabled) {
+                  subtitle =
+                      'Bridge może analizować obraz z wybranych kamer lokalnie.';
+                } else {
+                  subtitle =
+                      'Włącz, aby zezwolić na lokalną analizę obrazu przez Bridge.';
+                }
+
+                return Card(
+                  child: SwitchListTile(
+                    secondary: isAiSaving
+                        ? const SizedBox.square(
+                            dimension: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.psychology_outlined),
+                    title: const Text('Lokalna analiza AI'),
+                    subtitle: Text(subtitle),
+                    value: localAiEnabled,
+                    onChanged: profile == null || isAiSaving
+                        ? null
+                        : setLocalAiEnabled,
+                  ),
+                );
+              },
+            ),
           const SizedBox(height: 24),
           Text(
             'Zmień hasło',

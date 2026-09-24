@@ -62,7 +62,13 @@ service cloud.firestore {
                is map
           )
         )
-
+        && (
+          !request.resource.data.keys().hasAny([
+            'localAiEnabled'
+          ])
+          || request.resource.data.localAiEnabled
+            is bool
+        )
         && request.resource.data.updatedAt
            == request.time;
   }
@@ -92,7 +98,8 @@ service cloud.firestore {
       'notificationsEnabled',
       'email',
       'geo',
-      'updatedAt'
+      'updatedAt',
+      'localAiEnabled'
     ])
     && isValidUserProfile();
 
@@ -110,6 +117,7 @@ service cloud.firestore {
            'notificationsEnabled',
            'email',
            'geo',
+           'localAiEnabled',
            'updatedAt'
          ])
     && isValidUserProfile();
@@ -135,6 +143,10 @@ service cloud.firestore {
           'notificationSettings',
           'isOnline',
           'availabilityCheckedAt',
+          'aiEnabled',
+          'aiPersonEnabled',
+          'aiVehicleEnabled',
+          'aiSensitivity',
           'updatedAt'
         ])
         && request.resource.data.updatedAt
@@ -166,6 +178,35 @@ service cloud.firestore {
           ])
           || request.resource.data.motionDetectionEnabled
              is bool
+        )
+
+        && (
+          !changedKeys.hasAny([
+            'aiEnabled',
+            'aiPersonEnabled',
+            'aiVehicleEnabled',
+            'aiSensitivity'
+          ])
+          || (
+            request.resource.data.aiEnabled
+              is bool
+            && request.resource.data.aiPersonEnabled
+              is bool
+            && request.resource.data.aiVehicleEnabled
+              is bool
+            && request.resource.data.aiSensitivity
+              is string
+            && request.resource.data.aiSensitivity in [
+              'low',
+              'standard',
+              'high'
+            ]
+            && (
+              request.resource.data.aiEnabled == false
+              || request.resource.data.aiPersonEnabled == true
+              || request.resource.data.aiVehicleEnabled == true
+            )
+          )
         )
 
         && (

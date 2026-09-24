@@ -219,6 +219,40 @@ test(
 );
 
 test(
+    "właściciel zmienia globalne ustawienie AI",
+    async () => {
+      const db = firestoreFor(ownerId);
+
+      await assertSucceeds(
+          updateDoc(
+              doc(db, "users", ownerId),
+              {
+                localAiEnabled: true,
+                updatedAt: serverTimestamp(),
+              },
+          ),
+      );
+    },
+);
+
+test(
+    "profil odrzuca nieprawidłowy typ ustawienia AI",
+    async () => {
+      const db = firestoreFor(ownerId);
+
+      await assertFails(
+          updateDoc(
+              doc(db, "users", ownerId),
+              {
+                localAiEnabled: "true",
+                updatedAt: serverTimestamp(),
+              },
+          ),
+      );
+    },
+);
+
+test(
     "właściciel nie zapisuje pola backendu",
     async () => {
       const db = firestoreFor(ownerId);

@@ -129,6 +129,32 @@ class CameraService {
     });
   }
 
+  Future<void> setAiSettings({
+    required String cameraId,
+    required bool enabled,
+    required bool personEnabled,
+    required bool vehicleEnabled,
+    required String sensitivity,
+  }) {
+    const allowedSensitivities = {'low', 'standard', 'high'};
+
+    if (!allowedSensitivities.contains(sensitivity)) {
+      throw ArgumentError('Nieprawidłowa czułość AI.');
+    }
+
+    if (enabled && !personEnabled && !vehicleEnabled) {
+      throw ArgumentError('Włącz co najmniej jeden typ wykrywania AI.');
+    }
+
+    return _camerasCollection.doc(cameraId).update({
+      'aiEnabled': enabled,
+      'aiPersonEnabled': personEnabled,
+      'aiVehicleEnabled': vehicleEnabled,
+      'aiSensitivity': sensitivity,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
   Future<CameraNotificationSettings> getNotificationSettings(
     String cameraId,
   ) async {

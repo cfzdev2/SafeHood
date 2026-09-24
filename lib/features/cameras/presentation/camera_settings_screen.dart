@@ -1,10 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../data/camera_service.dart';
 import '../domain/camera.dart';
 import '../domain/camera_notification_settings.dart';
+import '../../profile/data/user_profile_service.dart';
+import '../../profile/domain/app_user.dart';
 
 class CameraSettingsScreen extends StatefulWidget {
   final Camera camera;
@@ -17,8 +20,13 @@ class CameraSettingsScreen extends StatefulWidget {
 
 class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
   final CameraService _cameraService = CameraService();
+  final UserProfileService _profileService = UserProfileService();
 
   late bool _monitoringEnabled;
+  late bool _aiEnabled;
+  late bool _aiPersonEnabled;
+  late bool _aiVehicleEnabled;
+  late String _aiSensitivity;
 
   late String _cameraName;
   late String _locationName;
@@ -28,6 +36,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
 
   bool _loadingMonitoring = true;
   bool _savingMonitoring = false;
+  bool _loadingAi = true;
+  bool _savingAi = false;
   bool _deleting = false;
 
   bool _loadingNotifications = true;
@@ -38,6 +48,10 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     super.initState();
 
     _monitoringEnabled = widget.camera.motionDetectionEnabled;
+    _aiEnabled = widget.camera.aiEnabled;
+    _aiPersonEnabled = widget.camera.aiPersonEnabled;
+    _aiVehicleEnabled = widget.camera.aiVehicleEnabled;
+    _aiSensitivity = widget.camera.aiSensitivity;
     _cameraName = widget.camera.name;
     _locationName = widget.camera.locationName;
 
@@ -61,6 +75,10 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           _cameraName = currentCamera.name;
           _locationName = currentCamera.locationName;
           _monitoringEnabled = currentCamera.motionDetectionEnabled;
+          _aiEnabled = currentCamera.aiEnabled;
+          _aiPersonEnabled = currentCamera.aiPersonEnabled;
+          _aiVehicleEnabled = currentCamera.aiVehicleEnabled;
+          _aiSensitivity = currentCamera.aiSensitivity;
         }
 
         _notificationSettings = notificationSettings;
@@ -72,6 +90,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         setState(() {
           _loadingMonitoring = false;
           _loadingNotifications = false;
+          _loadingAi = false;
         });
       }
     }
@@ -274,6 +293,76 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     }
   }
 
+  Future<void> _setAiSettings({
+    bool? enabled,
+    bool? personEnabled,
+    bool? vehicleEnabled,
+    String? sensitivity,
+  }) async {
+    if (_savingAi || _deleting) {
+      return;
+    }
+
+    final nextEnabled = enabled ?? _aiEnabled;
+    final nextPersonEnabled = personEnabled ?? _aiPersonEnabled;
+    final nextVehicleEnabled = vehicleEnabled ?? _aiVehicleEnabled;
+    final nextSensitivity = sensitivity ?? _aiSensitivity;
+
+    if (nextEnabled && !nextPersonEnabled && !nextVehicleEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Włącz wykrywanie osoby lub pojazdu.')),
+      );
+
+      return;
+    }
+
+    final previousEnabled = _aiEnabled;
+    final previousPersonEnabled = _aiPersonEnabled;
+    final previousVehicleEnabled = _aiVehicleEnabled;
+    final previousSensitivity = _aiSensitivity;
+
+    setState(() {
+      _aiEnabled = nextEnabled;
+      _aiPersonEnabled = nextPersonEnabled;
+      _aiVehicleEnabled = nextVehicleEnabled;
+      _aiSensitivity = nextSensitivity;
+      _savingAi = true;
+    });
+
+    try {
+      await _cameraService.setAiSettings(
+        cameraId: widget.camera.id,
+        enabled: nextEnabled,
+        personEnabled: nextPersonEnabled,
+        vehicleEnabled: nextVehicleEnabled,
+        sensitivity: nextSensitivity,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _aiEnabled = previousEnabled;
+        _aiPersonEnabled = previousPersonEnabled;
+        _aiVehicleEnabled = previousVehicleEnabled;
+        _aiSensitivity = previousSensitivity;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nie udało się zapisać ustawień AI. Spróbuj ponownie.'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _savingAi = false;
+        });
+      }
+    }
+  }
+
   Future<void> _setNotificationSettings(
     CameraNotificationSettings settings,
   ) async {
@@ -392,6 +481,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
     final bridgeId = widget.camera.bridgeId;
     final notificationsBusy =
         _loadingNotifications || _savingNotifications || _deleting;
@@ -487,6 +577,126 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
               ],
             ),
           ),
+          if (user != null) ...[
+            const SizedBox(height: 24),
+            Text(
+              'Analiza AI',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            StreamBuilder<AppUser?>(
+              stream: _profileService.watchProfile(user.uid),
+              builder: (context, snapshot) {
+                final profile = snapshot.data;
+                final globalAiEnabled = profile?.localAiEnabled == true;
+                final aiBusy = _loadingAi || _savingAi || _deleting;
+                final aiOptionsEnabled =
+                    globalAiEnabled && _aiEnabled && !aiBusy;
+
+                String aiSubtitle;
+
+                if (snapshot.hasError) {
+                  aiSubtitle = 'Nie udało się pobrać głównego ustawienia AI.';
+                } else if (profile == null) {
+                  aiSubtitle = 'Wczytywanie ustawień AI...';
+                } else if (!globalAiEnabled) {
+                  aiSubtitle =
+                      'Najpierw włącz lokalną analizę AI '
+                      'w ustawieniach konta.';
+                } else if (_aiEnabled) {
+                  aiSubtitle = 'AI jest włączone dla tej kamery.';
+                } else {
+                  aiSubtitle = 'AI jest wyłączone dla tej kamery.';
+                }
+
+                return Card(
+                  child: Column(
+                    children: [
+                      SwitchListTile.adaptive(
+                        secondary: const Icon(Icons.psychology_outlined),
+                        title: const Text('AI dla tej kamery'),
+                        subtitle: Text(aiSubtitle),
+                        value: _aiEnabled,
+                        onChanged: !globalAiEnabled || aiBusy
+                            ? null
+                            : (enabled) {
+                                unawaited(_setAiSettings(enabled: enabled));
+                              },
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile.adaptive(
+                        secondary: const Icon(Icons.person_search_outlined),
+                        title: const Text('Wykrywanie osób'),
+                        value: _aiPersonEnabled,
+                        onChanged: aiOptionsEnabled
+                            ? (enabled) {
+                                unawaited(
+                                  _setAiSettings(personEnabled: enabled),
+                                );
+                              }
+                            : null,
+                      ),
+                      const Divider(height: 1),
+                      SwitchListTile.adaptive(
+                        secondary: const Icon(Icons.directions_car_outlined),
+                        title: const Text('Wykrywanie pojazdów'),
+                        value: _aiVehicleEnabled,
+                        onChanged: aiOptionsEnabled
+                            ? (enabled) {
+                                unawaited(
+                                  _setAiSettings(vehicleEnabled: enabled),
+                                );
+                              }
+                            : null,
+                      ),
+                      const Divider(height: 1),
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: DropdownButtonFormField<String>(
+                          key: ValueKey(_aiSensitivity),
+                          initialValue: _aiSensitivity,
+                          decoration: const InputDecoration(
+                            labelText: 'Czułość wykrywania',
+                            prefixIcon: Icon(Icons.tune),
+                            border: OutlineInputBorder(),
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'low',
+                              child: Text('Niska'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'standard',
+                              child: Text('Standardowa'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'high',
+                              child: Text('Wysoka'),
+                            ),
+                          ],
+                          onChanged: aiOptionsEnabled
+                              ? (sensitivity) {
+                                  if (sensitivity == null) {
+                                    return;
+                                  }
+
+                                  unawaited(
+                                    _setAiSettings(sensitivity: sensitivity),
+                                  );
+                                }
+                              : null,
+                        ),
+                      ),
+                      if (_loadingAi || _savingAi)
+                        const LinearProgressIndicator(),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
           const SizedBox(height: 24),
           Text(
             'Powiadomienia',

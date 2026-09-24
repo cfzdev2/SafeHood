@@ -6,6 +6,7 @@ class AppUser {
   final double? latitude;
   final double? longitude;
   final bool notificationsEnabled;
+  final bool localAiEnabled;
 
   const AppUser({
     required this.id,
@@ -15,6 +16,7 @@ class AppUser {
     this.latitude,
     this.longitude,
     this.notificationsEnabled = true,
+    this.localAiEnabled = false,
   });
 
   Map<String, dynamic> toMap() {
@@ -25,13 +27,11 @@ class AppUser {
       'latitude': latitude,
       'longitude': longitude,
       'notificationsEnabled': notificationsEnabled,
+      'localAiEnabled': localAiEnabled,
     };
   }
 
-  factory AppUser.fromMap(
-    String id,
-    Map<String, dynamic> map,
-  ) {
+  factory AppUser.fromMap(String id, Map<String, dynamic> map) {
     return AppUser(
       id: id,
       firstName: map['firstName'] as String? ?? '',
@@ -39,8 +39,8 @@ class AppUser {
       address: map['address'] as String? ?? '',
       latitude: (map['latitude'] as num?)?.toDouble(),
       longitude: (map['longitude'] as num?)?.toDouble(),
-      notificationsEnabled:
-          map['notificationsEnabled'] as bool? ?? true,
+      notificationsEnabled: map['notificationsEnabled'] as bool? ?? true,
+      localAiEnabled: map['localAiEnabled'] == true,
     );
   }
 }
