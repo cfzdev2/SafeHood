@@ -12,7 +12,9 @@
     "test:rules": "firebase emulators:exec --only firestore --config ../firebase.rules-test.json --project demo-safehood-rules-test \"npm run test:rules:unit\"",
     "test:rules:unit": "node --test --test-concurrency=1 test/firestore_rules.test.js test/user_device_rules.test.js test/incident_rules.test.js test/bridge_rules.test.js",
     "test:account-deletion:unit": "node --test test/account_deletion.test.js",
-    "test:account-deletion": "firebase emulators:exec --only firestore --config ../firebase.rules-test.json --project demo-safehood-rules-test \"npm run test:account-deletion:unit\""
+    "test:account-deletion": "firebase emulators:exec --only firestore --config ../firebase.rules-test.json --project demo-safehood-rules-test \"npm run test:account-deletion:unit\"",
+    "test:storage-rules": "firebase emulators:exec --only storage --config ../firebase.rules-test.json --project demo-safehood-storage-rules-test \"npm run test:storage-rules:unit\"",
+    "test:storage-rules:unit": "node --test --test-concurrency=1 test/storage_rules.test.js"
   },
   "engines": {
     "node": "22"

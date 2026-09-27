@@ -1,4 +1,8 @@
 {
+
+  "storage": {
+    "rules": "storage.rules"
+  },
   "firestore": {
     "rules": "firestore.rules"
   },
@@ -6,6 +10,10 @@
     "firestore": {
       "host": "127.0.0.1",
       "port": 8081
+    },
+    "storage": {
+      "host": "127.0.0.1",
+      "port": 9198
     },
     "ui": {
       "enabled": false
