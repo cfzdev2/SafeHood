@@ -3529,14 +3529,35 @@ exports.getBridgeConfiguration = onRequest(
           return;
         }
 
-        const snapshot =
-            await db
+        const userRef =
+            db
                 .collection("users")
                 .doc(
                     bridgeIdentity.ownerId,
-                )
-                .collection("cameras")
-                .get();
+                );
+
+        const [
+          userSnapshot,
+          snapshot,
+        ] = await Promise.all([
+          userRef.get(),
+          userRef
+              .collection("cameras")
+              .get(),
+        ]);
+
+        const userData =
+            userSnapshot.data() || {};
+
+        const localAiEnabled =
+            userData.localAiEnabled === true;
+
+        const validAiSensitivities =
+          new Set([
+            "low",
+            "standard",
+            "high",
+          ]);
 
         const cameras = [];
 
@@ -3547,11 +3568,40 @@ exports.getBridgeConfiguration = onRequest(
           const camera =
               document.data();
 
+          const motionDetectionEnabled =
+              camera.motionDetectionEnabled !== false;
+
+          const aiEnabled =
+              camera.aiEnabled === true;
+
+          const aiPersonEnabled =
+              camera.aiPersonEnabled !== false;
+
+          const aiVehicleEnabled =
+              camera.aiVehicleEnabled !== false;
+
+          const aiSensitivity =
+              validAiSensitivities.has(
+                  camera.aiSensitivity,
+              ) ?
+                camera.aiSensitivity :
+                "standard";
+
+          const effectiveAiEnabled =
+              localAiEnabled &&
+              aiEnabled &&
+              (
+                aiPersonEnabled ||
+                aiVehicleEnabled
+              );
+
           if (
             camera.connectionType !==
               "onvif" ||
-            camera.motionDetectionEnabled ===
-              false ||
+            (
+              !motionDetectionEnabled &&
+              !effectiveAiEnabled
+            ) ||
             (
               camera.monitoringMode &&
               camera.monitoringMode !==
@@ -3626,8 +3676,15 @@ exports.getBridgeConfiguration = onRequest(
             bridgeId:
                 bridgeIdentity.bridgeId,
 
-            motionDetectionEnabled:
-                true,
+            motionDetectionEnabled,
+
+            aiEnabled,
+
+            aiPersonEnabled,
+
+            aiVehicleEnabled,
+
+            aiSensitivity,
           });
         }
 
@@ -3635,6 +3692,7 @@ exports.getBridgeConfiguration = onRequest(
           ok: true,
           bridgeId:
               bridgeIdentity.bridgeId,
+          localAiEnabled,
           cameraCount:
               cameras.length,
           cameras,

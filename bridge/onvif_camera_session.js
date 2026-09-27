@@ -736,4 +736,5 @@ class OnvifCameraSession {
 module.exports = {
   OnvifCameraSession,
   connectionFingerprint,
+  resolveDeviceServiceUrl,
 };

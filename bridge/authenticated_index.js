@@ -15,6 +15,22 @@ const {
   requireSecureEndpoint,
 } = require('./secure_endpoint');
 
+const {
+  CameraAiSession,
+} = require('./ai/camera_ai_session');
+
+const {
+  AiInferenceScheduler,
+} = require('./ai/inference_scheduler');
+
+const {
+  YoloxDetector,
+} = require('./ai/yolox_detector');
+
+const {
+  resolveOnvifStreamUri,
+} = require('./onvif_stream_resolver');
+
 const CONFIG_PATH =
   path.join(
     __dirname,
@@ -97,6 +113,14 @@ requireSecureEndpoint(
 const sessions =
   new Map();
 
+const aiSessions =
+  new Map();
+
+let aiScheduler = null;
+
+let aiInitializationPromise =
+  null;
+
 const cameraStatuses =
   new Map();
 
@@ -110,6 +134,77 @@ let configurationQueue =
 
 let stateQueue =
   Promise.resolve();
+
+function trackerOptionsForSensitivity(
+  sensitivity,
+) {
+  switch (sensitivity) {
+    case 'low':
+      return {
+        highScoreThreshold: 0.65,
+        lowScoreThreshold: 0.25,
+        minimumConfirmedFrames: 4,
+      };
+
+    case 'high':
+      return {
+        highScoreThreshold: 0.4,
+        lowScoreThreshold: 0.1,
+        minimumConfirmedFrames: 2,
+      };
+
+    case 'standard':
+    default:
+      return {
+        highScoreThreshold: 0.5,
+        lowScoreThreshold: 0.15,
+        minimumConfirmedFrames: 3,
+      };
+  }
+}
+
+async function getAiScheduler() {
+  if (aiScheduler) {
+    return aiScheduler;
+  }
+
+  if (!aiInitializationPromise) {
+    aiInitializationPromise =
+      (async () => {
+        console.log(
+          '[BRIDGE AI] ładuję model YOLOX...',
+        );
+
+        const detector =
+          new YoloxDetector();
+
+        await detector.initialize();
+
+        const scheduler =
+          new AiInferenceScheduler({
+            detector,
+          });
+
+        aiScheduler =
+          scheduler;
+
+        console.log(
+          '[BRIDGE AI] model YOLOX gotowy',
+        );
+
+        return scheduler;
+      })();
+  }
+
+  try {
+    return await aiInitializationPromise;
+  } catch (error) {
+    aiInitializationPromise = null;
+    aiScheduler = null;
+
+    throw error;
+  }
+}
 
 async function callBridgeEndpoint(
   functionName,
@@ -386,6 +481,310 @@ async function ingestDetection(
   );
 }
 
+function aiSessionFingerprint(camera) {
+  return JSON.stringify({
+    connection:
+      connectionFingerprint(camera),
+
+    person:
+      camera.aiPersonEnabled === true,
+
+    vehicle:
+      camera.aiVehicleEnabled === true,
+
+    sensitivity:
+      camera.aiSensitivity || 'standard',
+  });
+}
+
+async function ingestAiDetection(
+  camera,
+  event,
+) {
+  const occurredAtMillis =
+    Number.isFinite(
+      event.occurredAtMillis,
+    ) ?
+      event.occurredAtMillis :
+      Date.now();
+
+  await ingestDetection(
+    camera,
+    {
+      type:
+        event.type,
+
+      source:
+        'local-ai',
+
+      confidence:
+        event.confidence ?? null,
+
+      occurredAt:
+        new Date(
+          occurredAtMillis,
+        ).toISOString(),
+    },
+  );
+}
+
+function safeAiErrorMessage(error) {
+  const message =
+    error instanceof Error &&
+    typeof error.message === 'string' ?
+      error.message :
+      'nieznany błąd';
+
+  return message
+    .replace(
+      /\brtsps?:\/\/[^\s'"]+/gi,
+      '[adres RTSP ukryty]',
+    )
+    .replace(
+      /([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi,
+      '$1***@',
+    )
+    .replace(
+      /\b(Bearer|Basic)\s+\S+/gi,
+      '$1 ***',
+    );
+}
+
+async function stopAiSession(
+  cameraId,
+) {
+  const entry =
+    aiSessions.get(cameraId);
+
+  if (!entry) {
+    return false;
+  }
+
+  aiSessions.delete(cameraId);
+
+  await entry.session.stop();
+
+  console.log(
+    `[BRIDGE AI][${cameraId}] zatrzymano`,
+  );
+
+  return true;
+}
+
+async function startAiSession(camera) {
+  const input =
+    await resolveOnvifStreamUri(
+      camera,
+    );
+
+  if (shuttingDown) {
+    return false;
+  }
+
+  const scheduler =
+    await getAiScheduler();
+
+  if (shuttingDown) {
+    return false;
+  }
+
+  const entry = {
+    camera,
+    fingerprint:
+      aiSessionFingerprint(camera),
+    session: null,
+  };
+
+  let session;
+
+  session =
+    new CameraAiSession({
+      cameraId:
+        camera.id,
+
+      input,
+
+      scheduler,
+
+      personEnabled:
+        camera.aiPersonEnabled === true,
+
+      vehicleEnabled:
+        camera.aiVehicleEnabled === true,
+
+      framesPerSecond: 2,
+
+      realtimeInput: true,
+
+      trackerOptions:
+        trackerOptionsForSensitivity(
+          camera.aiSensitivity,
+        ),
+
+      onConfirmedTrack:
+        (event) =>
+          ingestAiDetection(
+            entry.camera,
+            event,
+          ),
+
+      onError: (error) => {
+        const message =
+          safeAiErrorMessage(error);
+
+        console.error(
+          `[BRIDGE AI][${camera.id}] ${message}`,
+        );
+      },
+
+      onStatus: ({status}) => {
+        console.log(
+          `[BRIDGE AI][${camera.id}] ` +
+          `status = ${status}`,
+        );
+
+        if (status !== 'stopped') {
+          return;
+        }
+
+        const current =
+          aiSessions.get(camera.id);
+
+        if (
+          current?.session ===
+          session
+        ) {
+          aiSessions.delete(
+            camera.id,
+          );
+        }
+      },
+    });
+
+  entry.session =
+    session;
+
+  aiSessions.set(
+    camera.id,
+    entry,
+  );
+
+  try {
+    session.start();
+  } catch (error) {
+    aiSessions.delete(
+      camera.id,
+    );
+
+    throw error;
+  }
+
+  console.log(
+    `[BRIDGE AI][${camera.id}] uruchomiono`,
+  );
+
+  return true;
+}
+
+async function syncAiSessions(
+  cameras,
+  localAiEnabled,
+) {
+  const desired =
+    new Map();
+
+  if (localAiEnabled === true) {
+    for (const camera of cameras) {
+      if (
+        !camera ||
+        typeof camera.id !==
+          'string'
+      ) {
+        continue;
+      }
+
+      const personEnabled =
+        camera.aiPersonEnabled === true;
+
+      const vehicleEnabled =
+        camera.aiVehicleEnabled === true;
+
+      if (
+        camera.aiEnabled !== true ||
+        (
+          !personEnabled &&
+          !vehicleEnabled
+        )
+      ) {
+        continue;
+      }
+
+      desired.set(
+        camera.id,
+        camera,
+      );
+    }
+  }
+
+  for (
+    const cameraId of
+    [...aiSessions.keys()]
+  ) {
+    if (!desired.has(cameraId)) {
+      await stopAiSession(
+        cameraId,
+      );
+    }
+  }
+
+  for (
+    const [cameraId, camera] of
+    desired.entries()
+  ) {
+    const existing =
+      aiSessions.get(cameraId);
+
+    const fingerprint =
+      aiSessionFingerprint(camera);
+
+    if (
+      existing &&
+      existing.fingerprint ===
+        fingerprint
+    ) {
+      existing.camera =
+        camera;
+
+      continue;
+    }
+
+    if (existing) {
+      await stopAiSession(
+        cameraId,
+      );
+    }
+
+    try {
+      await startAiSession(
+        camera,
+      );
+    } catch (error) {
+      const message =
+        safeAiErrorMessage(error);
+
+      console.error(
+        `[BRIDGE AI][${cameraId}] ` +
+        `nie udało się uruchomić: ${message}`,
+      );
+    }
+  }
+
+  console.log(
+    '[BRIDGE AI] aktywnych sesji = ' +
+    `${aiSessions.size}`,
+  );
+}
+
 async function stopSession(
   cameraId,
   {
@@ -467,7 +866,10 @@ function startSession(camera) {
   session.start();
 }
 
-async function syncCameras(cameras) {
+async function syncCameras(
+  cameras,
+  localAiEnabled,
+) {
   if (shuttingDown) {
     return;
   }
@@ -479,7 +881,9 @@ async function syncCameras(cameras) {
     if (
       !camera ||
       typeof camera.id !==
-        'string'
+        'string' ||
+      camera.motionDetectionEnabled !==
+        true
     ) {
       continue;
     }
@@ -547,6 +951,11 @@ async function syncCameras(cameras) {
       camera;
   }
 
+  await syncAiSessions(
+    cameras,
+    localAiEnabled,
+  );
+
   console.log(
     '[BRIDGE] skonfigurowanych kamer = ' +
     `${sessions.size}`,
@@ -578,6 +987,7 @@ async function fetchConfiguration() {
 
   await syncCameras(
     result.cameras,
+    result.localAiEnabled === true,
   );
 }
 
@@ -641,6 +1051,22 @@ async function shutdown(signal) {
       },
     );
   }
+
+  for (
+    const cameraId of
+    [...aiSessions.keys()]
+  ) {
+    await stopAiSession(
+      cameraId,
+    );
+  }
+
+  if (aiScheduler) {
+    aiScheduler.close();
+    aiScheduler = null;
+  }
+
+  aiInitializationPromise = null;
 
   try {
     await callBridgeEndpoint(
