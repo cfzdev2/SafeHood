@@ -5,6 +5,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -58,6 +59,11 @@ Future<void> _configureFirebaseBackend() async {
     region: 'europe-central2',
   ).useFunctionsEmulator(emulatorHost, 5001);
 
+  await FirebaseStorage.instance.useStorageEmulator(
+    emulatorHost,
+    9199,
+    automaticHostMapping: false,
+  );
   debugPrint('FIREBASE: emulatory na $emulatorHost');
 }
 

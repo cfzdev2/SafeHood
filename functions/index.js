@@ -41,6 +41,19 @@ const {
   getMessaging,
 } = require("firebase-admin/messaging");
 
+const {
+  getStorage,
+} = require("firebase-admin/storage");
+
+const {
+  CameraEventSnapshotError,
+  buildSnapshotPath,
+  decodeJpegBase64,
+  normalizeDocumentId,
+} = require(
+    "./camera_event_snapshot",
+);
+
 const geofire =
     require("geofire-common");
 
@@ -4115,6 +4128,242 @@ exports.ingestBridgeCameraEvent =
             response.status(status).json({
               error:
                 "Nie udało się zapisać zdarzenia.",
+            });
+          }
+        },
+    );
+/**
+ * Zapisuje prywatne zdjęcie zdarzenia
+ * utworzonego przez lokalną analizę AI.
+ */
+exports.uploadBridgeCameraEventSnapshot =
+    onRequest(
+        {
+          region: "europe-central2",
+        },
+        async (request, response) => {
+          if (request.method !== "POST") {
+            response.status(405).json({
+              error: "POST required.",
+            });
+
+            return;
+          }
+
+          try {
+            const bridgeIdentity =
+                await authenticateBridgeRequest(
+                    request,
+                );
+
+            if (!bridgeIdentity) {
+              response.status(401).json({
+                error:
+                    "Nieprawidłowe dane Bridge.",
+              });
+
+              return;
+            }
+
+            const data =
+                request.body || {};
+
+            const cameraId =
+                normalizeDocumentId(
+                    data.cameraId,
+                    "cameraId",
+                );
+
+            const eventId =
+                normalizeDocumentId(
+                    data.eventId,
+                    "eventId",
+                );
+
+            const cameraRef =
+                db
+                    .collection("users")
+                    .doc(
+                        bridgeIdentity.ownerId,
+                    )
+                    .collection("cameras")
+                    .doc(cameraId);
+
+            const eventRef =
+                db
+                    .collection("cameraEvents")
+                    .doc(eventId);
+
+            const [
+              cameraSnapshot,
+              eventSnapshot,
+            ] = await db.getAll(
+                cameraRef,
+                eventRef,
+            );
+
+            if (!cameraSnapshot.exists) {
+              throw new CameraEventSnapshotError(
+                  "not-found",
+                  "Kamera nie istnieje.",
+              );
+            }
+
+            const camera =
+                cameraSnapshot.data() || {};
+
+            if (
+              camera.bridgeId !==
+                bridgeIdentity.bridgeId ||
+              camera.connectionType !==
+                "onvif"
+            ) {
+              throw new CameraEventSnapshotError(
+                  "permission-denied",
+                  "Bridge nie obsługuje tej kamery.",
+              );
+            }
+
+            if (!eventSnapshot.exists) {
+              throw new CameraEventSnapshotError(
+                  "not-found",
+                  "Zdarzenie nie istnieje.",
+              );
+            }
+
+            const event =
+                eventSnapshot.data() || {};
+
+            if (
+              event.ownerId !==
+                bridgeIdentity.ownerId ||
+              event.cameraId !== cameraId ||
+              event.source !== "local-ai"
+            ) {
+              throw new CameraEventSnapshotError(
+                  "permission-denied",
+                  "Bridge nie może zapisać " +
+                    "zdjęcia tego zdarzenia.",
+              );
+            }
+
+            const snapshot =
+                decodeJpegBase64(
+                    data.jpegBase64,
+                );
+
+            const snapshotPath =
+                buildSnapshotPath(
+                    bridgeIdentity.ownerId,
+                    eventId,
+                );
+
+            const file =
+                getStorage()
+                    .bucket()
+                    .file(snapshotPath);
+
+            await file.save(
+                snapshot,
+                {
+                  resumable: false,
+                  validation: "crc32c",
+                  metadata: {
+                    contentType:
+                        "image/jpeg",
+
+                    cacheControl:
+                        "private, max-age=3600",
+
+                    metadata: {
+                      ownerId:
+                          bridgeIdentity.ownerId,
+
+                      cameraId,
+
+                      eventId,
+
+                      source:
+                          "local-ai",
+                    },
+                  },
+                },
+            );
+
+            await eventRef.update({
+              snapshotPath,
+
+              snapshotUpdatedAt:
+                  FieldValue.serverTimestamp(),
+
+              updatedAt:
+                  FieldValue.serverTimestamp(),
+            });
+
+            console.log(
+                "BRIDGE CAMERA SNAPSHOT:",
+                {
+                  bridgeId:
+                      bridgeIdentity.bridgeId,
+
+                  cameraId,
+
+                  eventId,
+
+                  snapshotPath,
+
+                  size:
+                      snapshot.length,
+                },
+            );
+
+            response.status(200).json({
+              ok: true,
+              cameraId,
+              eventId,
+              snapshotPath,
+              size:
+                  snapshot.length,
+            });
+          } catch (error) {
+            console.error(
+                "BRIDGE CAMERA SNAPSHOT ERROR:",
+                error,
+            );
+
+            const code =
+                error &&
+                typeof error.code ===
+                  "string" ?
+                  error.code :
+                  "";
+
+            let status = 500;
+
+            if (
+              code === "invalid-id" ||
+              code === "invalid-base64" ||
+              code === "invalid-jpeg"
+            ) {
+              status = 400;
+            }
+
+            if (code === "too-large") {
+              status = 413;
+            }
+
+            if (code === "permission-denied") {
+              status = 403;
+            }
+
+            if (code === "not-found") {
+              status = 404;
+            }
+
+            response.status(status).json({
+              error:
+                  "Nie udało się zapisać " +
+                  "zdjęcia zdarzenia.",
             });
           }
         },

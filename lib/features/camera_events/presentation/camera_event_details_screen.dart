@@ -5,6 +5,7 @@ import '../domain/camera_event.dart';
 import 'package:video_player/video_player.dart';
 import '../../cameras/data/camera_service.dart';
 import 'camera_event_live_screen.dart';
+import 'widgets/camera_event_snapshot.dart';
 import 'dart:async';
 
 class CameraEventDetailsScreen extends StatefulWidget {
@@ -555,7 +556,10 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
                   aspectRatio: 16 / 9,
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(16),
-                    child: Image.network(event.snapshotUrl!, fit: BoxFit.cover),
+                    child: CameraEventSnapshot(
+                      key: ValueKey(event.id),
+                      event: event,
+                    ),
                   ),
                 )
               else

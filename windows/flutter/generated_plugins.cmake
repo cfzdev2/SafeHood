@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   cloud_firestore
   firebase_auth
   firebase_core
+  firebase_storage
   flutter_local_device_discovery_windows
   url_launcher_windows
 )

@@ -31,6 +31,12 @@ const {
   resolveOnvifStreamUri,
 } = require('./onvif_stream_resolver');
 
+const {
+  captureJpegSnapshot,
+} = require(
+  './ai/ffmpeg_snapshot_capture',
+);
+
 const CONFIG_PATH =
   path.join(
     __dirname,
@@ -479,6 +485,7 @@ async function ingestDetection(
     `merged=${result.merged ?? false}, ` +
     `count=${result.occurrenceCount ?? 1}`,
   );
+  return result;
 }
 
 function aiSessionFingerprint(camera) {
@@ -499,6 +506,7 @@ function aiSessionFingerprint(camera) {
 
 async function ingestAiDetection(
   camera,
+  input,
   event,
 ) {
   const occurredAtMillis =
@@ -508,24 +516,79 @@ async function ingestAiDetection(
       event.occurredAtMillis :
       Date.now();
 
-  await ingestDetection(
-    camera,
-    {
-      type:
-        event.type,
+  const result =
+    await ingestDetection(
+      camera,
+      {
+        type:
+          event.type,
 
-      source:
-        'local-ai',
+        source:
+          'local-ai',
 
-      confidence:
-        event.confidence ?? null,
+        confidence:
+          event.confidence ?? null,
 
-      occurredAt:
-        new Date(
-          occurredAtMillis,
-        ).toISOString(),
-    },
-  );
+        occurredAt:
+          new Date(
+            occurredAtMillis,
+          ).toISOString(),
+      },
+    );
+
+  if (result.merged !== false) {
+    return;
+  }
+
+  const eventId =
+    typeof result.eventId === 'string' ?
+      result.eventId :
+      (
+        typeof result.id === 'string' ?
+          result.id :
+          ''
+      );
+
+  try {
+    if (!eventId) {
+      throw new Error(
+        'Backend nie zwrócił eventId.',
+      );
+    }
+
+    const snapshot =
+      await captureJpegSnapshot({
+        input,
+      });
+
+    const uploadResult =
+      await callBridgeEndpoint(
+        'uploadBridgeCameraEventSnapshot',
+        {
+          cameraId:
+            camera.id,
+
+          eventId,
+
+          jpegBase64:
+            snapshot.toString(
+              'base64',
+            ),
+        },
+        30000,
+      );
+
+    console.log(
+      `[BRIDGE AI SNAPSHOT][${camera.id}] ` +
+      `event=${eventId}, ` +
+      `bytes=${uploadResult.size ?? snapshot.length}`,
+    );
+  } catch (error) {
+    console.error(
+      `[BRIDGE AI SNAPSHOT][${camera.id}] ` +
+      safeAiErrorMessage(error),
+    );
+  }
 }
 
 function safeAiErrorMessage(error) {
@@ -621,12 +684,13 @@ async function startAiSession(camera) {
           camera.aiSensitivity,
         ),
 
-      onConfirmedTrack:
-        (event) =>
-          ingestAiDetection(
-            entry.camera,
-            event,
-          ),
+        onConfirmedTrack:
+          (event) =>
+            ingestAiDetection(
+              entry.camera,
+              input,
+              event,
+            ),
 
       onError: (error) => {
         const message =

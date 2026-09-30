@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/camera_event_service.dart';
 import '../domain/camera_event.dart';
 import 'camera_event_details_screen.dart';
+import 'widgets/camera_event_snapshot.dart';
 
 class CameraEventHistoryScreen extends StatelessWidget {
   final String cameraId;
@@ -330,24 +331,22 @@ class _CameraEventHistoryCard extends StatelessWidget {
   }
 
   Widget _buildPreview() {
-    if (event.hasSnapshot) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: SizedBox(
-          width: 92,
-          height: 72,
-          child: Image.network(
-            event.snapshotUrl!,
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) {
-              return _placeholder();
-            },
-          ),
-        ),
-      );
+    if (!event.hasSnapshot) {
+      return _placeholder();
     }
 
-    return _placeholder();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: SizedBox(
+        width: 92,
+        height: 72,
+        child: CameraEventSnapshot(
+          key: ValueKey(event.id),
+          event: event,
+          compact: true,
+        ),
+      ),
+    );
   }
 
   Widget _placeholder() {

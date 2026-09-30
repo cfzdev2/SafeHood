@@ -11,12 +11,7 @@ enum CameraEventType {
   unknown,
 }
 
-enum CameraEventStatus {
-  newEvent,
-  viewed,
-  dismissed,
-  escalated,
-}
+enum CameraEventStatus { newEvent, viewed, dismissed, escalated }
 
 class CameraEvent {
   final String id;
@@ -51,6 +46,7 @@ class CameraEvent {
   final double? confidence;
 
   final String? snapshotUrl;
+  final String? snapshotPath;
   final String? clipUrl;
 
   /// Jeśli użytkownik utworzył zgłoszenie
@@ -74,33 +70,26 @@ class CameraEvent {
     required this.updatedAt,
     this.confidence,
     this.snapshotUrl,
+    this.snapshotPath,
     this.clipUrl,
     this.incidentId,
   });
 
-  bool get isNew =>
-      status == CameraEventStatus.newEvent;
+  bool get isNew => status == CameraEventStatus.newEvent;
 
-  bool get isViewed =>
-      status == CameraEventStatus.viewed;
+  bool get isViewed => status == CameraEventStatus.viewed;
 
-  bool get isDismissed =>
-      status == CameraEventStatus.dismissed;
+  bool get isDismissed => status == CameraEventStatus.dismissed;
 
-  bool get isEscalated =>
-      status == CameraEventStatus.escalated;
+  bool get isEscalated => status == CameraEventStatus.escalated;
 
   bool get hasSnapshot =>
-      snapshotUrl != null &&
-      snapshotUrl!.trim().isNotEmpty;
+      (snapshotPath?.trim().isNotEmpty ?? false) ||
+      (snapshotUrl?.trim().isNotEmpty ?? false);
 
-  bool get hasClip =>
-      clipUrl != null &&
-      clipUrl!.trim().isNotEmpty;
+  bool get hasClip => clipUrl != null && clipUrl!.trim().isNotEmpty;
 
-  bool get hasIncident =>
-      incidentId != null &&
-      incidentId!.trim().isNotEmpty;
+  bool get hasIncident => incidentId != null && incidentId!.trim().isNotEmpty;
 
   Map<String, dynamic> toMap() {
     return {
@@ -108,20 +97,17 @@ class CameraEvent {
       'ownerId': ownerId,
       'type': _typeToString(type),
       'status': _statusToString(status),
-      'occurredAt':
-          Timestamp.fromDate(occurredAt),
-      'lastOccurredAt':
-          Timestamp.fromDate(lastOccurredAt),
+      'occurredAt': Timestamp.fromDate(occurredAt),
+      'lastOccurredAt': Timestamp.fromDate(lastOccurredAt),
       'occurrenceCount': occurrenceCount,
       'source': source,
       'confidence': confidence,
       'snapshotUrl': snapshotUrl,
+      'snapshotPath': snapshotPath,
       'clipUrl': clipUrl,
       'incidentId': incidentId,
-      'createdAt':
-          Timestamp.fromDate(createdAt),
-      'updatedAt':
-          Timestamp.fromDate(updatedAt),
+      'createdAt': Timestamp.fromDate(createdAt),
+      'updatedAt': Timestamp.fromDate(updatedAt),
     };
   }
 
@@ -129,54 +115,25 @@ class CameraEvent {
     required String id,
     required Map<String, dynamic> map,
   }) {
-    final occurredAt =
-        _readDateTime(map['occurredAt']) ??
-            DateTime.now();
+    final occurredAt = _readDateTime(map['occurredAt']) ?? DateTime.now();
 
     return CameraEvent(
       id: id,
-      cameraId:
-          map['cameraId'] as String? ?? '',
-      ownerId:
-          map['ownerId'] as String? ?? '',
-      type: _typeFromString(
-        map['type'] as String?,
-      ),
-      status: _statusFromString(
-        map['status'] as String?,
-      ),
+      cameraId: map['cameraId'] as String? ?? '',
+      ownerId: map['ownerId'] as String? ?? '',
+      type: _typeFromString(map['type'] as String?),
+      status: _statusFromString(map['status'] as String?),
       occurredAt: occurredAt,
-      lastOccurredAt:
-          _readDateTime(
-            map['lastOccurredAt'],
-          ) ??
-          occurredAt,
-      occurrenceCount:
-          (map['occurrenceCount'] as num?)
-                  ?.toInt() ??
-              1,
-      source:
-          map['source'] as String? ??
-              'unknown',
-      confidence:
-          (map['confidence'] as num?)
-              ?.toDouble(),
-      snapshotUrl:
-          map['snapshotUrl'] as String?,
-      clipUrl:
-          map['clipUrl'] as String?,
-      incidentId:
-          map['incidentId'] as String?,
-      createdAt:
-          _readDateTime(
-            map['createdAt'],
-          ) ??
-          occurredAt,
-      updatedAt:
-          _readDateTime(
-            map['updatedAt'],
-          ) ??
-          occurredAt,
+      lastOccurredAt: _readDateTime(map['lastOccurredAt']) ?? occurredAt,
+      occurrenceCount: (map['occurrenceCount'] as num?)?.toInt() ?? 1,
+      source: map['source'] as String? ?? 'unknown',
+      confidence: (map['confidence'] as num?)?.toDouble(),
+      snapshotUrl: map['snapshotUrl'] as String?,
+      snapshotPath: map['snapshotPath'] as String?,
+      clipUrl: map['clipUrl'] as String?,
+      incidentId: map['incidentId'] as String?,
+      createdAt: _readDateTime(map['createdAt']) ?? occurredAt,
+      updatedAt: _readDateTime(map['updatedAt']) ?? occurredAt,
     );
   }
 
@@ -192,6 +149,7 @@ class CameraEvent {
     String? source,
     double? confidence,
     String? snapshotUrl,
+    String? snapshotPath,
     String? clipUrl,
     String? incidentId,
     DateTime? createdAt,
@@ -199,40 +157,26 @@ class CameraEvent {
   }) {
     return CameraEvent(
       id: id ?? this.id,
-      cameraId:
-          cameraId ?? this.cameraId,
-      ownerId:
-          ownerId ?? this.ownerId,
+      cameraId: cameraId ?? this.cameraId,
+      ownerId: ownerId ?? this.ownerId,
       type: type ?? this.type,
       status: status ?? this.status,
-      occurredAt:
-          occurredAt ?? this.occurredAt,
-      lastOccurredAt:
-          lastOccurredAt ??
-          this.lastOccurredAt,
-      occurrenceCount:
-          occurrenceCount ??
-          this.occurrenceCount,
+      occurredAt: occurredAt ?? this.occurredAt,
+      lastOccurredAt: lastOccurredAt ?? this.lastOccurredAt,
+      occurrenceCount: occurrenceCount ?? this.occurrenceCount,
       source: source ?? this.source,
-      confidence:
-          confidence ?? this.confidence,
-      snapshotUrl:
-          snapshotUrl ?? this.snapshotUrl,
-      clipUrl:
-          clipUrl ?? this.clipUrl,
-      incidentId:
-          incidentId ?? this.incidentId,
-      createdAt:
-          createdAt ?? this.createdAt,
-      updatedAt:
-          updatedAt ?? this.updatedAt,
+      confidence: confidence ?? this.confidence,
+      snapshotUrl: snapshotUrl ?? this.snapshotUrl,
+      snapshotPath: snapshotPath ?? this.snapshotPath,
+      clipUrl: clipUrl ?? this.clipUrl,
+      incidentId: incidentId ?? this.incidentId,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 }
 
-String _typeToString(
-  CameraEventType type,
-) {
+String _typeToString(CameraEventType type) {
   switch (type) {
     case CameraEventType.motion:
       return 'motion';
@@ -260,9 +204,7 @@ String _typeToString(
   }
 }
 
-CameraEventType _typeFromString(
-  String? value,
-) {
+CameraEventType _typeFromString(String? value) {
   switch (value) {
     case 'motion':
       return CameraEventType.motion;
@@ -290,9 +232,7 @@ CameraEventType _typeFromString(
   }
 }
 
-String _statusToString(
-  CameraEventStatus status,
-) {
+String _statusToString(CameraEventStatus status) {
   switch (status) {
     case CameraEventStatus.newEvent:
       return 'new';
@@ -308,9 +248,7 @@ String _statusToString(
   }
 }
 
-CameraEventStatus _statusFromString(
-  String? value,
-) {
+CameraEventStatus _statusFromString(String? value) {
   switch (value) {
     case 'viewed':
       return CameraEventStatus.viewed;
@@ -327,9 +265,7 @@ CameraEventStatus _statusFromString(
   }
 }
 
-DateTime? _readDateTime(
-  dynamic value,
-) {
+DateTime? _readDateTime(dynamic value) {
   if (value is Timestamp) {
     return value.toDate();
   }
