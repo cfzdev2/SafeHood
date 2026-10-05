@@ -59,6 +59,9 @@ const CONFIG_POLL_INTERVAL_MS =
 const HEARTBEAT_INTERVAL_MS =
   30000;
 
+const AI_DIAGNOSTICS_ENABLED =
+  process.env.SAFEHOOD_AI_DEBUG === 'true';
+
 function loadBridgeConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error(
@@ -690,7 +693,16 @@ async function startAiSession(camera) {
               entry.camera,
               input,
               event,
-            ),
+            ).catch((error) => {
+              if (AI_DIAGNOSTICS_ENABLED) {
+                console.error(
+                  `[BRIDGE AI INGEST][${camera.id}] ` +
+                  safeAiErrorMessage(error),
+                );
+              }
+
+              throw error;
+            }),
 
       onError: (error) => {
         const message =
@@ -847,6 +859,15 @@ async function syncAiSessions(
     '[BRIDGE AI] aktywnych sesji = ' +
     `${aiSessions.size}`,
   );
+
+  if (AI_DIAGNOSTICS_ENABLED) {
+    for (const [cameraId, entry] of aiSessions) {
+      console.log(
+        `[BRIDGE AI STATS][${cameraId}] ` +
+        JSON.stringify(entry.session.stats),
+      );
+    }
+  }
 }
 
 async function stopSession(

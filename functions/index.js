@@ -4042,9 +4042,41 @@ exports.ingestBridgeCameraEvent =
               return;
             }
 
-            if (
-              camera.motionDetectionEnabled ===
-                false
+            const type =
+                normalizeCameraEventType(data.type);
+
+            const source =
+                normalizeCameraEventSource(data.source);
+
+            if (source === "local-ai") {
+              const userSnapshot =
+                  await db
+                      .collection("users")
+                      .doc(bridgeIdentity.ownerId)
+                      .get();
+
+              const user = userSnapshot.data() || {};
+
+              const detectionEnabled =
+                  (type === "person" &&
+                    camera.aiPersonEnabled !== false) ||
+                  (type === "vehicle" &&
+                    camera.aiVehicleEnabled !== false);
+
+              if (
+                user.localAiEnabled !== true ||
+                camera.aiEnabled !== true ||
+                !detectionEnabled
+              ) {
+                response.status(409).json({
+                  error:
+                      "Wybrany typ analizy AI jest wyłączony.",
+                });
+
+                return;
+              }
+            } else if (
+              camera.motionDetectionEnabled === false
             ) {
               response.status(409).json({
                 error:
@@ -4060,10 +4092,8 @@ exports.ingestBridgeCameraEvent =
                   ownerId:
                       bridgeIdentity.ownerId,
                   cameraId,
-                  type:
-                      data.type,
-                  source:
-                      data.source,
+                  type,
+                  source,
                   confidence:
                       data.confidence,
                   snapshotUrl:

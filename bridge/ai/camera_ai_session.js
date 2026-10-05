@@ -382,6 +382,9 @@ class CameraAiSession {
 
     this._stats.framesAnalyzed += 1;
 
+    this._stats.detectionsReceived +=
+      inferenceResult.detections.length;
+
     const enabledDetections =
       inferenceResult.detections.filter(
         (detection) => {
@@ -403,6 +406,9 @@ class CameraAiSession {
         },
       );
 
+    this._stats.detectionsEnabled +=
+      enabledDetections.length;
+
     const timestampMillis =
       this.now();
 
@@ -413,6 +419,9 @@ class CameraAiSession {
           timestampMillis,
         },
       );
+
+    this._stats.tracksConfirmed +=
+      trackingResult.newlyConfirmedTracks.length;
 
     for (
       const track
@@ -506,6 +515,9 @@ class CameraAiSession {
       framesReceived: 0,
       framesAnalyzed: 0,
       framesDropped: 0,
+      detectionsReceived: 0,
+      detectionsEnabled: 0,
+      tracksConfirmed: 0,
       inferenceErrors: 0,
       confirmedEvents: 0,
       eventErrors: 0,

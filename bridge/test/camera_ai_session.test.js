@@ -586,11 +586,65 @@ test(
     );
 
     assert.equal(
+      session.stats.tracksConfirmed,
+      1,
+    );
+
+    assert.equal(
       errors[0].message,
       'Nie udało się obsłużyć ' +
         'potwierdzonego zdarzenia AI.',
     );
 
+    await session.stop();
+  },
+);
+
+test(
+  'liczy surowe wykrycia, włączone typy i potwierdzone ślady',
+  async () => {
+    const harness = createSourceHarness();
+    const events = [];
+    const session = new CameraAiSession({
+      cameraId: 'camera-1',
+      input: 'test-video.mp4',
+      personEnabled: false,
+      vehicleEnabled: true,
+      trackerOptions: {minimumConfirmedFrames: 2},
+      scheduler: {
+        async submit() {
+          return {
+            dropped: false,
+            detections: [
+              detection(),
+              detection({type: 'vehicle', className: 'car', classId: 2}),
+            ],
+          };
+        },
+        cancelCamera() {
+          return false;
+        },
+      },
+      sourceFactory: harness.sourceFactory,
+      onConfirmedTrack: async (event) => events.push(event),
+    });
+
+    session.start();
+    const source = harness.getSource();
+    await source.emitFrame(Buffer.from([1]));
+    await source.emitFrame(Buffer.from([2]));
+    assert.equal(session.stats.framesAnalyzed, 2);
+    assert.equal(session.stats.detectionsReceived, 4);
+    assert.equal(session.stats.detectionsEnabled, 2);
+    assert.equal(session.stats.tracksConfirmed, 1);
+    assert.equal(session.stats.confirmedEvents, 1);
+    assert.equal(events[0].type, 'vehicle');
+
+    await session.stop();
+    session.start();
+    assert.equal(session.stats.detectionsReceived, 0);
+    assert.equal(session.stats.detectionsEnabled, 0);
+    assert.equal(session.stats.tracksConfirmed, 0);
     await session.stop();
   },
 );
