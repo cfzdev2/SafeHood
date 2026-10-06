@@ -102,6 +102,7 @@ const createHarness = ({
         type: input.type,
         merged: false,
         occurrenceCount: 1,
+        snapshotRequired: input.source === "local-ai",
       };
     },
     console: {log: () => {}, error: () => {}},
@@ -144,6 +145,7 @@ test("przyjmuje AI mimo wyłączonego monitoringu ONVIF", async () => {
   assert.equal(harness.calls.length, 1);
   assert.equal(harness.calls[0].source, "local-ai");
   assert.equal(harness.calls[0].type, "vehicle");
+  assert.equal(harness.response.body.snapshotRequired, true);
 });
 
 test("normalizuje źródło i typ przed kontrolą ustawień AI", async () => {

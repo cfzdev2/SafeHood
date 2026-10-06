@@ -49,6 +49,7 @@ const {
   CameraEventSnapshotError,
   buildSnapshotPath,
   decodeJpegBase64,
+  maximumSnapshotBytes,
   normalizeDocumentId,
 } = require(
     "./camera_event_snapshot",
@@ -2432,6 +2433,10 @@ async function ingestCameraEventInternal(
                       source ?
                         source :
                         "multiple",
+                    hasLocalAiDetection:
+                      activeEvent.hasLocalAiDetection === true ||
+                      activeEvent.source === "local-ai" ||
+                      source === "local-ai",
                     confidence:
                       mergeConfidence(
                           activeEvent
@@ -2473,6 +2478,10 @@ async function ingestCameraEventInternal(
                 occurrenceCount:
                     currentCount + 1,
                 cameraName,
+                snapshotRequired:
+                  source === "local-ai" &&
+                  !(typeof activeEvent.snapshotPath === "string" &&
+                    activeEvent.snapshotPath.trim()),
               };
             }
           }
@@ -2491,6 +2500,7 @@ async function ingestCameraEventInternal(
               occurredAtTimestamp,
             occurrenceCount: 1,
             source,
+            hasLocalAiDetection: source === "local-ai",
             confidence,
             snapshotUrl,
             clipUrl,
@@ -2527,6 +2537,7 @@ async function ingestCameraEventInternal(
             type,
             occurrenceCount: 1,
             cameraName,
+            snapshotRequired: source === "local-ai",
           };
         },
     );
@@ -4131,6 +4142,8 @@ exports.ingestBridgeCameraEvent =
                   result.merged,
               occurrenceCount:
                   result.occurrenceCount,
+              snapshotRequired:
+                  result.snapshotRequired === true,
             });
           } catch (error) {
             console.error(
@@ -4268,7 +4281,8 @@ exports.uploadBridgeCameraEventSnapshot =
               event.ownerId !==
                 bridgeIdentity.ownerId ||
               event.cameraId !== cameraId ||
-              event.source !== "local-ai"
+              (event.source !== "local-ai" &&
+                event.hasLocalAiDetection !== true)
             ) {
               throw new CameraEventSnapshotError(
                   "permission-denied",
@@ -4293,42 +4307,53 @@ exports.uploadBridgeCameraEventSnapshot =
                     .bucket()
                     .file(snapshotPath);
 
-            await file.save(
-                snapshot,
-                {
-                  resumable: false,
-                  validation: "crc32c",
+            let alreadyExists = false;
+            let size = snapshot.length;
+
+            try {
+              await file.save(snapshot, {
+                resumable: false,
+                validation: "crc32c",
+                preconditionOpts: {ifGenerationMatch: 0},
+                metadata: {
+                  contentType: "image/jpeg",
+                  cacheControl: "private, max-age=3600",
                   metadata: {
-                    contentType:
-                        "image/jpeg",
-
-                    cacheControl:
-                        "private, max-age=3600",
-
-                    metadata: {
-                      ownerId:
-                          bridgeIdentity.ownerId,
-
-                      cameraId,
-
-                      eventId,
-
-                      source:
-                          "local-ai",
-                    },
+                    ownerId: bridgeIdentity.ownerId,
+                    cameraId,
+                    eventId,
+                    source: "local-ai",
                   },
                 },
-            );
+              });
+            } catch (error) {
+              if (Number(error.code) !== 412) throw error;
 
-            await eventRef.update({
-              snapshotPath,
+              // Pierwszy JPEG pozostaje dowodem, także gdy poprzedni
+              // upload się udał, ale zapis Firestore lub odpowiedź nie.
+              const [metadata] = await file.getMetadata();
+              const attributes = metadata.metadata || {};
+              size = Number(metadata.size);
+              if (
+                metadata.contentType !== "image/jpeg" ||
+                attributes.ownerId !== bridgeIdentity.ownerId ||
+                attributes.cameraId !== cameraId ||
+                attributes.eventId !== eventId ||
+                !Number.isInteger(size) || size < 4 ||
+                size > maximumSnapshotBytes
+              ) {
+                throw new Error("Istniejący snapshot ma nieprawidłowe dane.");
+              }
+              alreadyExists = true;
+            }
 
-              snapshotUpdatedAt:
-                  FieldValue.serverTimestamp(),
-
-              updatedAt:
-                  FieldValue.serverTimestamp(),
-            });
+            if (!alreadyExists || event.snapshotPath !== snapshotPath) {
+              await eventRef.update({
+                snapshotPath,
+                snapshotUpdatedAt: FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
+              });
+            }
 
             console.log(
                 "BRIDGE CAMERA SNAPSHOT:",
@@ -4342,8 +4367,8 @@ exports.uploadBridgeCameraEventSnapshot =
 
                   snapshotPath,
 
-                  size:
-                      snapshot.length,
+                  size,
+                  alreadyExists,
                 },
             );
 
@@ -4352,8 +4377,8 @@ exports.uploadBridgeCameraEventSnapshot =
               cameraId,
               eventId,
               snapshotPath,
-              size:
-                  snapshot.length,
+              size,
+              alreadyExists,
             });
           } catch (error) {
             console.error(

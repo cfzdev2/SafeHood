@@ -37,6 +37,8 @@ const {
   './ai/ffmpeg_snapshot_capture',
 );
 
+const {SnapshotUploadQueue} = require('./ai/snapshot_upload_queue');
+
 const CONFIG_PATH =
   path.join(
     __dirname,
@@ -133,6 +135,34 @@ let aiInitializationPromise =
 const cameraStatuses =
   new Map();
 
+const snapshotQueue = new SnapshotUploadQueue({
+  captureSnapshot: ({input, attempt, signal}) => captureJpegSnapshot({
+    input,
+    // Przy ponowieniu uwzględniamy dłuższy odstęp klatek kluczowych.
+    timeoutMs: attempt === 1 ? 10000 : 30000,
+    signal,
+  }),
+  uploadSnapshot: ({cameraId, eventId, snapshot, signal}) => callBridgeEndpoint(
+    'uploadBridgeCameraEventSnapshot',
+    {cameraId, eventId, jpegBase64: snapshot.toString('base64')},
+    30000,
+    signal,
+  ),
+  onSaved: ({cameraId, eventId, attempt, result, size}) => {
+    console.log(
+      `[BRIDGE AI SNAPSHOT][${cameraId}] event=${eventId}, ` +
+      `bytes=${result.size ?? size}, attempt=${attempt}`,
+    );
+  },
+  onError: ({cameraId, eventId, attempt, maximumAttempts, error, willRetry, retryInMs}) => {
+    console.error(
+      `[BRIDGE AI SNAPSHOT][${cameraId}] event=${eventId}, ` +
+      `próba=${attempt}/${maximumAttempts}: ${safeAiErrorMessage(error)} ` +
+      (willRetry ? `Ponowienie za ${retryInMs} ms.` : 'Zakończono próby.'),
+    );
+  },
+});
+
 let shuttingDown = false;
 
 let configurationTimer = null;
@@ -219,9 +249,14 @@ async function callBridgeEndpoint(
   functionName,
   body,
   timeoutMs = 15000,
+  signal,
 ) {
   const controller =
     new AbortController();
+
+  const onAbort = () => controller.abort();
+  signal?.addEventListener('abort', onAbort, {once: true});
+  if (signal?.aborted) controller.abort();
 
   const timeout =
     setTimeout(
@@ -278,14 +313,17 @@ async function callBridgeEndpoint(
     }
 
     if (!response.ok) {
-      throw new Error(
+      const error = new Error(
         result.error ||
         `HTTP ${response.status}`,
       );
+      error.statusCode = response.status;
+      throw error;
     }
 
     return result;
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     clearTimeout(
       timeout,
     );
@@ -539,8 +577,10 @@ async function ingestAiDetection(
       },
     );
 
-  if (result.merged !== false) {
-    return;
+  const needsSnapshot = typeof result.snapshotRequired === 'boolean'
+    ? result.snapshotRequired : result.merged === false;
+  if (!needsSnapshot) {
+    return result;
   }
 
   const eventId =
@@ -559,39 +599,19 @@ async function ingestAiDetection(
       );
     }
 
-    const snapshot =
-      await captureJpegSnapshot({
-        input,
-      });
-
-    const uploadResult =
-      await callBridgeEndpoint(
-        'uploadBridgeCameraEventSnapshot',
-        {
-          cameraId:
-            camera.id,
-
-          eventId,
-
-          jpegBase64:
-            snapshot.toString(
-              'base64',
-            ),
-        },
-        30000,
+    const queued = snapshotQueue.enqueue({cameraId: camera.id, eventId, input});
+    if (queued === 'full') {
+      console.error(
+        `[BRIDGE AI SNAPSHOT][${camera.id}] event=${eventId}: kolejka zdjęć jest pełna.`,
       );
-
-    console.log(
-      `[BRIDGE AI SNAPSHOT][${camera.id}] ` +
-      `event=${eventId}, ` +
-      `bytes=${uploadResult.size ?? snapshot.length}`,
-    );
+    }
   } catch (error) {
     console.error(
       `[BRIDGE AI SNAPSHOT][${camera.id}] ` +
       safeAiErrorMessage(error),
     );
   }
+  return result;
 }
 
 function safeAiErrorMessage(error) {
@@ -619,6 +639,7 @@ function safeAiErrorMessage(error) {
 async function stopAiSession(
   cameraId,
 ) {
+  snapshotQueue.cancelCamera(cameraId);
   const entry =
     aiSessions.get(cameraId);
 
@@ -801,6 +822,8 @@ async function syncAiSessions(
       );
     }
   }
+
+  snapshotQueue.retainCameras(desired.keys());
 
   for (
     const cameraId of
@@ -1100,6 +1123,7 @@ async function shutdown(signal) {
   }
 
   shuttingDown = true;
+  snapshotQueue.close();
 
   if (configurationTimer) {
     clearInterval(

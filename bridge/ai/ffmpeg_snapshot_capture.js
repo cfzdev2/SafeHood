@@ -89,7 +89,14 @@ function validateOptions({
   maximumBytes,
   ffmpegPath,
   spawnProcess,
+  signal,
 }) {
+  if (signal != null && (
+    typeof signal.addEventListener !== 'function' ||
+    typeof signal.removeEventListener !== 'function'
+  )) {
+    throw new TypeError('Signal snapshotu jest nieprawidłowy.');
+  }
   if (
     typeof input !== 'string' ||
     !input.trim() ||
@@ -149,6 +156,7 @@ function captureJpegSnapshot({
     'ffmpeg',
   spawnProcess =
     spawn,
+  signal,
 } = {}) {
   validateOptions({
     input,
@@ -156,7 +164,12 @@ function captureJpegSnapshot({
     maximumBytes,
     ffmpegPath,
     spawnProcess,
+    signal,
   });
+
+  if (signal?.aborted) {
+    return Promise.reject(new Error('Anulowano wykonywanie snapshotu.'));
+  }
 
   const normalizedInput =
     input.trim();
@@ -226,6 +239,7 @@ function captureJpegSnapshot({
       let errorBytes = 0;
       let settled = false;
       let timer = null;
+      let abortListener = null;
 
       const finish = (
         error,
@@ -239,6 +253,10 @@ function captureJpegSnapshot({
 
         if (timer) {
           clearTimeout(timer);
+        }
+
+        if (abortListener) {
+          signal.removeEventListener('abort', abortListener);
         }
 
         if (error) {
@@ -388,6 +406,21 @@ function captureJpegSnapshot({
           );
         },
       );
+
+      if (signal) {
+        abortListener = () => {
+          finish(new Error('Anulowano wykonywanie snapshotu.'));
+          try {
+            child.kill('SIGKILL');
+          } catch (_) {
+            // Proces zakończył już pracę.
+          }
+        };
+        signal.addEventListener('abort', abortListener, {once: true});
+        if (signal.aborted) abortListener();
+      }
+
+      if (settled) return;
 
       timer = setTimeout(
         () => {

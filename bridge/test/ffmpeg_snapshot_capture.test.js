@@ -375,3 +375,27 @@ test(
     );
   },
 );
+
+test('anulowanie przed startem nie uruchamia FFmpeg', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(captureJpegSnapshot({
+    input: 'recording.mp4',
+    signal: controller.signal,
+    spawnProcess: () => assert.fail('Nie wolno uruchomić procesu.'),
+  }), /Anulowano/);
+});
+
+test('anulowanie aktywnego snapshotu zatrzymuje FFmpeg', async () => {
+  const controller = new AbortController();
+  const child = createFakeChild();
+  const capture = captureJpegSnapshot({
+    input: 'recording.mp4',
+    signal: controller.signal,
+    spawnProcess: () => child,
+  });
+  controller.abort();
+  await assert.rejects(capture, /Anulowano/);
+  assert.deepEqual(child.killedSignals, ['SIGKILL']);
+  child.emit('close', 0, null);
+});
