@@ -6,6 +6,8 @@ const fs =
 const path =
   require('path');
 
+const {createHash} = require('node:crypto');
+
 const {
   OnvifCameraSession,
   connectionFingerprint,
@@ -38,6 +40,7 @@ const {
 );
 
 const {SnapshotUploadQueue} = require('./ai/snapshot_upload_queue');
+const {AiEventOutbox} = require('./ai/event_outbox');
 
 const CONFIG_PATH =
   path.join(
@@ -160,6 +163,28 @@ const snapshotQueue = new SnapshotUploadQueue({
       `próba=${attempt}/${maximumAttempts}: ${safeAiErrorMessage(error)} ` +
       (willRetry ? `Ponowienie za ${retryInMs} ms.` : 'Zakończono próby.'),
     );
+  },
+});
+
+const eventOutbox = new AiEventOutbox({
+  directory: path.join(__dirname, 'data', 'ai-events', createHash('sha256')
+    .update(JSON.stringify([bridgeConfig.projectId, bridgeConfig.region,
+      bridgeConfig.bridgeId, functionsBaseUrl])).digest('hex')),
+  deliver: (payload, signal) => callBridgeEndpoint('ingestBridgeCameraEvent', payload, 20000, signal),
+  onRestored: (count) => {
+    if (count > 0 || AI_DIAGNOSTICS_ENABLED) {
+      console.log(`[BRIDGE AI OUTBOX] odtworzono zdarzeń = ${count}`);
+    }
+  },
+  onDelivered: ({payload, result, attempts}) => {
+    console.log(`[BRIDGE INGEST][${payload.cameraId}] id=${result.eventId}, ` +
+      `type=${result.type}, merged=${result.merged}, count=${result.occurrenceCount}, ` +
+      `externalEventId=${payload.externalEventId}, duplicate=${result.duplicate}, attempt=${attempts}`);
+  },
+  onError: ({phase, payload, error, willRetry, retryInMs}) => {
+    console.error(`[BRIDGE AI OUTBOX] ${payload?.externalEventId ?? phase}: ` +
+      `${safeAiErrorMessage(error)} ` + (willRetry ? `Ponowienie za ${retryInMs ?? '-'} ms.` :
+        'Plik zachowano do sprawdzenia; nie będzie automatycznie wysyłany.'));
   },
 });
 
@@ -557,26 +582,25 @@ async function ingestAiDetection(
       event.occurredAtMillis :
       Date.now();
 
-  const result =
-    await ingestDetection(
-      camera,
-      {
-        type:
-          event.type,
+  const snapshotDeadline = Date.now() + 30000;
+  const result = await eventOutbox.enqueue({
+    cameraId: camera.id,
+    type: event.type,
+    source: 'local-ai',
+    confidence: event.confidence ?? null,
+    occurredAt: new Date(occurredAtMillis).toISOString(),
+  }, (acknowledgement) => {
+    // Po długiej awarii nie przypisujemy bieżącego obrazu do starego zdarzenia.
+    if (Date.now() <= snapshotDeadline) queueAiSnapshot(camera.id, input, acknowledgement);
+  });
+  if (AI_DIAGNOSTICS_ENABLED) {
+    console.log(`[BRIDGE AI OUTBOX][${camera.id}] zapisano ${result.externalEventId}, ` +
+      `oczekuje=${eventOutbox.pendingCount}`);
+  }
+  return result;
+}
 
-        source:
-          'local-ai',
-
-        confidence:
-          event.confidence ?? null,
-
-        occurredAt:
-          new Date(
-            occurredAtMillis,
-          ).toISOString(),
-      },
-    );
-
+function queueAiSnapshot(cameraId, input, result) {
   const needsSnapshot = typeof result.snapshotRequired === 'boolean'
     ? result.snapshotRequired : result.merged === false;
   if (!needsSnapshot) {
@@ -599,15 +623,15 @@ async function ingestAiDetection(
       );
     }
 
-    const queued = snapshotQueue.enqueue({cameraId: camera.id, eventId, input});
+    const queued = snapshotQueue.enqueue({cameraId, eventId, input});
     if (queued === 'full') {
       console.error(
-        `[BRIDGE AI SNAPSHOT][${camera.id}] event=${eventId}: kolejka zdjęć jest pełna.`,
+        `[BRIDGE AI SNAPSHOT][${cameraId}] event=${eventId}: kolejka zdjęć jest pełna.`,
       );
     }
   } catch (error) {
     console.error(
-      `[BRIDGE AI SNAPSHOT][${camera.id}] ` +
+      `[BRIDGE AI SNAPSHOT][${cameraId}] ` +
       safeAiErrorMessage(error),
     );
   }
@@ -1124,6 +1148,7 @@ async function shutdown(signal) {
 
   shuttingDown = true;
   snapshotQueue.close();
+  await eventOutbox.close();
 
   if (configurationTimer) {
     clearInterval(
@@ -1227,6 +1252,7 @@ async function main() {
 
   console.log('');
 
+  await eventOutbox.start();
   await queueConfigurationSync();
 
   await queueStateReport(

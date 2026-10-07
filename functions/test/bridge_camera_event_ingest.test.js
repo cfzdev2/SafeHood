@@ -27,6 +27,7 @@ const handlerCode = [
   ),
   readBlock("function normalizeCameraEventType(", "\n/**"),
   readBlock("function normalizeCameraEventSource(", "\n/**"),
+  readBlock("function normalizeBridgeExternalEventId(", "\n/**"),
   readBlock("exports.ingestBridgeCameraEvent =", "\n/**"),
 ].join("\n");
 
@@ -103,6 +104,8 @@ const createHarness = ({
         merged: false,
         occurrenceCount: 1,
         snapshotRequired: input.source === "local-ai",
+        externalEventId: input.bridgeReceipt &&
+          input.bridgeReceipt.externalEventId,
       };
     },
     console: {log: () => {}, error: () => {}},
@@ -244,4 +247,20 @@ test("wymaga metody POST", async () => {
   await harness.send({}, "GET");
   assert.equal(harness.response.statusCode, 405);
   assert.equal(harness.calls.length, 0);
+});
+
+test("API wiąże UUID z uwierzytelnionym Bridge", async () => {
+  const h = createHarness();
+  const externalEventId = "11111111-1111-4111-8111-111111111111";
+  await h.send({externalEventId});
+  assert.equal(h.response.statusCode, 200);
+  assert.equal(h.calls[0].bridgeReceipt.bridgeId, "test-bridge");
+  assert.equal(h.response.body.externalEventId, externalEventId);
+});
+
+test("API odrzuca nieprawidłowe UUID przed zapisem zdarzenia", async () => {
+  const h = createHarness();
+  await h.send({externalEventId: "wrong/id"});
+  assert.equal(h.response.statusCode, 400);
+  assert.equal(h.calls.length, 0);
 });

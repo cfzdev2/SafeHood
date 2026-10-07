@@ -5,6 +5,9 @@ const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const fsPromises = require('node:fs/promises');
+const os = require('node:os');
+const {AiEventOutbox} = require('../ai/event_outbox');
 const {CameraAiSession} = require('../ai/camera_ai_session');
 const {SnapshotUploadQueue} = require('../ai/snapshot_upload_queue');
 
@@ -22,9 +25,14 @@ const input = 'rtsp://camera.local/live';
 const event = {type: 'person', confidence: 0.9, occurredAtMillis: 1000};
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 
-function createHandler(ingestDetection, snapshotQueue) {
+function createHandler(ingestDetection, snapshotQueue, outbox = null) {
   return vm.runInNewContext(handlerCode, {
-    ingestDetection, snapshotQueue,
+    snapshotQueue, AI_DIAGNOSTICS_ENABLED: false,
+    eventOutbox: outbox ?? {enqueue: async (payload, afterDelivery) => {
+      const result = await ingestDetection(payload);
+      afterDelivery(result);
+      return result;
+    }},
     safeAiErrorMessage: (error) => error.message,
     console: {error: () => {}},
   });
@@ -95,11 +103,11 @@ test('zachowuje obsługę backendu bez pola snapshotRequired', async () => {
   assert.equal(calls, 1);
 });
 
-test('odrzucony ingest nie tworzy zadania zdjęcia', async () => {
-  const ingest = createHandler(async () => { throw new Error('HTTP 409'); }, {
-    enqueue: () => assert.fail('Zdarzenie nie zostało przyjęte.'),
+test('błąd zapisu zdarzenia do kolejki nie tworzy zadania zdjęcia', async () => {
+  const ingest = createHandler(async () => { throw new Error('Dysk niedostępny.'); }, {
+    enqueue: () => assert.fail('Zdarzenie nie zostało zapisane.'),
   });
-  await assert.rejects(ingest(camera, input, event), /HTTP 409/);
+  await assert.rejects(ingest(camera, input, event), /Dysk niedostępny/);
 });
 
 test('wolne pobieranie zdjęcia nie zatrzymuje analizy następnej klatki', async (t) => {
@@ -150,4 +158,58 @@ test('wolne pobieranie zdjęcia nie zatrzymuje analizy następnej klatki', async
   releaseCapture(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   await nextTurn();
   assert.equal(uploads, 1);
+});
+
+test('awaria ingestu nie blokuje zapisu następnego wykrycia ani analizy', async (t) => {
+  const directory = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'safehood-session-outbox-'));
+  let drain;
+  let sending = false;
+  let frame = 0;
+  let sourceOptions;
+  const outbox = new AiEventOutbox({
+    directory,
+    deliver: (_payload, signal) => {
+      sending = true;
+      return new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('Anulowano.')));
+      });
+    },
+    setTimer: (callback) => { drain = callback; return 1; },
+    clearTimer: () => {},
+  });
+  const ingest = createHandler(null, {
+    enqueue: () => assert.fail('Nie było potwierdzenia backendu.'),
+  }, outbox);
+  const session = new CameraAiSession({
+    cameraId: camera.id, input, trackerOptions: {minimumConfirmedFrames: 1},
+    scheduler: {
+      submit: async () => {
+        const left = ++frame === 1 ? 10 : 200;
+        return {dropped: false, detections: [{
+          type: 'person', classId: 0, className: 'person', score: 0.9,
+          box: {left, top: 10, right: left + 90, bottom: 200, width: 90, height: 190},
+        }]};
+      },
+      cancelCamera: () => {},
+    },
+    onConfirmedTrack: (track) => ingest(camera, input, track),
+    sourceFactory: (options) => {
+      sourceOptions = options;
+      return {start: () => {}, stop: async () => {}};
+    },
+  });
+  t.after(async () => {
+    await outbox.close(); await session.stop();
+    await fsPromises.rm(directory, {recursive: true, force: true});
+  });
+  session.start();
+  await sourceOptions.onFrame(Buffer.from([1]));
+  drain();
+  while (!sending) await nextTurn();
+  await sourceOptions.onFrame(Buffer.from([2]));
+  assert.equal(session.stats.framesAnalyzed, 2);
+  assert.equal(session.stats.confirmedEvents, 2);
+  assert.equal(session.stats.eventErrors, 0);
+  assert.equal(outbox.pendingCount, 2);
+  assert.equal((await fsPromises.readdir(directory)).length, 2);
 });

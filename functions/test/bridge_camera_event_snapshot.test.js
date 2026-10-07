@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const {createHash} = require("node:crypto");
 const {Timestamp, FieldValue} = require("firebase-admin/firestore");
 const {HttpsError} = require("firebase-functions/v2/https");
 const snapshotHelpers = require("../camera_event_snapshot");
@@ -30,7 +31,9 @@ const aggregationCode = [
     "normalizeCameraEventType", "normalizeCameraEventSource",
     "normalizeConfidence",
     "normalizeOptionalUrl", "normalizeOccurredAt", "isDetectionCameraEvent",
-    "selectCameraEventType", "mergeConfidence", "ingestCameraEventInternal",
+    "selectCameraEventType", "mergeConfidence",
+    "normalizeBridgeExternalEventId",
+    "ingestCameraEventInternal",
   ].map((name) => {
     const prefix = name === "ingestCameraEventInternal" ? "async " : "";
     return readBlock(`${prefix}function ${name}(`);
@@ -49,6 +52,7 @@ const anotherJpeg = Buffer.from([0xff, 0xd8, 3, 0xff, 0xd9]);
 const createHarness = ({
   camera = {}, event = {}, authenticated = true,
   updateFailures = 0, storageFailures = 0,
+  receiptWriteFailures = 0,
 } = {}) => {
   const documents = new Map();
   documents.set(cameraPath, {
@@ -62,6 +66,8 @@ const createHarness = ({
   let stored = null;
   const saves = [];
   const updates = [];
+  const notifications = [];
+  let transactionTail = Promise.resolve();
   const makeRef = (documentPath) => ({
     path: documentPath,
     id: documentPath.split("/").pop(),
@@ -86,17 +92,33 @@ const createHarness = ({
   const db = {
     collection: makeCollection,
     getAll: (...refs) => Promise.all(refs.map((ref) => ref.get())),
-    runTransaction: async (handler) => handler({
-      get: (ref) => ref.get(),
-      update: (ref, data) => {
-        documents.set(ref.path, {...documents.get(ref.path), ...data});
-      },
-      set: (ref, data, options) => {
-        const previous = options && options.merge ?
-          documents.get(ref.path) : {};
-        documents.set(ref.path, {...previous, ...data});
-      },
-    }),
+    runTransaction: (handler) => {
+      const operation = transactionTail.then(async () => {
+        const writes = [];
+        const result = await handler({
+          get: (ref) => {
+            assert.equal(writes.length, 0, "Odczyt po zapisie transakcji.");
+            return ref.get();
+          },
+          update: (ref, data) => writes.push({ref, data, merge: true}),
+          set: (ref, data, options) => {
+            if (ref.path.startsWith("bridgeCameraEventReceipts/") &&
+                receiptWriteFailures > 0) {
+              receiptWriteFailures -= 1;
+              throw new Error("Błąd potwierdzenia.");
+            }
+            writes.push({ref, data, merge: options && options.merge});
+          },
+        });
+        for (const {ref, data, merge} of writes) {
+          const previous = merge ? documents.get(ref.path) : {};
+          documents.set(ref.path, {...previous, ...data});
+        }
+        return result;
+      });
+      transactionTail = operation.catch(() => {});
+      return operation;
+    },
   };
   const file = {
     save: async (buffer, options) => {
@@ -134,13 +156,13 @@ const createHarness = ({
     console: {log: () => {}, error: () => {}},
   });
   const aggregate = vm.runInNewContext(aggregationCode, {
-    db, Timestamp, HttpsError,
-    sendCameraEventNotification: async () => {},
+    db, Timestamp, HttpsError, createHash,
+    sendCameraEventNotification: async (data) => notifications.push(data),
     console: {error: () => {}},
   });
 
   return {
-    documents, saves, updates,
+    documents, saves, updates, notifications,
     stored: () => stored,
     aggregate: (input = {}) => aggregate({
       ownerId, cameraId, source: "local-ai", type: "person", ...input,
@@ -295,4 +317,131 @@ test("starsze AI nadal przyjmuje zdjęcie po scaleniu", async () => {
   assert.equal(result.merged, true);
   assert.equal(harness.documents.get(eventPath).hasLocalAiDetection, true);
   assert.equal((await harness.send()).statusCode, 200);
+});
+
+const receipt = {
+  bridgeId: "test-bridge",
+  externalEventId: "11111111-1111-4111-8111-111111111111",
+};
+const receiptInput = {bridgeReceipt: receipt,
+  occurredAt: "2026-10-06T19:00:00.000Z"};
+const eventDocuments = (harness) => [...harness.documents]
+    .filter(([name]) => name.startsWith("cameraEvents/"));
+
+test("retry po utracie odpowiedzi nie powiela wykryć ani push", async () => {
+  const h = createHarness({event: null});
+  const first = await h.aggregate(receiptInput);
+  const retry = await h.aggregate(receiptInput);
+  assert.equal(first.eventId, retry.eventId);
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.externalEventId, receipt.externalEventId);
+  assert.equal(eventDocuments(h).length, 1);
+  assert.equal(eventDocuments(h)[0][1].occurrenceCount, 1);
+  assert.equal(h.notifications.length, 1);
+});
+
+test("równoległe żądania jednego UUID otrzymują jedno zdarzenie", async () => {
+  const h = createHarness({event: null});
+  const results = await Promise.all([
+    h.aggregate(receiptInput), h.aggregate(receiptInput),
+  ]);
+  assert.equal(results.filter((result) => result.duplicate).length, 1);
+  assert.equal(eventDocuments(h).length, 1);
+  assert.equal(eventDocuments(h)[0][1].occurrenceCount, 1);
+});
+
+test("kolejne UUID zwiększa licznik, a retry wcześniejszego nie", async () => {
+  const h = createHarness({event: null});
+  const first = await h.aggregate(receiptInput);
+  await h.aggregate({...receiptInput, bridgeReceipt: {
+    ...receipt, externalEventId: "22222222-2222-4222-8222-222222222222",
+  }});
+  const replay = await h.aggregate(receiptInput);
+  assert.equal(replay.eventId, first.eventId);
+  assert.equal(replay.occurrenceCount, 1);
+  assert.equal(eventDocuments(h)[0][1].occurrenceCount, 2);
+});
+
+test("UUID nie może zostać ponownie użyte z innym payloadem", async () => {
+  const h = createHarness({event: null});
+  await h.aggregate(receiptInput);
+  await assert.rejects(h.aggregate({...receiptInput, confidence: 0.6}), {
+    code: "invalid-argument",
+  });
+  assert.equal(eventDocuments(h)[0][1].occurrenceCount, 1);
+});
+
+test("błąd zapisu receipt wycofuje także zapis zdarzenia", async () => {
+  const h = createHarness({event: null, receiptWriteFailures: 1});
+  await assert.rejects(h.aggregate(receiptInput), /Błąd potwierdzenia/);
+  assert.equal(eventDocuments(h).length, 0);
+  assert.equal(h.notifications.length, 0);
+  await h.aggregate(receiptInput);
+  assert.equal(eventDocuments(h).length, 1);
+  assert.equal(eventDocuments(h)[0][1].occurrenceCount, 1);
+});
+
+test("kolejka zachowuje dawny czas i rozdziela odległe wykrycia", async () => {
+  const h = createHarness({event: null});
+  const original = Date.now() - 60 * 60 * 1000;
+  const first = await h.aggregate({...receiptInput,
+    occurredAt: new Date(original).toISOString()});
+  const second = await h.aggregate({
+    bridgeReceipt: {...receipt,
+      externalEventId: "22222222-2222-4222-8222-222222222222"},
+    occurredAt: new Date(original + 30000).toISOString(),
+  });
+  assert.notEqual(first.eventId, second.eventId);
+  assert.equal(eventDocuments(h).length, 2);
+  assert.equal(h.documents.get(`cameraEvents/${first.eventId}`)
+      .occurredAt.toMillis(), original);
+});
+
+test("replay po usunięciu zdarzenia nie odtwarza jego danych", async () => {
+  const h = createHarness({event: null});
+  const original = await h.aggregate(receiptInput);
+  h.documents.delete(`cameraEvents/${original.eventId}`);
+  const retry = await h.aggregate(receiptInput);
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.snapshotRequired, false);
+  assert.equal(eventDocuments(h).length, 0);
+});
+
+test("UUID jest oddzielone dla każdej kamery Bridge", async () => {
+  const h = createHarness({event: null});
+  h.documents.set(
+      `users/${ownerId}/cameras/second-camera`, {name: "Druga"},
+  );
+  const first = await h.aggregate(receiptInput);
+  const second = await h.aggregate({
+    ...receiptInput, cameraId: "second-camera",
+  });
+  assert.notEqual(first.eventId, second.eventId);
+  assert.equal(eventDocuments(h).length, 2);
+});
+
+test("bieżące ONVIF nie scala się ze starym zdarzeniem z kolejki", async () => {
+  const h = createHarness({event: null});
+  await h.aggregate({...receiptInput,
+    occurredAt: new Date(Date.now() - 60 * 60 * 1000).toISOString()});
+  const current = await h.aggregate({source: "onvif", type: "motion"});
+  assert.equal(current.merged, false);
+  assert.equal(eventDocuments(h).length, 2);
+});
+
+test("opóźnione wykrycie zachowuje zakres czasu zdarzenia", async () => {
+  const h = createHarness({event: null});
+  const earlier = Date.now() - 10000;
+  const later = earlier + 5000;
+  const first = await h.aggregate({...receiptInput,
+    occurredAt: new Date(later).toISOString()});
+  await h.aggregate({
+    bridgeReceipt: {...receipt,
+      externalEventId: "22222222-2222-4222-8222-222222222222"},
+    occurredAt: new Date(earlier).toISOString(),
+  });
+  const data = h.documents.get(`cameraEvents/${first.eventId}`);
+  assert.equal(data.occurredAt.toMillis(), earlier);
+  assert.equal(data.lastOccurredAt.toMillis(), later);
+  assert.equal(data.occurrenceCount, 2);
 });

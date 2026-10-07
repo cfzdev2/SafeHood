@@ -273,11 +273,17 @@ async function deleteAccountTopLevelData(
               ),
       );
 
+  const deletedBridgeEventReceiptCount = await deleteQueryDocuments(
+      db,
+      db.collection("bridgeCameraEventReceipts").where("ownerId", "==", uid),
+  );
+
   return {
     deletedBridgeCredentialCount,
     deletedPairingCodeCount,
     deletedStateCount,
     deletedCameraEventCount,
+    deletedBridgeEventReceiptCount,
   };
 }
 /**

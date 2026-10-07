@@ -2203,8 +2203,24 @@ async function sendCameraEventNotification({
   }
 }
 /**
- * Przyjmuje i agreguje zdarzenie kamery.
- *
+ * Waliduje stały identyfikator wysyłki Bridge.
+ * @param {*} value Identyfikator UUID.
+ * @return {string} Poprawny identyfikator.
+ */
+function normalizeBridgeExternalEventId(value) {
+  const id = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const pattern = new RegExp(
+      "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-" +
+      "[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+  );
+  if (!pattern.test(id)) {
+    throw new HttpsError("invalid-argument", "Nieprawidłowy externalEventId.");
+  }
+  return id;
+}
+
+/**
+ * Przyjmuje i agreguje zdarzenie wraz z potwierdzeniem Bridge.
  * @param {Object} input Dane zdarzenia.
  * @return {Promise<Object>} Wynik przetwarzania.
  */
@@ -2263,11 +2279,19 @@ async function ingestCameraEventInternal(
   const nowMillis =
       Date.now();
 
-  const occurredAtMillis =
+  let occurredAtMillis =
       normalizeOccurredAt(
           input.occurredAt,
           nowMillis,
       );
+  if (input.bridgeReceipt && source === "local-ai") {
+    const originalTime = typeof input.occurredAt === "string" ?
+      Date.parse(input.occurredAt) : NaN;
+    if (Number.isFinite(originalTime) && originalTime > 0 &&
+      originalTime <= nowMillis + 10 * 60 * 1000) {
+      occurredAtMillis = originalTime;
+    }
+  }
 
   const cameraRef =
       db.collection("users")
@@ -2287,6 +2311,20 @@ async function ingestCameraEventInternal(
   const stateRef =
       db.collection("cameraEventStates")
           .doc(stateId);
+
+  const receipt = input.bridgeReceipt;
+  const externalEventId = receipt ?
+    normalizeBridgeExternalEventId(receipt.externalEventId) : null;
+  const receiptId = receipt ? createHash("sha256")
+      .update(JSON.stringify([
+        ownerId, receipt.bridgeId, cameraId, externalEventId,
+      ])).digest("hex") : null;
+  const receiptRef = receipt ?
+    db.collection("bridgeCameraEventReceipts").doc(receiptId) : null;
+  const payloadHash = receipt ? createHash("sha256")
+      .update(JSON.stringify([
+        type, source, confidence, snapshotUrl, clipUrl, input.occurredAt,
+      ])).digest("hex") : null;
 
   const result =
     await db.runTransaction(
@@ -2320,6 +2358,48 @@ async function ingestCameraEventInternal(
             cameraData.name.trim() ?
             cameraData.name.trim() :
             "Kamera";
+
+          if (receiptRef) {
+            const saved = await transaction.get(receiptRef);
+            if (saved.exists) {
+              const data = saved.data();
+              if (data.payloadHash !== payloadHash) {
+                throw new HttpsError(
+                    "invalid-argument", "externalEventId ma inne dane.",
+                );
+              }
+              if (!data.result || !data.result.eventId ||
+                typeof data.result.eventId !== "string" ||
+                !Number.isInteger(data.result.occurrenceCount) ||
+                data.result.occurrenceCount < 1 ||
+                data.ownerId !== ownerId || data.cameraId !== cameraId ||
+                data.bridgeId !== receipt.bridgeId) {
+                throw new HttpsError("internal", "Uszkodzone potwierdzenie.");
+              }
+              const original = await transaction.get(
+                  eventsCollection.doc(data.result.eventId),
+              );
+              const originalData = original.exists ? original.data() : {};
+              return {
+                ...data.result,
+                duplicate: true,
+                externalEventId,
+                snapshotRequired: original.exists && source === "local-ai" &&
+                  !(typeof originalData.snapshotPath === "string" &&
+                    originalData.snapshotPath.trim()),
+              };
+            }
+          }
+
+          const complete = (eventResult) => {
+            if (!receiptRef) return eventResult;
+            transaction.set(receiptRef, {
+              ownerId, cameraId, bridgeId: receipt.bridgeId,
+              externalEventId, payloadHash, result: eventResult,
+              createdAt: Timestamp.fromMillis(nowMillis),
+            });
+            return {...eventResult, externalEventId, duplicate: false};
+          };
 
           let stateSnapshot = null;
           let activeEventSnapshot = null;
@@ -2384,6 +2464,10 @@ async function ingestCameraEventInternal(
 
             const activeEvent =
               activeEventSnapshot.data();
+            const previousTime = activeEvent.lastOccurredAt;
+            const withinOccurrenceWindow = previousTime instanceof Timestamp ?
+              Math.abs(occurredAtMillis - previousTime.toMillis()) <=
+                cameraEventMergeWindowMs : !receipt;
 
             const currentStatus =
               typeof activeEvent.status ===
@@ -2395,7 +2479,7 @@ async function ingestCameraEventInternal(
               currentStatus === "new" ||
               currentStatus === "viewed";
 
-            if (withinWindow &&
+            if (withinWindow && withinOccurrenceWindow &&
               canUpdateEvent) {
               const currentType =
                 typeof activeEvent.type ===
@@ -2424,8 +2508,14 @@ async function ingestCameraEventInternal(
                   eventRef,
                   {
                     type: mergedType,
-                    lastOccurredAt:
+                    occurredAt: activeEvent.occurredAt instanceof Timestamp ?
+                      Timestamp.fromMillis(Math.min(occurredAtMillis,
+                          activeEvent.occurredAt.toMillis())) :
                       occurredAtTimestamp,
+                    lastOccurredAt:
+                      Timestamp.fromMillis(Math.max(occurredAtMillis,
+                          previousTime instanceof Timestamp ?
+                            previousTime.toMillis() : 0)),
                     occurrenceCount:
                       currentCount + 1,
                     source:
@@ -2471,7 +2561,7 @@ async function ingestCameraEventInternal(
                   },
               );
 
-              return {
+              return complete({
                 eventId: eventRef.id,
                 merged: true,
                 type: mergedType,
@@ -2482,7 +2572,7 @@ async function ingestCameraEventInternal(
                   source === "local-ai" &&
                   !(typeof activeEvent.snapshotPath === "string" &&
                     activeEvent.snapshotPath.trim()),
-              };
+              });
             }
           }
 
@@ -2531,17 +2621,17 @@ async function ingestCameraEventInternal(
             );
           }
 
-          return {
+          return complete({
             eventId: eventRef.id,
             merged: false,
             type,
             occurrenceCount: 1,
             cameraName,
             snapshotRequired: source === "local-ai",
-          };
+          });
         },
     );
-  if (!result.merged) {
+  if (!result.merged && !result.duplicate) {
     try {
       await sendCameraEventNotification({
         ownerId,
@@ -4113,6 +4203,12 @@ exports.ingestBridgeCameraEvent =
                       data.clipUrl,
                   occurredAt:
                       data.occurredAt,
+                  bridgeReceipt: data.externalEventId == null ? null : {
+                    bridgeId: bridgeIdentity.bridgeId,
+                    externalEventId: normalizeBridgeExternalEventId(
+                        data.externalEventId,
+                    ),
+                  },
                 });
 
             console.log(
@@ -4144,6 +4240,8 @@ exports.ingestBridgeCameraEvent =
                   result.occurrenceCount,
               snapshotRequired:
                   result.snapshotRequired === true,
+              externalEventId: result.externalEventId || null,
+              duplicate: result.duplicate === true,
             });
           } catch (error) {
             console.error(

@@ -46,6 +46,7 @@ app.*.map.json
 
 bridge/config.json
 bridge/config.json.tmp
+bridge/data/
 
 # Node.js dependencies
 **/node_modules/

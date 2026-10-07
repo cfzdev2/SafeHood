@@ -3,7 +3,7 @@
   "description": "Cloud Functions for Firebase",
   "scripts": {
     "lint": "eslint .",
-    "test": "node --test test/manufacturer_event_deduplicator.test.js test/camera_event_snapshot.test.js test/bridge_camera_event_ingest.test.js test/bridge_camera_event_snapshot.test.js",
+    "test": "node --test test/manufacturer_event_deduplicator.test.js test/camera_event_snapshot.test.js test/bridge_camera_event_ingest.test.js test/bridge_camera_event_snapshot.test.js test/bridge_event_cleanup.test.js",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
     "start": "npm run shell",
