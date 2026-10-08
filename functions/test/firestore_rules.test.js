@@ -123,6 +123,38 @@ after(async () => {
   }
 });
 
+test("właściciel włącza i wyłącza nagrywanie starszej kamery", async () => {
+  const reference = doc(firestoreFor(ownerId),
+      "users", ownerId, "cameras", cameraId);
+  for (const enabled of [true, false]) {
+    await assertSucceeds(updateDoc(reference, {
+      aiRecordingEnabled: enabled, updatedAt: serverTimestamp(),
+    }));
+    assert.equal((await getDoc(reference)).data().aiRecordingEnabled, enabled);
+  }
+});
+
+test("nagrywanie wymaga bool i właściciela kamery", async () => {
+  const owner = doc(firestoreFor(ownerId),
+      "users", ownerId, "cameras", cameraId);
+  await assertFails(updateDoc(owner, {
+    aiRecordingEnabled: "true", updatedAt: serverTimestamp(),
+  }));
+  const stranger = doc(firestoreFor(strangerId),
+      "users", ownerId, "cameras", cameraId);
+  await assertFails(updateDoc(stranger, {
+    aiRecordingEnabled: true, updatedAt: serverTimestamp(),
+  }));
+});
+
+test("klient nie podpina własnego filmu do zdarzenia", async () => {
+  const reference = doc(firestoreFor(ownerId), "cameraEvents", eventId);
+  await assertFails(updateDoc(reference, {
+    clipPath: `users/${ownerId}/cameraEvents/${eventId}/clip.mp4`,
+    clipDurationMillis: 15000, updatedAt: serverTimestamp(),
+  }));
+});
+
 test(
     "właściciel odczytuje swoją kamerę",
     async () => {

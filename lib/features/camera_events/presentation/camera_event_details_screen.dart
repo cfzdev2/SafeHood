@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../data/camera_event_service.dart';
 import '../domain/camera_event.dart';
-import 'package:video_player/video_player.dart';
 import '../../cameras/data/camera_service.dart';
 import 'camera_event_live_screen.dart';
 import 'widgets/camera_event_snapshot.dart';
+import 'widgets/camera_event_clip.dart';
+
 import 'dart:async';
 
 class CameraEventDetailsScreen extends StatefulWidget {
@@ -282,9 +283,8 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
                 'utworzone i wysłane '
                 'do osób w pobliżu.';
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
 
       setState(() {
         _processingAction = false;
@@ -449,9 +449,8 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
               children: [
                 Text(
                   title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
                 ),
 
                 const SizedBox(height: 4),
@@ -589,11 +588,10 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
                   ),
                 ),
 
-              if (event.clipUrl != null &&
-                  event.clipUrl!.trim().isNotEmpty) ...[
+              if (event.hasClip) ...[
                 const SizedBox(height: 16),
 
-                _CameraEventClipPlayer(url: event.clipUrl!),
+                CameraEventClip(event: event),
               ],
 
               const SizedBox(height: 16),
@@ -746,219 +744,6 @@ class _ReportIncidentDialogState extends State<_ReportIncidentDialog> {
         FilledButton(
           onPressed: _closing ? null : _submit,
           child: const Text('Zgłoś'),
-        ),
-      ],
-    );
-  }
-}
-
-class _CameraEventClipPlayer extends StatefulWidget {
-  final String url;
-
-  const _CameraEventClipPlayer({required this.url});
-
-  @override
-  State<_CameraEventClipPlayer> createState() => _CameraEventClipPlayerState();
-}
-
-class _CameraEventClipPlayerState extends State<_CameraEventClipPlayer> {
-  VideoPlayerController? _controller;
-
-  bool _loading = true;
-  Object? _error;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _initialize();
-  }
-
-  Future<void> _initialize() async {
-    final controller = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-
-    _controller = controller;
-
-    try {
-      await controller.initialize();
-
-      await controller.setLooping(false);
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _error = error;
-        _loading = false;
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-
-    super.dispose();
-  }
-
-  Future<void> _togglePlayback() async {
-    final controller = _controller;
-
-    if (controller == null || !controller.value.isInitialized) {
-      return;
-    }
-
-    if (controller.value.isPlaying) {
-      await controller.pause();
-    } else {
-      if (controller.value.position >= controller.value.duration) {
-        await controller.seekTo(Duration.zero);
-      }
-
-      await controller.play();
-    }
-
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  Future<void> _openFullscreen() async {
-    final controller = _controller;
-
-    if (controller == null || !controller.value.isInitialized) {
-      return;
-    }
-
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) {
-          return CameraFullscreenLiveView(controller: controller);
-        },
-      ),
-    );
-
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return Container(
-        height: 210,
-        decoration: BoxDecoration(
-          color: Colors.black87,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: const Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    if (_error != null) {
-      return Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: Theme.of(context).colorScheme.outlineVariant,
-          ),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          children: [
-            const Icon(Icons.error_outline),
-            const SizedBox(height: 8),
-            const Text(
-              'Nie udało się '
-              'załadować nagrania.',
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Spróbuj ponownie później.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
-      );
-    }
-
-    final controller = _controller!;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          'Nagranie zdarzenia',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-        ),
-
-        const SizedBox(height: 10),
-
-        ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: AspectRatio(
-            aspectRatio: controller.value.aspectRatio,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                VideoPlayer(controller),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: IconButton(
-                    onPressed: _openFullscreen,
-                    tooltip: 'Pełny ekran',
-                    style: IconButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      backgroundColor: Colors.black54,
-                    ),
-                    icon: const Icon(Icons.fullscreen),
-                  ),
-                ),
-
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: _togglePlayback,
-                    child: Container(
-                      width: 64,
-                      height: 64,
-                      decoration: const BoxDecoration(
-                        color: Colors.black54,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        controller.value.isPlaying
-                            ? Icons.pause
-                            : Icons.play_arrow,
-                        color: Colors.white,
-                        size: 38,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        VideoProgressIndicator(
-          controller,
-          allowScrubbing: true,
-          padding: const EdgeInsets.only(top: 8),
         ),
       ],
     );

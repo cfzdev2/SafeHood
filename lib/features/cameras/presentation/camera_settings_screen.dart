@@ -26,6 +26,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
   late bool _aiEnabled;
   late bool _aiPersonEnabled;
   late bool _aiVehicleEnabled;
+  late bool _aiRecordingEnabled;
   late String _aiSensitivity;
 
   late String _cameraName;
@@ -51,6 +52,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     _aiEnabled = widget.camera.aiEnabled;
     _aiPersonEnabled = widget.camera.aiPersonEnabled;
     _aiVehicleEnabled = widget.camera.aiVehicleEnabled;
+    _aiRecordingEnabled = widget.camera.aiRecordingEnabled;
     _aiSensitivity = widget.camera.aiSensitivity;
     _cameraName = widget.camera.name;
     _locationName = widget.camera.locationName;
@@ -78,6 +80,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           _aiEnabled = currentCamera.aiEnabled;
           _aiPersonEnabled = currentCamera.aiPersonEnabled;
           _aiVehicleEnabled = currentCamera.aiVehicleEnabled;
+          _aiRecordingEnabled = currentCamera.aiRecordingEnabled;
           _aiSensitivity = currentCamera.aiSensitivity;
         }
 
@@ -297,6 +300,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     bool? enabled,
     bool? personEnabled,
     bool? vehicleEnabled,
+    bool? recordingEnabled,
     String? sensitivity,
   }) async {
     if (_savingAi || _deleting) {
@@ -306,6 +310,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     final nextEnabled = enabled ?? _aiEnabled;
     final nextPersonEnabled = personEnabled ?? _aiPersonEnabled;
     final nextVehicleEnabled = vehicleEnabled ?? _aiVehicleEnabled;
+    final nextRecordingEnabled = recordingEnabled ?? _aiRecordingEnabled;
     final nextSensitivity = sensitivity ?? _aiSensitivity;
 
     if (nextEnabled && !nextPersonEnabled && !nextVehicleEnabled) {
@@ -319,12 +324,14 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     final previousEnabled = _aiEnabled;
     final previousPersonEnabled = _aiPersonEnabled;
     final previousVehicleEnabled = _aiVehicleEnabled;
+    final previousRecordingEnabled = _aiRecordingEnabled;
     final previousSensitivity = _aiSensitivity;
 
     setState(() {
       _aiEnabled = nextEnabled;
       _aiPersonEnabled = nextPersonEnabled;
       _aiVehicleEnabled = nextVehicleEnabled;
+      _aiRecordingEnabled = nextRecordingEnabled;
       _aiSensitivity = nextSensitivity;
       _savingAi = true;
     });
@@ -335,6 +342,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         enabled: nextEnabled,
         personEnabled: nextPersonEnabled,
         vehicleEnabled: nextVehicleEnabled,
+        recordingEnabled: nextRecordingEnabled,
         sensitivity: nextSensitivity,
       );
     } catch (error) {
@@ -346,6 +354,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         _aiEnabled = previousEnabled;
         _aiPersonEnabled = previousPersonEnabled;
         _aiVehicleEnabled = previousVehicleEnabled;
+        _aiRecordingEnabled = previousRecordingEnabled;
         _aiSensitivity = previousSensitivity;
       });
 
@@ -496,9 +505,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         children: [
           Text(
             'Informacje',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Card(
@@ -548,9 +556,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           const SizedBox(height: 24),
           Text(
             'Monitoring',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Card(
@@ -581,9 +588,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
             const SizedBox(height: 24),
             Text(
               'Analiza AI',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             StreamBuilder<AppUser?>(
@@ -689,6 +695,23 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                               : null,
                         ),
                       ),
+                      const Divider(height: 1),
+                      SwitchListTile.adaptive(
+                        secondary: const Icon(Icons.movie_outlined),
+                        title: const Text('Nagrywaj zdarzenia'),
+                        subtitle: const Text(
+                          'Prywatny film: do 5 s przed wykryciem i 10 s po nim. '
+                          'Nagrania zajmują miejsce w chmurze.',
+                        ),
+                        value: _aiRecordingEnabled,
+                        onChanged: aiOptionsEnabled
+                            ? (enabled) {
+                                unawaited(
+                                  _setAiSettings(recordingEnabled: enabled),
+                                );
+                              }
+                            : null,
+                      ),
                       if (_loadingAi || _savingAi)
                         const LinearProgressIndicator(),
                     ],
@@ -700,9 +723,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           const SizedBox(height: 24),
           Text(
             'Powiadomienia',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Card(

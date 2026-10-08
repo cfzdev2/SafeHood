@@ -3,7 +3,7 @@
   "description": "Cloud Functions for Firebase",
   "scripts": {
     "lint": "eslint .",
-    "test": "node --test test/manufacturer_event_deduplicator.test.js test/camera_event_snapshot.test.js test/bridge_camera_event_ingest.test.js test/bridge_camera_event_snapshot.test.js test/bridge_event_cleanup.test.js",
+    "test": "node --test test/manufacturer_event_deduplicator.test.js test/camera_event_snapshot.test.js test/bridge_camera_event_ingest.test.js test/bridge_camera_event_snapshot.test.js test/bridge_event_cleanup.test.js test/camera_event_clip.test.js",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
     "start": "npm run shell",
@@ -14,7 +14,8 @@
     "test:account-deletion:unit": "node --test test/account_deletion.test.js",
     "test:account-deletion": "firebase emulators:exec --only firestore --config ../firebase.rules-test.json --project demo-safehood-rules-test \"npm run test:account-deletion:unit\"",
     "test:storage-rules": "firebase emulators:exec --only storage --config ../firebase.rules-test.json --project demo-safehood-storage-rules-test \"npm run test:storage-rules:unit\"",
-    "test:storage-rules:unit": "node --test --test-concurrency=1 test/storage_rules.test.js"
+    "test:storage-rules:unit": "node --test --test-concurrency=1 test/storage_rules.test.js",
+    "test:clips:backend": "firebase emulators:exec --only firestore,storage --config ../firebase.rules-test.json --project demo-safehood-clips-test \"node --test test/camera_event_clip_integration.test.js\""
   },
   "engines": {
     "node": "22"

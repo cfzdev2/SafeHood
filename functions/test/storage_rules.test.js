@@ -48,6 +48,8 @@ const eventDirectory =
     `users/${ownerId}/cameraEvents/` +
     eventId;
 
+const clipPath = `${eventDirectory}/clip.mp4`;
+
 const rulesPath = path.resolve(
     __dirname,
     "..",
@@ -124,12 +126,32 @@ beforeEach(async () => {
                       "image/jpeg",
                 },
             );
+            await uploadBytes(ref(storage, clipPath), snapshotBytes, {
+              contentType: "video/mp4",
+            });
           },
       );
 });
 
 after(async () => {
   await testEnvironment.cleanup();
+});
+
+test("prywatny film pobiera wyłącznie zweryfikowany właściciel", async () => {
+  await assertSucceeds(getBytes(ref(storageFor(ownerId), clipPath)));
+  for (const storage of [storageFor(strangerId), storageFor(ownerId, false),
+    testEnvironment.unauthenticatedContext().storage()]) {
+    await assertFails(getBytes(ref(storage, clipPath)));
+  }
+});
+
+test("klient nie nadpisuje i nie usuwa nagrania Bridge", async () => {
+  const storage = storageFor(ownerId);
+  await assertFails(uploadBytes(ref(storage, clipPath), snapshotBytes, {
+    contentType: "video/mp4",
+  }));
+  await assertFails(deleteObject(ref(storage, clipPath)));
+  await assertFails(listAll(ref(storage, eventDirectory)));
 });
 
 test(

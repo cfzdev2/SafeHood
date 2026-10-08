@@ -48,6 +48,9 @@ class CameraEvent {
   final String? snapshotUrl;
   final String? snapshotPath;
   final String? clipUrl;
+  final String? clipPath;
+  final int? clipDurationMillis;
+  final int? clipPrebufferMillis;
 
   /// Jeśli użytkownik utworzył zgłoszenie
   /// na podstawie tego wykrycia.
@@ -72,6 +75,9 @@ class CameraEvent {
     this.snapshotUrl,
     this.snapshotPath,
     this.clipUrl,
+    this.clipPath,
+    this.clipDurationMillis,
+    this.clipPrebufferMillis,
     this.incidentId,
   });
 
@@ -87,7 +93,20 @@ class CameraEvent {
       (snapshotPath?.trim().isNotEmpty ?? false) ||
       (snapshotUrl?.trim().isNotEmpty ?? false);
 
-  bool get hasClip => clipUrl != null && clipUrl!.trim().isNotEmpty;
+  String? get privateClipPath {
+    final path = clipPath?.trim();
+    if (ownerId.isEmpty ||
+        id.isEmpty ||
+        ownerId.contains('/') ||
+        id.contains('/')) {
+      return null;
+    }
+    final expected = 'users/$ownerId/cameraEvents/$id/clip.mp4';
+    return path == expected ? path : null;
+  }
+
+  bool get hasClip =>
+      privateClipPath != null || (clipUrl?.trim().isNotEmpty ?? false);
 
   bool get hasIncident => incidentId != null && incidentId!.trim().isNotEmpty;
 
@@ -105,6 +124,9 @@ class CameraEvent {
       'snapshotUrl': snapshotUrl,
       'snapshotPath': snapshotPath,
       'clipUrl': clipUrl,
+      'clipPath': clipPath,
+      'clipDurationMillis': clipDurationMillis,
+      'clipPrebufferMillis': clipPrebufferMillis,
       'incidentId': incidentId,
       'createdAt': Timestamp.fromDate(createdAt),
       'updatedAt': Timestamp.fromDate(updatedAt),
@@ -131,6 +153,9 @@ class CameraEvent {
       snapshotUrl: map['snapshotUrl'] as String?,
       snapshotPath: map['snapshotPath'] as String?,
       clipUrl: map['clipUrl'] as String?,
+      clipPath: map['clipPath'] as String?,
+      clipDurationMillis: (map['clipDurationMillis'] as num?)?.toInt(),
+      clipPrebufferMillis: (map['clipPrebufferMillis'] as num?)?.toInt(),
       incidentId: map['incidentId'] as String?,
       createdAt: _readDateTime(map['createdAt']) ?? occurredAt,
       updatedAt: _readDateTime(map['updatedAt']) ?? occurredAt,
@@ -151,6 +176,9 @@ class CameraEvent {
     String? snapshotUrl,
     String? snapshotPath,
     String? clipUrl,
+    String? clipPath,
+    int? clipDurationMillis,
+    int? clipPrebufferMillis,
     String? incidentId,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -169,6 +197,9 @@ class CameraEvent {
       snapshotUrl: snapshotUrl ?? this.snapshotUrl,
       snapshotPath: snapshotPath ?? this.snapshotPath,
       clipUrl: clipUrl ?? this.clipUrl,
+      clipPath: clipPath ?? this.clipPath,
+      clipDurationMillis: clipDurationMillis ?? this.clipDurationMillis,
+      clipPrebufferMillis: clipPrebufferMillis ?? this.clipPrebufferMillis,
       incidentId: incidentId ?? this.incidentId,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

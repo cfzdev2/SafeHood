@@ -328,6 +328,18 @@ const receiptInput = {bridgeReceipt: receipt,
 const eventDocuments = (harness) => [...harness.documents]
     .filter(([name]) => name.startsWith("cameraEvents/"));
 
+test("receipt AI zachowuje czas i źródło do powiązania prywatnego filmu",
+    async () => {
+      const h = createHarness({event: null});
+      const result = await h.aggregate(receiptInput);
+      const receipts = [...h.documents]
+          .filter(([name]) => name.startsWith("bridgeCameraEventReceipts/"));
+      assert.equal(receipts.length, 1);
+      assert.equal(receipts[0][1].source, "local-ai");
+      assert.equal(receipts[0][1].occurredAt, receiptInput.occurredAt);
+      assert.equal(receipts[0][1].result.eventId, result.eventId);
+    });
+
 test("retry po utracie odpowiedzi nie powiela wykryć ani push", async () => {
   const h = createHarness({event: null});
   const first = await h.aggregate(receiptInput);

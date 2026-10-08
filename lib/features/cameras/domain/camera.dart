@@ -41,6 +41,7 @@ class Camera {
   final bool aiEnabled;
   final bool aiPersonEnabled;
   final bool aiVehicleEnabled;
+  final bool aiRecordingEnabled;
   final String aiSensitivity;
 
   final bool hasSdCard;
@@ -78,6 +79,7 @@ class Camera {
     this.aiEnabled = false,
     this.aiPersonEnabled = true,
     this.aiVehicleEnabled = true,
+    this.aiRecordingEnabled = false,
     this.aiSensitivity = 'standard',
     required this.hasSdCard,
     this.ipAddress,
@@ -110,6 +112,7 @@ class Camera {
     bool? aiEnabled,
     bool? aiPersonEnabled,
     bool? aiVehicleEnabled,
+    bool? aiRecordingEnabled,
     String? aiSensitivity,
     bool? hasSdCard,
     CameraConnectionType? connectionType,
@@ -138,6 +141,7 @@ class Camera {
       aiEnabled: aiEnabled ?? this.aiEnabled,
       aiPersonEnabled: aiPersonEnabled ?? this.aiPersonEnabled,
       aiVehicleEnabled: aiVehicleEnabled ?? this.aiVehicleEnabled,
+      aiRecordingEnabled: aiRecordingEnabled ?? this.aiRecordingEnabled,
       aiSensitivity: aiSensitivity ?? this.aiSensitivity,
       hasSdCard: hasSdCard ?? this.hasSdCard,
       connectionType: connectionType ?? this.connectionType,
@@ -167,6 +171,7 @@ class Camera {
       'aiEnabled': aiEnabled,
       'aiPersonEnabled': aiPersonEnabled,
       'aiVehicleEnabled': aiVehicleEnabled,
+      'aiRecordingEnabled': aiRecordingEnabled,
       'aiSensitivity': aiSensitivity,
       'hasSdCard': hasSdCard,
       'connectionType': connectionType.name,
@@ -204,6 +209,7 @@ class Camera {
           ? map['aiVehicleEnabled'] as bool
           : true,
       aiSensitivity: _parseAiSensitivity(map['aiSensitivity']),
+      aiRecordingEnabled: map['aiRecordingEnabled'] == true,
       hasSdCard: map['hasSdCard'] as bool? ?? false,
       connectionType: _parseConnectionType(map['connectionType'] as String?),
       cloudProvider: _parseCloudProvider(map['cloudProvider']),

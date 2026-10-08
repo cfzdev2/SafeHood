@@ -41,6 +41,8 @@ const {
 
 const {SnapshotUploadQueue} = require('./ai/snapshot_upload_queue');
 const {AiEventOutbox} = require('./ai/event_outbox');
+const {ClipUploadQueue} = require('./ai/clip_upload_queue');
+const {EventRecordingManager} = require('./ai/event_recording_manager');
 
 const CONFIG_PATH =
   path.join(
@@ -186,6 +188,31 @@ const eventOutbox = new AiEventOutbox({
       `${safeAiErrorMessage(error)} ` + (willRetry ? `Ponowienie za ${retryInMs ?? '-'} ms.` :
         'Plik zachowano do sprawdzenia; nie będzie automatycznie wysyłany.'));
   },
+});
+
+const recordingDirectory = path.join(__dirname, 'data', 'ai-clips', createHash('sha256')
+  .update(JSON.stringify([bridgeConfig.projectId, bridgeConfig.region,
+    bridgeConfig.bridgeId, functionsBaseUrl])).digest('hex'));
+
+const clipQueue = new ClipUploadQueue({
+  directory: path.join(recordingDirectory, 'uploads'),
+  upload: (payload, signal) => callBridgeEndpoint('uploadBridgeCameraEventClip', payload, 60000, signal),
+  onRestored: (count) => {
+    if (count || AI_DIAGNOSTICS_ENABLED) console.log(`[BRIDGE AI CLIP] odtworzono nagrań = ${count}`);
+  },
+  onSaved: ({cameraId, result, attempts}) => {
+    console.log(`[BRIDGE AI CLIP][${cameraId}] event=${result.eventId}, bytes=${result.size}, ` +
+      `durationMs=${result.durationMillis}, prebufferMs=${result.prebufferMillis}, attempt=${attempts}`);
+  },
+  onError: ({payload, error, willRetry, retryInMs}) => {
+    console.error(`[BRIDGE AI CLIP][${payload?.cameraId ?? '-'}] ${safeAiErrorMessage(error)} ` +
+      (willRetry ? `Ponowienie za ${retryInMs ?? '-'} ms.` : 'Zakończono wysyłkę tego zadania.'));
+  },
+});
+
+const recordingManager = new EventRecordingManager({directory: recordingDirectory, uploadQueue: clipQueue,
+  onStatus: ({cameraId, status}) => console.log(`[BRIDGE AI BUFFER][${cameraId}] status=${status}`),
+  onError: ({cameraId, error}) => console.error(`[BRIDGE AI BUFFER][${cameraId}] ${safeAiErrorMessage(error)}`),
 });
 
 let shuttingDown = false;
@@ -593,6 +620,13 @@ async function ingestAiDetection(
     // Po długiej awarii nie przypisujemy bieżącego obrazu do starego zdarzenia.
     if (Date.now() <= snapshotDeadline) queueAiSnapshot(camera.id, input, acknowledgement);
   });
+  if (camera.aiRecordingEnabled === true) {
+    try {
+      recordingManager.capture(camera.id, {externalEventId: result.externalEventId, occurredAtMillis});
+    } catch (error) {
+      console.error(`[BRIDGE AI BUFFER][${camera.id}] ${safeAiErrorMessage(error)}`);
+    }
+  }
   if (AI_DIAGNOSTICS_ENABLED) {
     console.log(`[BRIDGE AI OUTBOX][${camera.id}] zapisano ${result.externalEventId}, ` +
       `oczekuje=${eventOutbox.pendingCount}`);
@@ -664,6 +698,7 @@ async function stopAiSession(
   cameraId,
 ) {
   snapshotQueue.cancelCamera(cameraId);
+  await recordingManager.stopCamera(cameraId);
   const entry =
     aiSessions.get(cameraId);
 
@@ -692,8 +727,15 @@ async function startAiSession(camera) {
     return false;
   }
 
-  const scheduler =
-    await getAiScheduler();
+  await recordingManager.syncCamera(camera.id, input, camera.aiRecordingEnabled === true);
+
+  let scheduler;
+  try {
+    scheduler = await getAiScheduler();
+  } catch (error) {
+    await recordingManager.stopCamera(camera.id);
+    throw error;
+  }
 
   if (shuttingDown) {
     return false;
@@ -701,6 +743,7 @@ async function startAiSession(camera) {
 
   const entry = {
     camera,
+    input,
     fingerprint:
       aiSessionFingerprint(camera),
     session: null,
@@ -877,6 +920,8 @@ async function syncAiSessions(
     ) {
       existing.camera =
         camera;
+
+      await recordingManager.syncCamera(cameraId, existing.input, camera.aiRecordingEnabled === true);
 
       continue;
     }
@@ -1148,6 +1193,8 @@ async function shutdown(signal) {
 
   shuttingDown = true;
   snapshotQueue.close();
+  await recordingManager.close();
+  await clipQueue.close();
   await eventOutbox.close();
 
   if (configurationTimer) {
@@ -1253,6 +1300,12 @@ async function main() {
   console.log('');
 
   await eventOutbox.start();
+  try {
+    await clipQueue.start();
+    await recordingManager.start();
+  } catch (error) {
+    console.error(`[BRIDGE AI CLIP] ${safeAiErrorMessage(error)}`);
+  }
   await queueConfigurationSync();
 
   await queueStateReport(

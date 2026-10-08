@@ -146,6 +146,7 @@ service cloud.firestore {
           'aiEnabled',
           'aiPersonEnabled',
           'aiVehicleEnabled',
+          'aiRecordingEnabled',
           'aiSensitivity',
           'updatedAt'
         ])
@@ -178,6 +179,11 @@ service cloud.firestore {
           ])
           || request.resource.data.motionDetectionEnabled
              is bool
+        )
+
+        && (
+          !changedKeys.hasAny(['aiRecordingEnabled'])
+          || request.resource.data.aiRecordingEnabled is bool
         )
 
         && (

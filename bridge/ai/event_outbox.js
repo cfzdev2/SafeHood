@@ -51,15 +51,20 @@ class AiEventOutbox {
     onDelivered = () => {}, onError = () => {}, onRestored = () => {},
     now = Date.now, createId = randomUUID, fileSystem = fs,
     setTimer = setTimeout, clearTimer = clearTimeout,
+    payloadNormalizer = normalizePayload, resultNormalizer = normalizeResult,
+    maximumAgeMs = 0,
   }) {
     if (typeof directory !== 'string' || !directory || typeof deliver !== 'function' ||
       !Number.isInteger(maximumJobs) || maximumJobs < 1 ||
       !Array.isArray(retryDelaysMs) || !retryDelaysMs.length ||
-      retryDelaysMs.some((delay) => !Number.isInteger(delay) || delay < 1)) {
+      retryDelaysMs.some((delay) => !Number.isInteger(delay) || delay < 1) ||
+      typeof payloadNormalizer !== 'function' || typeof resultNormalizer !== 'function' ||
+      !Number.isSafeInteger(maximumAgeMs) || maximumAgeMs < 0) {
       throw new TypeError('Nieprawidłowe opcje trwałej kolejki AI.');
     }
     Object.assign(this, {directory, deliver, maximumJobs, retryDelaysMs,
-      onDelivered, onError, onRestored, now, createId, fileSystem, setTimer, clearTimer});
+      onDelivered, onError, onRestored, now, createId, fileSystem, setTimer, clearTimer,
+      payloadNormalizer, resultNormalizer, maximumAgeMs});
     this._jobs = new Map();
     this._writes = Promise.resolve();
     this._started = null;
@@ -72,6 +77,7 @@ class AiEventOutbox {
   }
 
   get pendingCount() { return this._jobs.size; }
+  hasPending(externalEventId) { return this._jobs.has(externalEventId); }
 
   start() {
     if (!this._started) this._started = this._load();
@@ -85,14 +91,14 @@ class AiEventOutbox {
       if (!filename.endsWith('.json')) continue;
       try {
         const data = JSON.parse(await this.fileSystem.readFile(path.join(this.directory, filename), 'utf8'));
-        const payload = normalizePayload(data.payload);
+        const payload = this.payloadNormalizer(data.payload);
         if (data.version !== 1 || filename !== `${payload.externalEventId}.json` ||
           !Number.isFinite(data.enqueuedAtMillis) || data.enqueuedAtMillis < 1 ||
           !Number.isInteger(data.attempts) || data.attempts < 0 ||
           !Number.isFinite(data.notBeforeMillis) || data.notBeforeMillis < 0) {
           throw new Error('Uszkodzony plik kolejki AI.');
         }
-        const result = data.result ? normalizeResult(data.result, payload.externalEventId) : null;
+        const result = data.result ? this.resultNormalizer(data.result, payload.externalEventId) : null;
         jobs.push({...data, payload, result, afterDelivery: null});
       } catch (error) {
         await this.fileSystem.rename(path.join(this.directory, filename),
@@ -112,7 +118,7 @@ class AiEventOutbox {
     return this._serial(async () => {
       if (this._closed) throw new Error('Kolejka zdarzeń AI jest zamknięta.');
       if (this._jobs.size >= this.maximumJobs) throw new Error('Kolejka zdarzeń AI jest pełna.');
-      const payload = normalizePayload({...input, externalEventId: this.createId()});
+      const payload = this.payloadNormalizer({...input, externalEventId: this.createId(input)});
       if (this._jobs.has(payload.externalEventId)) throw new Error('Powtórzony identyfikator kolejki AI.');
       const job = {version: 1, payload, attempts: 0, notBeforeMillis: 0, result: null,
         enqueuedAtMillis: Math.max(this.now(), this._lastEnqueuedAt + 1), afterDelivery};
@@ -170,12 +176,16 @@ class AiEventOutbox {
     if (!job || this._closed) return;
     this._controller = new AbortController();
     try {
+      if (!job.result && this.maximumAgeMs > 0 &&
+          this.now() - job.enqueuedAtMillis > this.maximumAgeMs) {
+        throw Object.assign(new Error('Upłynął czas przechowywania zadania.'), {retryable: false});
+      }
       if (!job.result) {
         job.attempts += 1;
         await this._serial(() => this._write(job));
         if (this._closed) return;
         const response = await this.deliver(job.payload, this._controller.signal);
-        job.result = normalizeResult(response, job.payload.externalEventId);
+        job.result = this.resultNormalizer(response, job.payload.externalEventId);
         await this._serial(() => this._write(job));
       }
       await this._serial(async () => {

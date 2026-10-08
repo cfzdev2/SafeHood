@@ -25,9 +25,9 @@ const input = 'rtsp://camera.local/live';
 const event = {type: 'person', confidence: 0.9, occurredAtMillis: 1000};
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 
-function createHandler(ingestDetection, snapshotQueue, outbox = null) {
+function createHandler(ingestDetection, snapshotQueue, outbox = null, recordingManager = null) {
   return vm.runInNewContext(handlerCode, {
-    snapshotQueue, AI_DIAGNOSTICS_ENABLED: false,
+    snapshotQueue, recordingManager, AI_DIAGNOSTICS_ENABLED: false,
     eventOutbox: outbox ?? {enqueue: async (payload, afterDelivery) => {
       const result = await ingestDetection(payload);
       afterDelivery(result);
@@ -108,6 +108,31 @@ test('błąd zapisu zdarzenia do kolejki nie tworzy zadania zdjęcia', async () 
     enqueue: () => assert.fail('Zdarzenie nie zostało zapisane.'),
   });
   await assert.rejects(ingest(camera, input, event), /Dysk niedostępny/);
+});
+
+test('nagranie uruchamia się dopiero po trwałym zapisie wykrycia, bez czekania na ingest', async () => {
+  const calls = [];
+  let release;
+  const saved = new Promise((resolve) => { release = resolve; });
+  const handler = createHandler(null, null, {enqueue: () => saved}, {
+    capture: (cameraId, detection) => calls.push({cameraId, detection}),
+  });
+  const operation = handler({...camera, aiRecordingEnabled: true}, input, event);
+  await nextTurn();
+  assert.equal(calls.length, 0);
+  release({queued: true, externalEventId: '497c843d-9fdb-4fde-9c08-fca465877ae9'});
+  await operation;
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].detection.externalEventId, '497c843d-9fdb-4fde-9c08-fca465877ae9');
+  assert.equal(calls[0].detection.occurredAtMillis, event.occurredAtMillis);
+});
+
+test('awaria nagrania zachowuje już zapisane zdarzenie AI', async () => {
+  const result = {queued: true, externalEventId: '497c843d-9fdb-4fde-9c08-fca465877ae9'};
+  const handler = createHandler(null, null, {enqueue: async () => result}, {
+    capture: () => { throw new Error('Dysk nagrania jest pełny.'); },
+  });
+  assert.strictEqual(await handler({...camera, aiRecordingEnabled: true}, input, event), result);
 });
 
 test('wolne pobieranie zdjęcia nie zatrzymuje analizy następnej klatki', async (t) => {

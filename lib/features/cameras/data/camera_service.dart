@@ -135,6 +135,7 @@ class CameraService {
     required bool personEnabled,
     required bool vehicleEnabled,
     required String sensitivity,
+    bool? recordingEnabled,
   }) {
     const allowedSensitivities = {'low', 'standard', 'high'};
 
@@ -151,6 +152,7 @@ class CameraService {
       'aiPersonEnabled': personEnabled,
       'aiVehicleEnabled': vehicleEnabled,
       'aiSensitivity': sensitivity,
+      'aiRecordingEnabled': ?recordingEnabled,
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }

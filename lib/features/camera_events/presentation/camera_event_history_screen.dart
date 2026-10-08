@@ -309,7 +309,7 @@ class _CameraEventHistoryCard extends StatelessWidget {
                             label: '${event.occurrenceCount}×',
                           ),
 
-                        if (event.clipUrl != null)
+                        if (event.hasClip)
                           const _InfoChip(
                             icon: Icons.movie_outlined,
                             label: 'Nagranie',

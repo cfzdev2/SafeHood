@@ -58,6 +58,8 @@ const {
 const geofire =
     require("geofire-common");
 
+const {createClipUploadHandler} = require("./camera_event_clip");
+
 initializeApp();
 
 const db = getFirestore();
@@ -2396,6 +2398,9 @@ async function ingestCameraEventInternal(
             transaction.set(receiptRef, {
               ownerId, cameraId, bridgeId: receipt.bridgeId,
               externalEventId, payloadHash, result: eventResult,
+              source,
+              occurredAt: typeof input.occurredAt === "string" ?
+                input.occurredAt : null,
               createdAt: Timestamp.fromMillis(nowMillis),
             });
             return {...eventResult, externalEventId, duplicate: false};
@@ -3798,6 +3803,8 @@ exports.getBridgeConfiguration = onRequest(
 
             aiVehicleEnabled,
 
+            aiRecordingEnabled: camera.aiRecordingEnabled === true,
+
             aiSensitivity,
           });
         }
@@ -4273,6 +4280,17 @@ exports.ingestBridgeCameraEvent =
           }
         },
     );
+/**
+ * Zapisuje prywatny film powiązany z potwierdzeniem zdarzenia AI.
+ */
+exports.uploadBridgeCameraEventClip = onRequest(
+    {region: "europe-central2", timeoutSeconds: 60,
+      memory: "512MiB", concurrency: 4, maxInstances: 3},
+    createClipUploadHandler({db,
+      authenticate: authenticateBridgeRequest,
+      getBucket: () => getStorage().bucket(), FieldValue, Timestamp}),
+);
+
 /**
  * Zapisuje prywatne zdjęcie zdarzenia
  * utworzonego przez lokalną analizę AI.
