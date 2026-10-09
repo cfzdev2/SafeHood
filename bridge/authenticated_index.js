@@ -27,7 +27,10 @@ const {
 
 const {
   YoloxDetector,
+  modelIdentifier,
 } = require('./ai/yolox_detector');
+
+const {createAiEventMetadata} = require('./ai/event_metadata');
 
 const {
   resolveOnvifStreamUri,
@@ -610,12 +613,17 @@ async function ingestAiDetection(
       Date.now();
 
   const snapshotDeadline = Date.now() + 30000;
+  const aiMetadata = createAiEventMetadata(event, {
+    occurredAtMillis,
+    modelId: modelIdentifier,
+  });
   const result = await eventOutbox.enqueue({
     cameraId: camera.id,
     type: event.type,
     source: 'local-ai',
     confidence: event.confidence ?? null,
     occurredAt: new Date(occurredAtMillis).toISOString(),
+    ...(aiMetadata === null ? {} : {aiMetadata}),
   }, (acknowledgement) => {
     // Po długiej awarii nie przypisujemy bieżącego obrazu do starego zdarzenia.
     if (Date.now() <= snapshotDeadline) queueAiSnapshot(camera.id, input, acknowledgement);

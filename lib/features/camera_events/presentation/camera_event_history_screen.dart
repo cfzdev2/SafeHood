@@ -257,6 +257,8 @@ class _CameraEventHistoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final aiMetadata = event.aiMetadata;
+
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -303,7 +305,19 @@ class _CameraEventHistoryCard extends StatelessWidget {
                       children: [
                         _InfoChip(icon: statusIcon, label: statusLabel),
 
-                        if (event.occurrenceCount > 1)
+                        if ((aiMetadata?.personCount ?? 0) > 0)
+                          _InfoChip(
+                            icon: Icons.person_outline,
+                            label: '${aiMetadata!.personCount} os.',
+                          ),
+
+                        if ((aiMetadata?.vehicleCount ?? 0) > 0)
+                          _InfoChip(
+                            icon: Icons.directions_car_outlined,
+                            label: '${aiMetadata!.vehicleCount} poj.',
+                          ),
+
+                        if (aiMetadata == null && event.occurrenceCount > 1)
                           _InfoChip(
                             icon: Icons.repeat,
                             label: '${event.occurrenceCount}×',

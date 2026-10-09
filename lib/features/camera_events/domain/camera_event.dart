@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'camera_event_ai_metadata.dart';
+
 enum CameraEventType {
   motion,
   person,
@@ -44,6 +46,7 @@ class CameraEvent {
   /// Pewność detekcji 0.0 - 1.0.
   /// Nie każda kamera ją udostępnia.
   final double? confidence;
+  final CameraEventAiMetadata? aiMetadata;
 
   final String? snapshotUrl;
   final String? snapshotPath;
@@ -72,6 +75,7 @@ class CameraEvent {
     required this.createdAt,
     required this.updatedAt,
     this.confidence,
+    this.aiMetadata,
     this.snapshotUrl,
     this.snapshotPath,
     this.clipUrl,
@@ -121,6 +125,7 @@ class CameraEvent {
       'occurrenceCount': occurrenceCount,
       'source': source,
       'confidence': confidence,
+      'aiMetadata': aiMetadata?.toMap(),
       'snapshotUrl': snapshotUrl,
       'snapshotPath': snapshotPath,
       'clipUrl': clipUrl,
@@ -150,6 +155,7 @@ class CameraEvent {
       occurrenceCount: (map['occurrenceCount'] as num?)?.toInt() ?? 1,
       source: map['source'] as String? ?? 'unknown',
       confidence: (map['confidence'] as num?)?.toDouble(),
+      aiMetadata: CameraEventAiMetadata.tryParse(map['aiMetadata']),
       snapshotUrl: map['snapshotUrl'] as String?,
       snapshotPath: map['snapshotPath'] as String?,
       clipUrl: map['clipUrl'] as String?,
@@ -173,6 +179,7 @@ class CameraEvent {
     int? occurrenceCount,
     String? source,
     double? confidence,
+    CameraEventAiMetadata? aiMetadata,
     String? snapshotUrl,
     String? snapshotPath,
     String? clipUrl,
@@ -194,6 +201,7 @@ class CameraEvent {
       occurrenceCount: occurrenceCount ?? this.occurrenceCount,
       source: source ?? this.source,
       confidence: confidence ?? this.confidence,
+      aiMetadata: aiMetadata ?? this.aiMetadata,
       snapshotUrl: snapshotUrl ?? this.snapshotUrl,
       snapshotPath: snapshotPath ?? this.snapshotPath,
       clipUrl: clipUrl ?? this.clipUrl,

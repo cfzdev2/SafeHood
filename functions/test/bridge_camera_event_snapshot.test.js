@@ -9,6 +9,7 @@ const {createHash} = require("node:crypto");
 const {Timestamp, FieldValue} = require("firebase-admin/firestore");
 const {HttpsError} = require("firebase-functions/v2/https");
 const snapshotHelpers = require("../camera_event_snapshot");
+const aiMetadataHelpers = require("../camera_event_ai_metadata");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
 const readBlock = (startMarker, endMarker = "\n/**") => {
@@ -157,6 +158,7 @@ const createHarness = ({
   });
   const aggregate = vm.runInNewContext(aggregationCode, {
     db, Timestamp, HttpsError, createHash,
+    ...aiMetadataHelpers,
     sendCameraEventNotification: async (data) => notifications.push(data),
     console: {error: () => {}},
   });
@@ -327,6 +329,19 @@ const receiptInput = {bridgeReceipt: receipt,
   occurredAt: "2026-10-06T19:00:00.000Z"};
 const eventDocuments = (harness) => [...harness.documents]
     .filter(([name]) => name.startsWith("cameraEvents/"));
+const aiMetadata = ({
+  className = "person",
+  detectionCount = 3,
+  firstSeenAt = "2026-10-06T18:59:59.000Z",
+  lastSeenAt = receiptInput.occurredAt,
+} = {}) => ({
+  schemaVersion: 1,
+  className,
+  detectionCount,
+  firstSeenAt,
+  lastSeenAt,
+  modelId: "yolox-nano-coco-c789161e",
+});
 
 test("receipt AI zachowuje czas i źródło do powiązania prywatnego filmu",
     async () => {
@@ -340,6 +355,32 @@ test("receipt AI zachowuje czas i źródło do powiązania prywatnego filmu",
       assert.equal(receipts[0][1].result.eventId, result.eventId);
     });
 
+test("starszy Bridge zachowuje dotychczasowy hash potwierdzenia", async () => {
+  const h = createHarness({event: null});
+  await h.aggregate(receiptInput);
+  const saved = [...h.documents]
+      .find(([name]) => name.startsWith("bridgeCameraEventReceipts/"))[1];
+  const previousHash = createHash("sha256")
+      .update(JSON.stringify([
+        "person", "local-ai", null, null, null, receiptInput.occurredAt,
+      ]))
+      .digest("hex");
+  assert.equal(saved.payloadHash, previousHash);
+});
+
+test("retry po aktualizacji backendu akceptuje starszy hash", async () => {
+  const h = createHarness({event: null});
+  const original = await h.aggregate(receiptInput);
+  const retry = await h.aggregate({
+    ...receiptInput,
+    aiMetadata: aiMetadata(),
+  });
+  assert.equal(retry.eventId, original.eventId);
+  assert.equal(retry.duplicate, true);
+  assert.equal(eventDocuments(h).length, 1);
+  assert.equal(eventDocuments(h)[0][1].aiMetadata, undefined);
+});
+
 test("retry po utracie odpowiedzi nie powiela wykryć ani push", async () => {
   const h = createHarness({event: null});
   const first = await h.aggregate(receiptInput);
@@ -350,6 +391,76 @@ test("retry po utracie odpowiedzi nie powiela wykryć ani push", async () => {
   assert.equal(eventDocuments(h).length, 1);
   assert.equal(eventDocuments(h)[0][1].occurrenceCount, 1);
   assert.equal(h.notifications.length, 1);
+});
+
+test("scala liczbę osób, pojazdów, klasy i zakres aktywności AI", async () => {
+  const h = createHarness({event: null});
+  const first = await h.aggregate({
+    ...receiptInput,
+    type: "vehicle",
+    confidence: 0.82,
+    aiMetadata: aiMetadata({className: "bus"}),
+  });
+  await h.aggregate({
+    bridgeReceipt: {
+      ...receipt,
+      externalEventId: "22222222-2222-4222-8222-222222222222",
+    },
+    occurredAt: "2026-10-06T19:00:00.500Z",
+    type: "person",
+    confidence: 0.94,
+    aiMetadata: aiMetadata({
+      detectionCount: 4,
+      firstSeenAt: "2026-10-06T18:59:59.500Z",
+      lastSeenAt: "2026-10-06T19:00:00.500Z",
+    }),
+  });
+  const stored = h.documents.get(`cameraEvents/${first.eventId}`).aiMetadata;
+  assert.equal(stored.totalObjects, 2);
+  assert.equal(stored.personCount, 1);
+  assert.equal(stored.vehicleCount, 1);
+  assert.deepEqual(stored.classCounts, {bus: 1, person: 1});
+  assert.equal(stored.maximumConfidence, 0.94);
+  assert.equal(stored.firstSeenAt.toMillis(),
+      Date.parse("2026-10-06T18:59:59.000Z"));
+  assert.equal(stored.lastSeenAt.toMillis(),
+      Date.parse("2026-10-06T19:00:00.500Z"));
+  assert.equal(stored.detectionFrameCount, 7);
+});
+
+test("retry tego samego UUID nie podwaja metadanych AI", async () => {
+  const h = createHarness({event: null});
+  const input = {...receiptInput, aiMetadata: aiMetadata()};
+  const result = await h.aggregate(input);
+  await h.aggregate(input);
+  const stored = h.documents.get(`cameraEvents/${result.eventId}`).aiMetadata;
+  assert.equal(stored.totalObjects, 1);
+  assert.equal(stored.personCount, 1);
+  assert.deepEqual(stored.classCounts, {person: 1});
+});
+
+test("odrzuca sfałszowane lub niespójne metadane AI", async () => {
+  const h = createHarness({event: null});
+  await assert.rejects(h.aggregate({
+    ...receiptInput,
+    type: "vehicle",
+    aiMetadata: aiMetadata({className: "person"}),
+  }), {code: "invalid-argument"});
+  await assert.rejects(h.aggregate({
+    source: "onvif",
+    type: "motion",
+    aiMetadata: aiMetadata(),
+  }), {code: "invalid-argument"});
+  assert.equal(eventDocuments(h).length, 0);
+});
+
+test("starszy Bridge bez metadanych nadal tworzy zdarzenie", async () => {
+  const h = createHarness({event: null});
+  const result = await h.aggregate(receiptInput);
+  assert.equal(
+      h.documents.get(`cameraEvents/${result.eventId}`).aiMetadata,
+      undefined,
+  );
 });
 
 test("równoległe żądania jednego UUID otrzymują jedno zdarzenie", async () => {

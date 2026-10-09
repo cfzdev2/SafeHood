@@ -3,6 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const {randomUUID} = require('node:crypto');
+const {normalizeAiEventMetadata} = require('./event_metadata');
 
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -16,6 +17,11 @@ function normalizePayload(value) {
     typeof value.occurredAt !== 'string' || !Number.isFinite(Date.parse(value.occurredAt))) {
     throw new TypeError('Nieprawidłowe dane zdarzenia w kolejce AI.');
   }
+  const aiMetadata = value.aiMetadata == null ? null :
+    normalizeAiEventMetadata(value.aiMetadata, {
+      type: value.type,
+      occurredAt: value.occurredAt,
+    });
   // Kolejka nie zapisuje konfiguracji kamery, adresu RTSP ani haseł.
   return {
     externalEventId: value.externalEventId,
@@ -24,6 +30,7 @@ function normalizePayload(value) {
     source: 'local-ai',
     confidence: value.confidence,
     occurredAt: value.occurredAt,
+    ...(aiMetadata === null ? {} : {aiMetadata}),
   };
 }
 

@@ -11,6 +11,10 @@ const {once} = require('node:events');
 
 const payload = {cameraId: 'camera-1', type: 'person', source: 'local-ai',
   confidence: 0.9, occurredAt: '2026-10-06T19:00:00.000Z'};
+const aiMetadata = {schemaVersion: 1, className: 'person', detectionCount: 3,
+  firstSeenAt: '2026-10-06T18:59:59.000Z',
+  lastSeenAt: '2026-10-06T19:00:00.000Z',
+  modelId: 'yolox-nano-coco-c789161e'};
 const acknowledgement = (event) => ({ok: true, externalEventId: event.externalEventId,
   eventId: 'backend-event', type: event.type, merged: false, occurrenceCount: 1,
   duplicate: false, snapshotRequired: true});
@@ -82,6 +86,27 @@ test('restart odtwarza ten sam identyfikator i czas zdarzenia', async (t) => {
   await second.tick();
   assert.equal(second.sent[0].externalEventId, original.externalEventId);
   assert.equal(second.sent[0].occurredAt, payload.occurredAt);
+});
+
+test('restart zachowuje zweryfikowane metadane AI', async (t) => {
+  const first = await createHarness(t);
+  await first.queue.enqueue({...payload, aiMetadata});
+  await first.queue.close();
+  const second = await createHarness(t, {directory: first.directory});
+  await second.tick();
+  assert.deepEqual(second.sent[0].aiMetadata, aiMetadata);
+});
+
+test('kolejka odrzuca obcą klasę i fałszywy model', async (t) => {
+  const h = await createHarness(t);
+  await assert.rejects(h.queue.enqueue({...payload, aiMetadata: {
+    ...aiMetadata,
+    className: 'truck',
+  }}), /metadane/);
+  await assert.rejects(h.queue.enqueue({...payload, aiMetadata: {
+    ...aiMetadata,
+    modelId: 'unknown-model',
+  }}), /metadane/);
 });
 
 test('awaria backendu zachowuje plik i ponawia niezmieniony payload', async (t) => {

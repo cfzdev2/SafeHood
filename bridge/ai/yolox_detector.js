@@ -27,6 +27,9 @@ const modelSha256 =
   'c789161ed43c8269fcd4e67c67eeeb4e' +
   '80c622da2eb296a20bc6007bd18a0b7d';
 
+const modelIdentifier =
+  `yolox-nano-coco-${modelSha256.slice(0, 8)}`;
+
 const defaultModelPath =
   path.join(
     __dirname,
@@ -237,4 +240,5 @@ module.exports = {
   YoloxDetector,
   inputHeight,
   inputWidth,
+  modelIdentifier,
 };

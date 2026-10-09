@@ -258,6 +258,25 @@ test("API wiąże UUID z uwierzytelnionym Bridge", async () => {
   assert.equal(h.response.body.externalEventId, externalEventId);
 });
 
+test("API przekazuje metadane AI wyłącznie do silnika backendu", async () => {
+  const h = createHarness();
+  const metadata = {
+    schemaVersion: 1,
+    className: "bus",
+    detectionCount: 3,
+    firstSeenAt: "2026-10-09T12:00:00.000Z",
+    lastSeenAt: "2026-10-09T12:00:01.000Z",
+    modelId: "yolox-nano-coco-c789161e",
+  };
+  await h.send({
+    type: "vehicle",
+    externalEventId: "11111111-1111-4111-8111-111111111111",
+    aiMetadata: metadata,
+  });
+  assert.equal(h.response.statusCode, 200);
+  assert.deepEqual(h.calls[0].aiMetadata, metadata);
+});
+
 test("API odrzuca nieprawidłowe UUID przed zapisem zdarzenia", async () => {
   const h = createHarness();
   await h.send({externalEventId: "wrong/id"});

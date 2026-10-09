@@ -6,6 +6,7 @@ import '../../cameras/data/camera_service.dart';
 import 'camera_event_live_screen.dart';
 import 'widgets/camera_event_snapshot.dart';
 import 'widgets/camera_event_clip.dart';
+import 'widgets/camera_event_ai_summary.dart';
 
 import 'dart:async';
 
@@ -113,6 +114,16 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
     final second = local.second.toString().padLeft(2, '0');
 
     return '$hour:$minute:$second';
+  }
+
+  String _detectionCountLabel(CameraEvent event) {
+    final aiMetadata = event.aiMetadata;
+    if (aiMetadata != null) {
+      return 'Obiekty potwierdzone przez AI: ${aiMetadata.totalObjects}';
+    }
+    return event.occurrenceCount == 1
+        ? '1 wykrycie'
+        : '${event.occurrenceCount} wykrycia';
   }
 
   Future<void> _openLive(CameraEvent event) async {
@@ -539,16 +550,19 @@ class _CameraEventDetailsScreenState extends State<CameraEventDetailsScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      event.occurrenceCount == 1
-                          ? '1 wykrycie'
-                          : '${event.occurrenceCount} '
-                                'wykrycia',
+                      _detectionCountLabel(event),
                     ),
                   ],
                 ),
               ),
 
               const SizedBox(height: 16),
+
+              if (event.aiMetadata != null) ...[
+                CameraEventAiSummary(metadata: event.aiMetadata!),
+
+                const SizedBox(height: 16),
+              ],
 
               if (event.hasSnapshot)
                 AspectRatio(

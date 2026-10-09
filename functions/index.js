@@ -60,6 +60,11 @@ const geofire =
 
 const {createClipUploadHandler} = require("./camera_event_clip");
 
+const {
+  mergeCameraEventAiMetadata,
+  normalizeBridgeAiMetadata,
+} = require("./camera_event_ai_metadata");
+
 initializeApp();
 
 const db = getFirestore();
@@ -2295,6 +2300,32 @@ async function ingestCameraEventInternal(
     }
   }
 
+  if (input.aiMetadata != null &&
+      (!input.bridgeReceipt || source !== "local-ai")) {
+    throw new HttpsError(
+        "invalid-argument",
+        "Metadane AI wymagają uwierzytelnionego Bridge.",
+    );
+  }
+
+  let aiMetadata = null;
+  if (input.bridgeReceipt && source === "local-ai") {
+    try {
+      aiMetadata = normalizeBridgeAiMetadata(
+          input.aiMetadata,
+          {
+            type,
+            occurredAtMillis,
+          },
+      );
+    } catch (_) {
+      throw new HttpsError(
+          "invalid-argument",
+          "Nieprawidłowe metadane AI.",
+      );
+    }
+  }
+
   const cameraRef =
       db.collection("users")
           .doc(ownerId)
@@ -2323,10 +2354,16 @@ async function ingestCameraEventInternal(
       ])).digest("hex") : null;
   const receiptRef = receipt ?
     db.collection("bridgeCameraEventReceipts").doc(receiptId) : null;
+  const payloadParts = [
+    type, source, confidence, snapshotUrl, clipUrl, input.occurredAt,
+  ];
+  const legacyPayloadHash = receipt ? createHash("sha256")
+      .update(JSON.stringify(payloadParts)).digest("hex") : null;
+  if (aiMetadata !== null) {
+    payloadParts.push(aiMetadata);
+  }
   const payloadHash = receipt ? createHash("sha256")
-      .update(JSON.stringify([
-        type, source, confidence, snapshotUrl, clipUrl, input.occurredAt,
-      ])).digest("hex") : null;
+      .update(JSON.stringify(payloadParts)).digest("hex") : null;
 
   const result =
     await db.runTransaction(
@@ -2365,7 +2402,9 @@ async function ingestCameraEventInternal(
             const saved = await transaction.get(receiptRef);
             if (saved.exists) {
               const data = saved.data();
-              if (data.payloadHash !== payloadHash) {
+              const legacyMetadataRetry = aiMetadata !== null &&
+                data.payloadHash === legacyPayloadHash;
+              if (data.payloadHash !== payloadHash && !legacyMetadataRetry) {
                 throw new HttpsError(
                     "invalid-argument", "externalEventId ma inne dane.",
                 );
@@ -2509,48 +2548,63 @@ async function ingestCameraEventInternal(
               const eventRef =
                 activeEventSnapshot.ref;
 
+              const updatedEventData = {
+                type: mergedType,
+                occurredAt: activeEvent.occurredAt instanceof Timestamp ?
+                  Timestamp.fromMillis(Math.min(occurredAtMillis,
+                      activeEvent.occurredAt.toMillis())) :
+                  occurredAtTimestamp,
+                lastOccurredAt:
+                  Timestamp.fromMillis(Math.max(occurredAtMillis,
+                      previousTime instanceof Timestamp ?
+                        previousTime.toMillis() : 0)),
+                occurrenceCount:
+                  currentCount + 1,
+                source:
+                  activeEvent.source ===
+                  source ?
+                    source :
+                    "multiple",
+                hasLocalAiDetection:
+                  activeEvent.hasLocalAiDetection === true ||
+                  activeEvent.source === "local-ai" ||
+                  source === "local-ai",
+                confidence:
+                  mergeConfidence(
+                      activeEvent
+                          .confidence,
+                      confidence,
+                  ),
+                snapshotUrl:
+                  snapshotUrl ||
+                  activeEvent
+                      .snapshotUrl ||
+                  null,
+                clipUrl:
+                  clipUrl ||
+                  activeEvent
+                      .clipUrl ||
+                  null,
+                updatedAt:
+                  nowTimestamp,
+              };
+
+              if (aiMetadata !== null) {
+                updatedEventData.aiMetadata =
+                  mergeCameraEventAiMetadata(
+                      activeEvent.aiMetadata,
+                      aiMetadata,
+                      {
+                        type,
+                        confidence,
+                        Timestamp,
+                      },
+                  );
+              }
+
               transaction.update(
                   eventRef,
-                  {
-                    type: mergedType,
-                    occurredAt: activeEvent.occurredAt instanceof Timestamp ?
-                      Timestamp.fromMillis(Math.min(occurredAtMillis,
-                          activeEvent.occurredAt.toMillis())) :
-                      occurredAtTimestamp,
-                    lastOccurredAt:
-                      Timestamp.fromMillis(Math.max(occurredAtMillis,
-                          previousTime instanceof Timestamp ?
-                            previousTime.toMillis() : 0)),
-                    occurrenceCount:
-                      currentCount + 1,
-                    source:
-                      activeEvent.source ===
-                      source ?
-                        source :
-                        "multiple",
-                    hasLocalAiDetection:
-                      activeEvent.hasLocalAiDetection === true ||
-                      activeEvent.source === "local-ai" ||
-                      source === "local-ai",
-                    confidence:
-                      mergeConfidence(
-                          activeEvent
-                              .confidence,
-                          confidence,
-                      ),
-                    snapshotUrl:
-                      snapshotUrl ||
-                      activeEvent
-                          .snapshotUrl ||
-                      null,
-                    clipUrl:
-                      clipUrl ||
-                      activeEvent
-                          .clipUrl ||
-                      null,
-                    updatedAt:
-                      nowTimestamp,
-                  },
+                  updatedEventData,
               );
 
               transaction.set(
@@ -2584,6 +2638,17 @@ async function ingestCameraEventInternal(
           const eventRef =
             eventsCollection.doc();
 
+          const eventAiMetadata = aiMetadata === null ? null :
+            mergeCameraEventAiMetadata(
+                null,
+                aiMetadata,
+                {
+                  type,
+                  confidence,
+                  Timestamp,
+                },
+            );
+
           const eventData = {
             cameraId,
             ownerId,
@@ -2599,6 +2664,9 @@ async function ingestCameraEventInternal(
             confidence,
             snapshotUrl,
             clipUrl,
+            ...(eventAiMetadata === null ? {} : {
+              aiMetadata: eventAiMetadata,
+            }),
             incidentId: null,
             createdAt:
               nowTimestamp,
@@ -4204,6 +4272,8 @@ exports.ingestBridgeCameraEvent =
                   source,
                   confidence:
                       data.confidence,
+                  aiMetadata:
+                      data.aiMetadata,
                   snapshotUrl:
                       data.snapshotUrl,
                   clipUrl:

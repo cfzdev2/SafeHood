@@ -10,6 +10,8 @@ const os = require('node:os');
 const {AiEventOutbox} = require('../ai/event_outbox');
 const {CameraAiSession} = require('../ai/camera_ai_session');
 const {SnapshotUploadQueue} = require('../ai/snapshot_upload_queue');
+const {createAiEventMetadata} = require('../ai/event_metadata');
+const {modelIdentifier} = require('../ai/yolox_detector');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'authenticated_index.js'), 'utf8');
 const start = source.indexOf('async function ingestAiDetection(');
@@ -28,6 +30,7 @@ const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 function createHandler(ingestDetection, snapshotQueue, outbox = null, recordingManager = null) {
   return vm.runInNewContext(handlerCode, {
     snapshotQueue, recordingManager, AI_DIAGNOSTICS_ENABLED: false,
+    createAiEventMetadata, modelIdentifier,
     eventOutbox: outbox ?? {enqueue: async (payload, afterDelivery) => {
       const result = await ingestDetection(payload);
       afterDelivery(result);
@@ -82,6 +85,32 @@ test('zdarzenie scalone bez zdjęcia trafia do kolejki', async () => {
   assert.equal(calls[0].cameraId, camera.id);
   assert.equal(calls[0].eventId, result.eventId);
   assert.equal(calls[0].input, input);
+});
+
+test('zapisuje klasę, zakres czasu i model razem ze zdarzeniem', async () => {
+  let saved;
+  const ingest = createHandler(null, null, {
+    enqueue: async (payload) => {
+      saved = payload;
+      return {queued: true, externalEventId: '497c843d-9fdb-4fde-9c08-fca465877ae9'};
+    },
+  });
+  await ingest(camera, input, {
+    type: 'vehicle',
+    className: 'bus',
+    confidence: 0.91,
+    detectionCount: 3,
+    firstSeenAtMillis: 500,
+    occurredAtMillis: 1000,
+  });
+  assert.deepEqual(saved.aiMetadata, {
+    schemaVersion: 1,
+    className: 'bus',
+    detectionCount: 3,
+    firstSeenAt: '1970-01-01T00:00:00.500Z',
+    lastSeenAt: '1970-01-01T00:00:01.000Z',
+    modelId: modelIdentifier,
+  });
 });
 
 test('wskazanie istniejącego zdjęcia nie uruchamia pobierania', async () => {

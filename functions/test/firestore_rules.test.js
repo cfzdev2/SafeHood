@@ -155,6 +155,17 @@ test("klient nie podpina własnego filmu do zdarzenia", async () => {
   }));
 });
 
+test("klient nie może dopisać ani zmienić metadanych AI", async () => {
+  const reference = doc(firestoreFor(ownerId), "cameraEvents", eventId);
+  await assertFails(updateDoc(reference, {
+    aiMetadata: {
+      schemaVersion: 1,
+      totalObjects: 999,
+    },
+    updatedAt: serverTimestamp(),
+  }));
+});
+
 test(
     "właściciel odczytuje swoją kamerę",
     async () => {
