@@ -8,7 +8,8 @@ const path = require('node:path');
 const {EventEmitter} = require('node:events');
 const {PassThrough} = require('node:stream');
 const {randomUUID} = require('node:crypto');
-const {EventVideoBuffer, buildBufferArguments, parseSegmentIndex} = require('../ai/event_video_buffer');
+const {EventVideoBuffer, buildBufferArguments, parseSegmentIndex,
+  parseLiveSegmentIndex} = require('../ai/event_video_buffer');
 const {EventRecordingManager} = require('../ai/event_recording_manager');
 
 test('RTSP używa TCP, ma ograniczony bufor, H.264 i nie nagrywa audio', () => {
@@ -32,16 +33,31 @@ test('indeks obsługuje zawinięcie bufora i blokuje ścieżki poza nim', () => 
   }
 });
 
+test('indeks LIVE odzyskuje najnowszy ciągły fragment po skoku czasu', () => {
+  const parsed = parseLiveSegmentIndex(
+    'segment_14.mp4,28.0,30.0\nsegment_15.mp4,30.0,32.0\n' +
+    'segment_00.mp4,0.0,2.0\nsegment_01.mp4,2.0,4.0\n');
+  assert.equal(parsed.timelineDiscontinuity, true);
+  assert.deepEqual(parsed.rows.map((row) => row.filename),
+    ['segment_00.mp4', 'segment_01.mp4']);
+  assert.equal(parseSegmentIndex('segment_00.mp4,0.0,2.6\n')[0].end, 2.6);
+});
+
 async function bufferHarness(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'safehood-buffer-'));
   let now = 1000000;
   const captures = [];
   const cancellations = [];
   const errors = [];
+  let kills = 0;
   const child = new EventEmitter();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
-  child.kill = () => { queueMicrotask(() => child.emit('close', 0)); return true; };
+  child.kill = () => {
+    kills++;
+    queueMicrotask(() => child.emit('close', 0));
+    return true;
+  };
   const buffer = new EventVideoBuffer({input: 'rtsp://user:secret@camera/live',
     directory: path.join(root, 'buffer'), workDirectory: path.join(root, 'work'),
     postbufferSeconds: 2, now: () => now, spawnProcess: () => child,
@@ -52,6 +68,7 @@ async function bufferHarness(t) {
   clearInterval(buffer._timer);
   buffer._timer = null;
   return {root, buffer, captures, cancellations, errors, advance: (ms) => { now += ms; },
+    get kills() { return kills; },
     trigger: () => buffer.capture({externalEventId: randomUUID(), occurredAtMillis: now}),
     async segments(ranges) {
       for (const [start, end] of ranges) {
@@ -106,6 +123,61 @@ test('krótki odczyt CSV nie anuluje nagrania, brak ciągłego obrazu je odrzuca
   assert.equal(h.captures.length, 0);
   assert.equal(h.cancellations.length, 1);
   assert.match(h.errors[0].message, /ciągłego obrazu/);
+});
+
+test('wadliwy indeks nie zatrzymuje FFmpeg i bufor wraca do pracy', async (t) => {
+  const h = await bufferHarness(t);
+  await h.segments([[0, 2]]);
+  assert.equal(h.trigger(), 'queued');
+  await h.buffer._io;
+  await fs.writeFile(path.join(h.buffer.directory, 'index.csv'),
+    'segment_00.mp4,0,999\n');
+  for (let i = 0; i < 6; i++) await h.buffer._poll();
+  assert.equal(h.kills, 0);
+  assert.ok(h.buffer._capture);
+  h.advance(2000);
+  await h.segments([[0, 2], [2, 4]]);
+  assert.equal(h.captures.length, 1);
+  assert.equal(h.errors.length, 0);
+});
+
+test('trwale wadliwy indeks zatrzymuje martwy bufor dopiero po limicie', async (t) => {
+  const h = await bufferHarness(t);
+  await h.segments([[0, 2]]);
+  await fs.writeFile(path.join(h.buffer.directory, 'index.csv'),
+    'segment_00.mp4,0,999\n');
+  h.advance(45001);
+  await h.buffer._poll();
+  assert.equal(h.kills, 1);
+  assert.equal(h.errors.length, 1);
+  assert.match(h.errors[0].message, /nie otrzymuje obrazu/);
+});
+
+test('reset czasu anuluje tylko bieżący klip i pozwala nagrać następny', async (t) => {
+  const h = await bufferHarness(t);
+  await h.segments([[20, 22], [22, 24]]);
+  assert.equal(h.trigger(), 'queued');
+  await h.buffer._io;
+  await h.segments([[0, 2]]);
+  assert.equal(h.cancellations.length, 1);
+  assert.match(h.errors[0].message, /ciągłego obrazu/);
+  assert.equal(h.buffer.running, true);
+  assert.equal(h.trigger(), 'queued');
+  await h.buffer._io;
+  h.advance(2000);
+  await h.segments([[0, 2], [2, 4]]);
+  assert.equal(h.captures.length, 1);
+});
+
+test('ten sam wykryty skok czasu nie anuluje kolejnego klipu', async (t) => {
+  const h = await bufferHarness(t);
+  await h.segments([[0, 2], [4, 6]]);
+  assert.equal(h.trigger(), 'queued');
+  await h.buffer._io;
+  h.advance(2000);
+  await h.segments([[0, 2], [4, 6], [6, 8]]);
+  assert.equal(h.captures.length, 1);
+  assert.equal(h.cancellations.length, 0);
 });
 
 test('wyłączenie kamery usuwa niedokończony bufor i przechwytywanie', async (t) => {

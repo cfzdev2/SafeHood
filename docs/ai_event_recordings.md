@@ -168,6 +168,11 @@ a późniejsza część autobus i ludzi.
 - Pierścień ma 16 segmentów po około 2 sekundy. Każda kamera z włączonym
   nagrywaniem uruchamia dodatkowy proces FFmpeg. Kodowanie gotowych filmów
   jest wykonywane pojedynczo dla całego Bridge.
+- Chwilowo niepełny indeks FFmpeg ani typowy skok czasu RTSP nie zatrzymuje
+  całego bufora. Bridge przechodzi na najnowszy ciągły fragment; jeżeli skok
+  wystąpi podczas zdarzenia, pomijany jest tylko ten jeden niespójny klip.
+  Trwale uszkodzony lub zatrzymany bufor jest zamykany po 45 sekundach
+  i uruchamiany ponownie przy kolejnej synchronizacji konfiguracji.
 - Maksymalnie 16 równoczesnych/przygotowywanych nagrań i 16 gotowych filmów
   czekających na upload. Pełna kolejka nie blokuje wykryć AI; pominięcie filmu
   jest widoczne w logu.

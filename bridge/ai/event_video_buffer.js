@@ -5,6 +5,10 @@ const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {randomUUID} = require('node:crypto');
 
+const MAX_SEGMENT_DURATION_SECONDS = 6;
+const SEGMENT_OVERLAP_TOLERANCE_SECONDS = 0.15;
+const SEGMENT_GAP_TOLERANCE_SECONDS = 0.5;
+
 function buildBufferArguments({input, realtimeInput = true}) {
   if (typeof input !== 'string' || !input.trim() || /[\r\n\0]/.test(input)) {
     throw new TypeError('Nieprawidłowe źródło nagrania.');
@@ -25,22 +29,44 @@ function buildBufferArguments({input, realtimeInput = true}) {
     '-segment_wrap', '16', 'segment_%02d.mp4'];
 }
 
-function parseSegmentIndex(text) {
+function parseSegmentIndexRows(text, recoverTimeline) {
   const result = [];
+  let timelineDiscontinuity = false;
   for (const line of text.trim().split(/\r?\n/)) {
     if (!line) continue;
     const match = /^(segment_(\d{2})\.mp4),(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)$/.exec(line);
     if (!match || Number(match[2]) >= 16) throw new Error('Uszkodzony indeks bufora nagrania.');
     const start = Number(match[3]);
     const end = Number(match[4]);
-    if (end <= start || end - start > 2.2 ||
-        (result.length && start < result.at(-1).end - 0.15)) {
+    if (end <= start || end - start > MAX_SEGMENT_DURATION_SECONDS) {
       throw new Error('Nieprawidłowe czasy segmentów nagrania.');
+    }
+    if (result.length) {
+      const difference = start - result.at(-1).end;
+      const overlaps = difference < -SEGMENT_OVERLAP_TOLERANCE_SECONDS;
+      const hasGap = difference > SEGMENT_GAP_TOLERANCE_SECONDS;
+      if (overlaps || (recoverTimeline && hasGap)) {
+        if (!recoverTimeline) {
+          throw new Error('Nieprawidłowe czasy segmentów nagrania.');
+        }
+        // RTSP może po ponownym połączeniu rozpocząć znaczniki czasu od zera.
+        // Zachowujemy najnowszy ciągły fragment zamiast zatrzymywać FFmpeg.
+        result.length = 0;
+        timelineDiscontinuity = true;
+      }
     }
     result.push({filename: match[1], start, end});
   }
   if (result.length > 12) throw new Error('Indeks bufora przekroczył limit.');
-  return result;
+  return {rows: result, timelineDiscontinuity};
+}
+
+function parseSegmentIndex(text) {
+  return parseSegmentIndexRows(text, false).rows;
+}
+
+function parseLiveSegmentIndex(text) {
+  return parseSegmentIndexRows(text, true);
 }
 
 class EventVideoBuffer {
@@ -64,7 +90,8 @@ class EventVideoBuffer {
     this._child = null;
     this._stopping = false;
     this._exit = null;
-    this._badIndexes = 0;
+    this._terminationErrorReported = false;
+    this._recoveredTimelineStartSeconds = null;
   }
 
   async start() {
@@ -72,6 +99,7 @@ class EventVideoBuffer {
     await fs.mkdir(this.workDirectory, {recursive: true, mode: 0o700});
     this.running = true;
     this._lastSegmentAt = this.now();
+    this._terminationErrorReported = false;
     const child = this.spawnProcess(this.ffmpegPath,
       buildBufferArguments(this), {cwd: this.directory,
         stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
@@ -81,6 +109,7 @@ class EventVideoBuffer {
     child.stderr?.on('data', () => {});
     this._exit = new Promise((resolve) => {
       child.once('error', () => {
+        this._terminationErrorReported = true;
         this._notify(this.onError, new Error('Nie udało się uruchomić FFmpeg nagrania.'));
         this.running = false;
         resolve();
@@ -91,7 +120,10 @@ class EventVideoBuffer {
         this._timer = null;
         if (!this._stopping) {
           this._io = this._io.then(() => this._poll(true)).catch((error) => this._cancel(error));
-          if (code !== 0) this._notify(this.onError, new Error('Strumień bufora nagrania zakończył pracę.'));
+          if (code !== 0 && !this._terminationErrorReported) {
+            this._terminationErrorReported = true;
+            this._notify(this.onError, new Error('Strumień bufora nagrania zakończył pracę.'));
+          }
         }
         resolve();
       });
@@ -120,22 +152,40 @@ class EventVideoBuffer {
   async _poll(force = false) {
     if (this._stopping) return;
     let rows;
+    let timelineDiscontinuity = false;
     try {
-      rows = parseSegmentIndex(await fs.readFile(path.join(this.directory, 'index.csv'), 'utf8'));
-      this._badIndexes = 0;
+      const parsed = parseLiveSegmentIndex(
+        await fs.readFile(path.join(this.directory, 'index.csv'), 'utf8'));
+      rows = parsed.rows;
+      timelineDiscontinuity = parsed.timelineDiscontinuity;
     } catch (error) {
       if (error.code !== 'ENOENT') {
         // FFmpeg przepisuje CSV przy zamknięciu segmentu; krótki odczyt
-        // podczas tej operacji nie może zniszczyć przechwytywania.
-        this._badIndexes += 1;
-        if (this._badIndexes < 4 && !force) return;
-        this._child?.kill('SIGTERM');
-        throw error;
+        // albo chwilowy błąd czasu nie może zatrzymać całego bufora.
+        if (force) await this._cancel(null);
+        else this._stopStalledBuffer();
+        return;
       }
       rows = [];
     }
     if (rows.length) {
       const latest = rows.at(-1).end;
+      const recoveredTimelineStart = timelineDiscontinuity ? rows[0].start : null;
+      const newTimelineDiscontinuity = recoveredTimelineStart !== null &&
+        (this._recoveredTimelineStartSeconds === null ||
+          Math.abs(recoveredTimelineStart - this._recoveredTimelineStartSeconds) >
+            SEGMENT_OVERLAP_TOLERANCE_SECONDS);
+      const timelineMovedBack = this.originMillis !== null &&
+        latest < this.latestMediaSeconds - SEGMENT_OVERLAP_TOLERANCE_SECONDS;
+      if (newTimelineDiscontinuity || timelineMovedBack) {
+        if (this._capture) {
+          await this._cancel(new Error('Brak ciągłego obrazu wokół wykrycia.'));
+        }
+        this.originMillis = this.now() - latest * 1000;
+        this.latestMediaSeconds = 0;
+        this._lastSegmentAt = this.now();
+      }
+      this._recoveredTimelineStartSeconds = recoveredTimelineStart;
       if (this.originMillis === null) this.originMillis = this.now() - latest * 1000;
       if (latest > this.latestMediaSeconds) this._lastSegmentAt = this.now();
       this.latestMediaSeconds = latest;
@@ -183,8 +233,15 @@ class EventVideoBuffer {
         this.now() - capture.createdAtMillis > (this.postbufferSeconds + 20) * 1000)) {
       await this._cancel(new Error('Bufor kamery nie dostarczył nagrania.'));
     }
+    this._stopStalledBuffer();
+  }
+
+  _stopStalledBuffer() {
     if (this.running && this.now() - this._lastSegmentAt > 45000) {
-      this._notify(this.onError, new Error('Bufor nagrania nie otrzymuje obrazu.'));
+      if (!this._terminationErrorReported) {
+        this._terminationErrorReported = true;
+        this._notify(this.onError, new Error('Bufor nagrania nie otrzymuje obrazu.'));
+      }
       this._child?.kill('SIGTERM');
     }
   }
@@ -270,4 +327,5 @@ function encodeEventClip({capture, ffmpegPath = process.env.FFMPEG_PATH || 'ffmp
   })();
 }
 
-module.exports = {EventVideoBuffer, buildBufferArguments, parseSegmentIndex, encodeEventClip};
+module.exports = {EventVideoBuffer, buildBufferArguments, parseSegmentIndex,
+  parseLiveSegmentIndex, encodeEventClip};
