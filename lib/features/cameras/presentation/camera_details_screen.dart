@@ -34,6 +34,8 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
 
   Timer? _liveWatchdogTimer;
   bool _reconnectLiveOnResume = false;
+  bool _liveSuspendedForCoveredRoute = false;
+  int _liveSessionToken = 0;
   Duration? _lastLivePosition;
   int _liveStalledChecks = 0;
 
@@ -68,10 +70,19 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   }
 
   Future<void> _initializeLive() async {
+    if (_liveSuspendedForCoveredRoute || !mounted) {
+      return;
+    }
+
+    final sessionToken = ++_liveSessionToken;
     VideoPlayerController? nextController;
 
     try {
       await _cameraProvider.connect();
+
+      if (!_isLiveSessionCurrent(sessionToken)) {
+        return;
+      }
 
       final streamUri = _cameraProvider.liveStreamUri;
 
@@ -84,14 +95,24 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
 
       await _cameraProvider.startLive();
 
+      if (!_isLiveSessionCurrent(sessionToken)) {
+        return;
+      }
+
       nextController = VideoPlayerController.networkUrl(streamUri);
 
       await nextController.initialize();
+
+      if (!_isLiveSessionCurrent(sessionToken)) {
+        await nextController.dispose();
+        return;
+      }
+
       await nextController.setLooping(false);
       await nextController.setVolume(_audioEnabled ? 1 : 0);
       await nextController.play();
 
-      if (!mounted) {
+      if (!_isLiveSessionCurrent(sessionToken)) {
         await nextController.dispose();
         return;
       }
@@ -115,6 +136,11 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       }
     } catch (error) {
       await nextController?.dispose();
+
+      if (!_isLiveSessionCurrent(sessionToken)) {
+        return;
+      }
+
       _stopLiveWatchdog();
       debugPrint(
         'CAMERA LIVE ERROR '
@@ -132,6 +158,12 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       });
       unawaited(_persistCameraAvailability(false));
     }
+  }
+
+  bool _isLiveSessionCurrent(int sessionToken) {
+    return mounted &&
+        !_liveSuspendedForCoveredRoute &&
+        sessionToken == _liveSessionToken;
   }
 
   void _handleLiveControllerChanged() {
@@ -231,7 +263,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   }
 
   Future<void> _retryLive() async {
-    if (_liveLoading) {
+    if (_liveLoading || _liveSuspendedForCoveredRoute) {
       return;
     }
 
@@ -266,6 +298,85 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     }
 
     await _initializeLive();
+  }
+
+  Future<void> _suspendLiveForCoveredRoute() async {
+    if (_liveSuspendedForCoveredRoute) {
+      return;
+    }
+
+    _liveSuspendedForCoveredRoute = true;
+    _liveSessionToken += 1;
+    _stopLiveWatchdog();
+
+    final controller = _videoController;
+    _videoController = null;
+
+    if (mounted) {
+      setState(() {
+        _liveLoading = true;
+        _liveError = null;
+      });
+    }
+
+    if (controller != null) {
+      controller.removeListener(_handleLiveControllerChanged);
+
+      try {
+        await controller.dispose();
+      } catch (error) {
+        debugPrint(
+          'CAMERA LIVE ROUTE DISPOSE ERROR: '
+          '${error.runtimeType}',
+        );
+      }
+    }
+
+    try {
+      await _cameraProvider.stopLive();
+    } catch (error) {
+      debugPrint(
+        'CAMERA LIVE ROUTE STOP ERROR: '
+        '${error.runtimeType}',
+      );
+    }
+  }
+
+  Future<void> _resumeLiveAfterCoveredRoute() async {
+    if (!mounted || _liveSuspendedForCoveredRoute) {
+      return;
+    }
+
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      _reconnectLiveOnResume = true;
+      return;
+    }
+
+    await _initializeLive();
+  }
+
+  Future<T?> _pushWithoutBackgroundLive<T>(
+    Route<T> route, {
+    bool Function(T? result)? shouldResume,
+  }) async {
+    await _suspendLiveForCoveredRoute();
+
+    if (!mounted) {
+      return null;
+    }
+
+    T? result;
+
+    try {
+      result = await Navigator.of(context).push<T>(route);
+      return result;
+    } finally {
+      _liveSuspendedForCoveredRoute = false;
+
+      if (mounted && (shouldResume?.call(result) ?? true)) {
+        await _resumeLiveAfterCoveredRoute();
+      }
+    }
   }
 
   Future<void> _toggleAudio() async {
@@ -330,7 +441,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
           return;
         }
 
-        await Navigator.of(context).push<void>(
+        await _pushWithoutBackgroundLive<void>(
           MaterialPageRoute<void>(
             builder: (_) => CameraSnapshotPreviewScreen(
               camera: widget.camera,
@@ -401,6 +512,8 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _reconnectLiveOnResume = false;
+    _liveSuspendedForCoveredRoute = true;
+    _liveSessionToken += 1;
     _stopLiveWatchdog();
     final controller = _videoController;
     _videoController = null;
@@ -471,10 +584,11 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   }
 
   Future<void> _openCameraSettings() async {
-    final cameraDeleted = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
+    final cameraDeleted = await _pushWithoutBackgroundLive<bool>(
+      MaterialPageRoute<bool>(
         builder: (_) => CameraSettingsScreen(camera: widget.camera),
       ),
+      shouldResume: (result) => result != true,
     );
 
     if (cameraDeleted != true || !mounted) {
@@ -658,10 +772,23 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       return;
     }
 
-    await Navigator.of(context).push<void>(
+    await _pushWithoutBackgroundLive<void>(
       MaterialPageRoute<void>(
         builder: (_) {
           return CameraRecordingsScreen(camera: widget.camera, source: source);
+        },
+      ),
+    );
+  }
+
+  Future<void> _openEventHistory() async {
+    await _pushWithoutBackgroundLive<void>(
+      MaterialPageRoute<void>(
+        builder: (_) {
+          return CameraEventHistoryScreen(
+            cameraId: widget.camera.id,
+            cameraName: widget.camera.name,
+          );
         },
       ),
     );
@@ -787,18 +914,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
                         'Ruch, osoby, pojazdy i inne zdarzenia',
                       ),
                       trailing: const Icon(Icons.chevron_right),
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) {
-                              return CameraEventHistoryScreen(
-                                cameraId: widget.camera.id,
-                                cameraName: widget.camera.name,
-                              );
-                            },
-                          ),
-                        );
-                      },
+                      onTap: _openEventHistory,
                     ),
 
                     const Divider(height: 1),

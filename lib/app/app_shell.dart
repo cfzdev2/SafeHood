@@ -50,6 +50,7 @@ class _AppShellState extends State<AppShell> {
   Timer? _incidentStatusTimer;
 
   bool _openingPushTarget = false;
+  bool _reportedNoOnvifCameras = false;
 
   Future<void> _syncCameraMonitoring(List<Camera> cameras) async {
     final onvifCameras = cameras
@@ -71,14 +72,20 @@ class _AppShellState extends State<AppShell> {
     }
 
     if (onvifCameras.isEmpty) {
-      debugPrint(
-        'CAMERA MONITORING: '
-        'brak kamer ONVIF do monitorowania '
-        'w aplikacji',
-      );
+      if (!_reportedNoOnvifCameras) {
+        _reportedNoOnvifCameras = true;
+
+        debugPrint(
+          'CAMERA MONITORING: '
+          'brak kamer ONVIF do monitorowania '
+          'w aplikacji',
+        );
+      }
 
       return;
     }
+
+    _reportedNoOnvifCameras = false;
 
     for (final camera in onvifCameras) {
       try {
