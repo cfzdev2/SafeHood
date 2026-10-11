@@ -597,6 +597,12 @@ function aiSessionFingerprint(camera) {
 
     sensitivity:
       camera.aiSensitivity || 'standard',
+
+    detectionZones:
+      camera.aiDetectionZones || [],
+
+    ignoreZones:
+      camera.aiIgnoreZones || [],
   });
 }
 
@@ -773,6 +779,12 @@ async function startAiSession(camera) {
 
       vehicleEnabled:
         camera.aiVehicleEnabled === true,
+
+      detectionZones:
+        camera.aiDetectionZones || [],
+
+      ignoreZones:
+        camera.aiIgnoreZones || [],
 
       framesPerSecond: 2,
 

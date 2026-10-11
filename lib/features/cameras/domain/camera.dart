@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'camera_ai_zone.dart';
+
 enum CameraConnectionType { mock, rtsp, onvif, manufacturerCloud, unknown }
 
 enum CameraCloudProvider { safeArk, unknown }
@@ -43,6 +45,8 @@ class Camera {
   final bool aiVehicleEnabled;
   final bool aiRecordingEnabled;
   final String aiSensitivity;
+  final List<CameraAiZone> aiDetectionZones;
+  final List<CameraAiZone> aiIgnoreZones;
 
   final bool hasSdCard;
 
@@ -81,6 +85,8 @@ class Camera {
     this.aiVehicleEnabled = true,
     this.aiRecordingEnabled = false,
     this.aiSensitivity = 'standard',
+    this.aiDetectionZones = const [],
+    this.aiIgnoreZones = const [],
     required this.hasSdCard,
     this.ipAddress,
     this.macAddress,
@@ -114,6 +120,8 @@ class Camera {
     bool? aiVehicleEnabled,
     bool? aiRecordingEnabled,
     String? aiSensitivity,
+    List<CameraAiZone>? aiDetectionZones,
+    List<CameraAiZone>? aiIgnoreZones,
     bool? hasSdCard,
     CameraConnectionType? connectionType,
     CameraCloudProvider? cloudProvider,
@@ -143,6 +151,8 @@ class Camera {
       aiVehicleEnabled: aiVehicleEnabled ?? this.aiVehicleEnabled,
       aiRecordingEnabled: aiRecordingEnabled ?? this.aiRecordingEnabled,
       aiSensitivity: aiSensitivity ?? this.aiSensitivity,
+      aiDetectionZones: aiDetectionZones ?? this.aiDetectionZones,
+      aiIgnoreZones: aiIgnoreZones ?? this.aiIgnoreZones,
       hasSdCard: hasSdCard ?? this.hasSdCard,
       connectionType: connectionType ?? this.connectionType,
       cloudProvider: cloudProvider ?? this.cloudProvider,
@@ -173,6 +183,8 @@ class Camera {
       'aiVehicleEnabled': aiVehicleEnabled,
       'aiRecordingEnabled': aiRecordingEnabled,
       'aiSensitivity': aiSensitivity,
+      'aiDetectionZones': aiDetectionZones.map((zone) => zone.toMap()).toList(),
+      'aiIgnoreZones': aiIgnoreZones.map((zone) => zone.toMap()).toList(),
       'hasSdCard': hasSdCard,
       'connectionType': connectionType.name,
       'cloudProvider': cloudProvider?.name,
@@ -210,6 +222,8 @@ class Camera {
           : true,
       aiSensitivity: _parseAiSensitivity(map['aiSensitivity']),
       aiRecordingEnabled: map['aiRecordingEnabled'] == true,
+      aiDetectionZones: CameraAiZone.parseList(map['aiDetectionZones']),
+      aiIgnoreZones: CameraAiZone.parseList(map['aiIgnoreZones']),
       hasSdCard: map['hasSdCard'] as bool? ?? false,
       connectionType: _parseConnectionType(map['connectionType'] as String?),
       cloudProvider: _parseCloudProvider(map['cloudProvider']),

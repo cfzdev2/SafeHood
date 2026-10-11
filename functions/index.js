@@ -65,6 +65,10 @@ const {
   normalizeBridgeAiMetadata,
 } = require("./camera_event_ai_metadata");
 
+const {
+  normalizeCameraAiZoneConfiguration,
+} = require("./camera_ai_zones");
+
 initializeApp();
 
 const db = getFirestore();
@@ -3774,9 +3778,15 @@ exports.getBridgeConfiguration = onRequest(
                 camera.aiSensitivity :
                 "standard";
 
+          const aiZones =
+              normalizeCameraAiZoneConfiguration(
+                  camera,
+              );
+
           const effectiveAiEnabled =
               localAiEnabled &&
               aiEnabled &&
+              aiZones.valid &&
               (
                 aiPersonEnabled ||
                 aiVehicleEnabled
@@ -3865,7 +3875,9 @@ exports.getBridgeConfiguration = onRequest(
 
             motionDetectionEnabled,
 
-            aiEnabled,
+            aiEnabled:
+                aiEnabled &&
+                aiZones.valid,
 
             aiPersonEnabled,
 
@@ -3874,6 +3886,12 @@ exports.getBridgeConfiguration = onRequest(
             aiRecordingEnabled: camera.aiRecordingEnabled === true,
 
             aiSensitivity,
+
+            aiDetectionZones:
+                aiZones.detectionZones,
+
+            aiIgnoreZones:
+                aiZones.ignoreZones,
           });
         }
 

@@ -131,6 +131,53 @@ service cloud.firestore {
         && request.auth.uid == userId;
   }
 
+  function isValidAiZone(zone) {
+    return zone is map
+        && zone.keys().hasAll([
+          'left',
+          'top',
+          'width',
+          'height'
+        ])
+        && zone.keys().hasOnly([
+          'left',
+          'top',
+          'width',
+          'height'
+        ])
+        && zone.left is number
+        && zone.top is number
+        && zone.width is number
+        && zone.height is number
+        && zone.left >= 0
+        && zone.top >= 0
+        && zone.width >= 0.02
+        && zone.height >= 0.02
+        && zone.left + zone.width <= 1
+        && zone.top + zone.height <= 1;
+  }
+
+  function isValidAiZoneList(zones) {
+    return zones is list
+        && zones.size() <= 4
+        && (
+          zones.size() < 1
+          || isValidAiZone(zones[0])
+        )
+        && (
+          zones.size() < 2
+          || isValidAiZone(zones[1])
+        )
+        && (
+          zones.size() < 3
+          || isValidAiZone(zones[2])
+        )
+        && (
+          zones.size() < 4
+          || isValidAiZone(zones[3])
+        );
+  }
+
   function isValidCameraUpdate() {
     let changedKeys = request.resource.data
         .diff(resource.data)
@@ -148,6 +195,8 @@ service cloud.firestore {
           'aiVehicleEnabled',
           'aiRecordingEnabled',
           'aiSensitivity',
+          'aiDetectionZones',
+          'aiIgnoreZones',
           'updatedAt'
         ])
         && request.resource.data.updatedAt
@@ -212,6 +261,20 @@ service cloud.firestore {
               || request.resource.data.aiPersonEnabled == true
               || request.resource.data.aiVehicleEnabled == true
             )
+          )
+        )
+
+        && (
+          !changedKeys.hasAny(['aiDetectionZones'])
+          || isValidAiZoneList(
+            request.resource.data.aiDetectionZones
+          )
+        )
+
+        && (
+          !changedKeys.hasAny(['aiIgnoreZones'])
+          || isValidAiZoneList(
+            request.resource.data.aiIgnoreZones
           )
         )
 

@@ -396,6 +396,88 @@ test(
 );
 
 test(
+    "właściciel zapisuje poprawne strefy AI kamery",
+    async () => {
+      const reference = doc(
+          firestoreFor(ownerId),
+          "users",
+          ownerId,
+          "cameras",
+          cameraId,
+      );
+      const detectionZone = {
+        left: 0.1,
+        top: 0.2,
+        width: 0.5,
+        height: 0.6,
+      };
+      const ignoreZone = {
+        left: 0.7,
+        top: 0.1,
+        width: 0.2,
+        height: 0.2,
+      };
+
+      await assertSucceeds(updateDoc(reference, {
+        aiDetectionZones: [detectionZone],
+        aiIgnoreZones: [ignoreZone],
+        updatedAt: serverTimestamp(),
+      }));
+
+      const data = (await getDoc(reference)).data();
+      assert.deepEqual(data.aiDetectionZones, [detectionZone]);
+      assert.deepEqual(data.aiIgnoreZones, [ignoreZone]);
+    },
+);
+
+test(
+    "kamera odrzuca nieprawidłowe i nadmiarowe strefy AI",
+    async () => {
+      const reference = doc(
+          firestoreFor(ownerId),
+          "users",
+          ownerId,
+          "cameras",
+          cameraId,
+      );
+      const validZone = {left: 0, top: 0, width: 1, height: 1};
+
+      for (const detectionZones of [
+        [{left: -0.1, top: 0, width: 0.5, height: 0.5}],
+        [{left: 0.8, top: 0, width: 0.3, height: 0.5}],
+        [{left: 0, top: 0, width: 0.01, height: 1}],
+        [{...validZone, extra: true}],
+        new Array(5).fill(validZone),
+      ]) {
+        await assertFails(updateDoc(reference, {
+          aiDetectionZones: detectionZones,
+          aiIgnoreZones: [],
+          updatedAt: serverTimestamp(),
+        }));
+      }
+    },
+);
+
+test(
+    "obcy użytkownik nie zapisuje stref AI kamery",
+    async () => {
+      const reference = doc(
+          firestoreFor(strangerId),
+          "users",
+          ownerId,
+          "cameras",
+          cameraId,
+      );
+
+      await assertFails(updateDoc(reference, {
+        aiDetectionZones: [],
+        aiIgnoreZones: [],
+        updatedAt: serverTimestamp(),
+      }));
+    },
+);
+
+test(
     "nie można zmienić online bez czasu kontroli",
     async () => {
       const db = firestoreFor(ownerId);

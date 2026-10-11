@@ -8,6 +8,11 @@ const {
   ObjectTracker,
 } = require('./object_tracker');
 
+const {
+  normalizeZoneList,
+  partitionDetectionsByZones,
+} = require('./detection_zones');
+
 function defaultSourceFactory(options) {
   return new FfmpegFrameSource(options);
 }
@@ -22,6 +27,8 @@ class CameraAiSession {
     onStatus = () => {},
     personEnabled = true,
     vehicleEnabled = true,
+    detectionZones = [],
+    ignoreZones = [],
     framesPerSecond = 2,
     realtimeInput = false,
     trackerOptions = {},
@@ -137,6 +144,18 @@ class CameraAiSession {
 
     this.vehicleEnabled =
       vehicleEnabled === true;
+
+    this.detectionZones =
+      normalizeZoneList(
+        detectionZones,
+        'detectionZones',
+      );
+
+    this.ignoreZones =
+      normalizeZoneList(
+        ignoreZones,
+        'ignoreZones',
+      );
 
     this.framesPerSecond =
       framesPerSecond;
@@ -409,12 +428,29 @@ class CameraAiSession {
     this._stats.detectionsEnabled +=
       enabledDetections.length;
 
+    const zoneResult =
+      partitionDetectionsByZones(
+        enabledDetections,
+        {
+          detectionZones:
+            this.detectionZones,
+          ignoreZones:
+            this.ignoreZones,
+        },
+      );
+
+    this._stats.detectionsZoneAccepted +=
+      zoneResult.accepted.length;
+
+    this._stats.detectionsZoneRejected +=
+      zoneResult.rejected.length;
+
     const timestampMillis =
       this.now();
 
     const trackingResult =
       this.tracker.update(
-        enabledDetections,
+        zoneResult.accepted,
         {
           timestampMillis,
         },
@@ -517,6 +553,8 @@ class CameraAiSession {
       framesDropped: 0,
       detectionsReceived: 0,
       detectionsEnabled: 0,
+      detectionsZoneAccepted: 0,
+      detectionsZoneRejected: 0,
       tracksConfirmed: 0,
       inferenceErrors: 0,
       confirmedEvents: 0,

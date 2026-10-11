@@ -5,7 +5,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../data/camera_service.dart';
 import '../domain/camera.dart';
+import '../domain/camera_ai_zone.dart';
 import '../domain/camera_notification_settings.dart';
+import 'camera_ai_zones_screen.dart';
 import '../../profile/data/user_profile_service.dart';
 import '../../profile/domain/app_user.dart';
 
@@ -28,6 +30,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
   late bool _aiVehicleEnabled;
   late bool _aiRecordingEnabled;
   late String _aiSensitivity;
+  late List<CameraAiZone> _aiDetectionZones;
+  late List<CameraAiZone> _aiIgnoreZones;
 
   late String _cameraName;
   late String _locationName;
@@ -54,6 +58,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     _aiVehicleEnabled = widget.camera.aiVehicleEnabled;
     _aiRecordingEnabled = widget.camera.aiRecordingEnabled;
     _aiSensitivity = widget.camera.aiSensitivity;
+    _aiDetectionZones = List.of(widget.camera.aiDetectionZones);
+    _aiIgnoreZones = List.of(widget.camera.aiIgnoreZones);
     _cameraName = widget.camera.name;
     _locationName = widget.camera.locationName;
 
@@ -82,6 +88,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           _aiVehicleEnabled = currentCamera.aiVehicleEnabled;
           _aiRecordingEnabled = currentCamera.aiRecordingEnabled;
           _aiSensitivity = currentCamera.aiSensitivity;
+          _aiDetectionZones = List.of(currentCamera.aiDetectionZones);
+          _aiIgnoreZones = List.of(currentCamera.aiIgnoreZones);
         }
 
         _notificationSettings = notificationSettings;
@@ -414,6 +422,38 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     }
   }
 
+  Future<void> _openAiZonesEditor() async {
+    if (_savingAi || _deleting) {
+      return;
+    }
+
+    final result = await Navigator.of(context).push<CameraAiZonesResult>(
+      MaterialPageRoute(
+        builder: (context) {
+          return CameraAiZonesScreen(
+            camera: widget.camera.copyWith(
+              aiDetectionZones: _aiDetectionZones,
+              aiIgnoreZones: _aiIgnoreZones,
+            ),
+          );
+        },
+      ),
+    );
+
+    if (result == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _aiDetectionZones = List.of(result.detectionZones);
+      _aiIgnoreZones = List.of(result.ignoreZones);
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Strefy wykrywania zostały zapisane.')),
+    );
+  }
+
   Future<void> _deleteCamera() async {
     if (_deleting) {
       return;
@@ -711,6 +751,20 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                                 );
                               }
                             : null,
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        enabled: aiOptionsEnabled,
+                        leading: const Icon(Icons.crop_free),
+                        title: const Text('Strefy wykrywania'),
+                        subtitle: Text(
+                          _aiDetectionZones.isEmpty && _aiIgnoreZones.isEmpty
+                              ? 'Cały obraz jest analizowany.'
+                              : '${_aiDetectionZones.length} aktywne, '
+                                    '${_aiIgnoreZones.length} ignorowane',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: aiOptionsEnabled ? _openAiZonesEditor : null,
                       ),
                       if (_loadingAi || _savingAi)
                         const LinearProgressIndicator(),

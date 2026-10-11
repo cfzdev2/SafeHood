@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/camera.dart';
+import '../domain/camera_ai_zone.dart';
 import '../domain/camera_notification_settings.dart';
 
 class CameraService {
@@ -155,6 +156,30 @@ class CameraService {
       'aiRecordingEnabled': ?recordingEnabled,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  Future<void> setAiZones({
+    required String cameraId,
+    required List<CameraAiZone> detectionZones,
+    required List<CameraAiZone> ignoreZones,
+  }) {
+    _validateAiZones(detectionZones);
+    _validateAiZones(ignoreZones);
+
+    return _camerasCollection.doc(cameraId).update({
+      'aiDetectionZones': detectionZones
+          .map((zone) => zone.toMap())
+          .toList(),
+      'aiIgnoreZones': ignoreZones.map((zone) => zone.toMap()).toList(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  void _validateAiZones(List<CameraAiZone> zones) {
+    if (zones.length > CameraAiZone.maximumZonesPerType ||
+        zones.any((zone) => !zone.isValid)) {
+      throw ArgumentError('Nieprawidłowe strefy analizy AI.');
+    }
   }
 
   Future<CameraNotificationSettings> getNotificationSettings(

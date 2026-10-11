@@ -8,12 +8,14 @@ import '../../domain/camera_event.dart';
 class CameraEventSnapshot extends StatefulWidget {
   final CameraEvent event;
   final BoxFit fit;
+  final AlignmentGeometry alignment;
   final bool compact;
 
   const CameraEventSnapshot({
     super.key,
     required this.event,
     this.fit = BoxFit.cover,
+    this.alignment = Alignment.center,
     this.compact = false,
   });
 
@@ -91,6 +93,7 @@ class _CameraEventSnapshotState extends State<CameraEventSnapshot> {
           return Image.memory(
             bytes,
             fit: widget.fit,
+            alignment: widget.alignment,
             errorBuilder: (context, error, stackTrace) {
               return _failure(retry: true);
             },
@@ -105,6 +108,7 @@ class _CameraEventSnapshotState extends State<CameraEventSnapshot> {
       return Image.network(
         url,
         fit: widget.fit,
+        alignment: widget.alignment,
         loadingBuilder: (context, child, loadingProgress) {
           return loadingProgress == null ? child : _loading();
         },

@@ -648,3 +648,63 @@ test(
     await session.stop();
   },
 );
+
+test(
+  'filtruje strefy przed przekazaniem detekcji do trackera',
+  async () => {
+    const harness = createSourceHarness();
+    const events = [];
+    let frameNumber = 0;
+    const session = new CameraAiSession({
+      cameraId: 'camera-zones',
+      input: 'test-video.mp4',
+      detectionZones: [
+        {
+          left: 0,
+          top: 0,
+          width: 0.5,
+          height: 1,
+        },
+      ],
+      scheduler: {
+        async submit() {
+          frameNumber += 1;
+          const inside = frameNumber > 3;
+          return {
+            dropped: false,
+            detections: [
+              detection({
+                left: inside ? 80 : 300,
+                right: inside ? 180 : 400,
+                bottom: 350,
+              }),
+            ],
+          };
+        },
+        cancelCamera() {
+          return false;
+        },
+      },
+      sourceFactory: harness.sourceFactory,
+      onConfirmedTrack: async (event) => events.push(event),
+    });
+
+    session.start();
+    const source = harness.getSource();
+
+    await source.emitFrame(Buffer.from([1]));
+    await source.emitFrame(Buffer.from([2]));
+    await source.emitFrame(Buffer.from([3]));
+    assert.equal(events.length, 0);
+    assert.equal(session.stats.detectionsZoneRejected, 3);
+
+    await source.emitFrame(Buffer.from([4]));
+    await source.emitFrame(Buffer.from([5]));
+    await source.emitFrame(Buffer.from([6]));
+    assert.equal(events.length, 1);
+    assert.equal(session.stats.detectionsZoneAccepted, 3);
+    assert.equal(session.stats.tracksConfirmed, 1);
+
+    await session.stop();
+  },
+);
