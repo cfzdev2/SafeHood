@@ -115,6 +115,34 @@ const cameraEventPriority = {
 const cameraEventMergeWindowMs =
         15 * 1000;
 
+const cameraEventMaximumDurationMs =
+        2 * 60 * 1000;
+
+const cameraEventAggregationGroups =
+    Object.freeze({
+      motion: "visual",
+      person: "visual",
+      vehicle: "visual",
+      sound: "sound",
+      tamper: "tamper",
+    });
+
+const cameraEventStateFields =
+    Object.freeze({
+      visual: Object.freeze({
+        activeEventId: "activeEventId",
+        lastReceivedAt: "lastReceivedAt",
+      }),
+      sound: Object.freeze({
+        activeEventId: "soundActiveEventId",
+        lastReceivedAt: "soundLastReceivedAt",
+      }),
+      tamper: Object.freeze({
+        activeEventId: "tamperActiveEventId",
+        lastReceivedAt: "tamperLastReceivedAt",
+      }),
+    });
+
 const bridgePairingLifetimeMs =
     10 * 60 * 1000;
 
@@ -1889,11 +1917,77 @@ function normalizeOccurredAt(
  * @return {boolean} Wynik.
  */
 function isDetectionCameraEvent(type) {
-  return type === "motion" ||
-      type === "person" ||
-      type === "vehicle" ||
-      type === "sound" ||
-      type === "tamper";
+  return getCameraEventAggregationGroup(type) !== null;
+}
+
+/**
+ * Zwraca grupę agregacji zdarzenia.
+ *
+ * Ruch, osoba i pojazd opisują tę samą aktywność obrazu. Dźwięk
+ * i sabotaż zachowują osobne osie czasu, żeby nie znikały
+ * w zdarzeniu wizualnym.
+ *
+ * @param {string} type Typ zdarzenia.
+ * @return {string|null} Grupa albo null.
+ */
+function getCameraEventAggregationGroup(type) {
+  return cameraEventAggregationGroups[type] || null;
+}
+
+/**
+ * Zwraca pola stanu przypisane do grupy zdarzenia.
+ *
+ * Grupa wizualna używa dotychczasowych nazw, dzięki czemu aktualizacja nie
+ * zrywa aktywnego zdarzenia utworzonego przez starszą wersję backendu.
+ *
+ * @param {string} type Typ zdarzenia.
+ * @return {Object|null} Nazwy pól albo null.
+ */
+function getCameraEventStateFields(type) {
+  const group = getCameraEventAggregationGroup(type);
+  return group === null ? null : cameraEventStateFields[group];
+}
+
+/**
+ * Sprawdza, czy dwa czasy należą jeszcze do jednego zdarzenia.
+ *
+ * Oprócz krótkiej przerwy ograniczamy cały zakres zdarzenia. Dzięki temu
+ * ciągła aktywność co pewien czas tworzy nowy zapis, zdjęcie i nagranie.
+ *
+ * @param {Object} input Czasy agregacji w milisekundach.
+ * @return {boolean} Czy można scalać.
+ */
+function canMergeCameraEventTimeline({
+  nowMillis,
+  lastReceivedMillis,
+  occurredAtMillis,
+  activeOccurredAtMillis,
+  activeLastOccurredAtMillis,
+}) {
+  const values = [
+    nowMillis,
+    lastReceivedMillis,
+    occurredAtMillis,
+    activeOccurredAtMillis,
+    activeLastOccurredAtMillis,
+  ];
+
+  if (values.some((value) => !Number.isFinite(value))) {
+    return false;
+  }
+
+  const receivedGap =
+      Math.abs(nowMillis - lastReceivedMillis);
+  const occurrenceGap =
+      Math.abs(occurredAtMillis - activeLastOccurredAtMillis);
+  const firstOccurrence =
+      Math.min(occurredAtMillis, activeOccurredAtMillis);
+  const lastOccurrence =
+      Math.max(occurredAtMillis, activeLastOccurredAtMillis);
+
+  return receivedGap <= cameraEventMergeWindowMs &&
+      occurrenceGap <= cameraEventMergeWindowMs &&
+      lastOccurrence - firstOccurrence <= cameraEventMaximumDurationMs;
 }
 
 /**
@@ -2342,6 +2436,22 @@ async function ingestCameraEventInternal(
   const canMerge =
       isDetectionCameraEvent(type);
 
+  const aggregationGroup =
+      getCameraEventAggregationGroup(type);
+
+  const aggregationStateFields =
+      getCameraEventStateFields(type);
+
+  const activeEventIdStateField =
+      aggregationStateFields === null ?
+        null :
+        aggregationStateFields.activeEventId;
+
+  const lastReceivedAtStateField =
+      aggregationStateFields === null ?
+        null :
+        aggregationStateFields.lastReceivedAt;
+
   const stateId =
       `${ownerId}_${cameraId}_detection`;
 
@@ -2463,9 +2573,8 @@ async function ingestCameraEventInternal(
                 stateSnapshot.data();
 
               const activeEventId =
-                typeof state.activeEventId ===
-                "string" ?
-                  state.activeEventId :
+                typeof state[activeEventIdStateField] === "string" ?
+                  state[activeEventIdStateField] :
                   "";
 
               if (activeEventId) {
@@ -2497,7 +2606,7 @@ async function ingestCameraEventInternal(
               stateSnapshot.data();
 
             const lastReceivedAt =
-              state.lastReceivedAt;
+              state[lastReceivedAtStateField];
 
             const lastReceivedMillis =
               lastReceivedAt instanceof
@@ -2505,17 +2614,37 @@ async function ingestCameraEventInternal(
                 lastReceivedAt.toMillis() :
                 0;
 
-            const withinWindow =
-              nowMillis -
-              lastReceivedMillis <=
-              cameraEventMergeWindowMs;
-
             const activeEvent =
               activeEventSnapshot.data();
             const previousTime = activeEvent.lastOccurredAt;
-            const withinOccurrenceWindow = previousTime instanceof Timestamp ?
-              Math.abs(occurredAtMillis - previousTime.toMillis()) <=
-                cameraEventMergeWindowMs : !receipt;
+
+            const activeOccurredAtMillis =
+              activeEvent.occurredAt instanceof Timestamp ?
+                activeEvent.occurredAt.toMillis() :
+                previousTime instanceof Timestamp ?
+                  previousTime.toMillis() :
+                  !receipt ?
+                    lastReceivedMillis :
+                    NaN;
+
+            const activeLastOccurredAtMillis =
+              previousTime instanceof Timestamp ?
+                previousTime.toMillis() :
+                activeOccurredAtMillis;
+
+            const sameAggregationGroup =
+              getCameraEventAggregationGroup(
+                  activeEvent.type,
+              ) === aggregationGroup;
+
+            const withinTimeline =
+              canMergeCameraEventTimeline({
+                nowMillis,
+                lastReceivedMillis,
+                occurredAtMillis,
+                activeOccurredAtMillis,
+                activeLastOccurredAtMillis,
+              });
 
             const currentStatus =
               typeof activeEvent.status ===
@@ -2527,7 +2656,7 @@ async function ingestCameraEventInternal(
               currentStatus === "new" ||
               currentStatus === "viewed";
 
-            if (withinWindow && withinOccurrenceWindow &&
+            if (sameAggregationGroup && withinTimeline &&
               canUpdateEvent) {
               const currentType =
                 typeof activeEvent.type ===
@@ -2560,8 +2689,7 @@ async function ingestCameraEventInternal(
                   occurredAtTimestamp,
                 lastOccurredAt:
                   Timestamp.fromMillis(Math.max(occurredAtMillis,
-                      previousTime instanceof Timestamp ?
-                        previousTime.toMillis() : 0)),
+                      activeLastOccurredAtMillis)),
                 occurrenceCount:
                   currentCount + 1,
                 source:
@@ -2614,9 +2742,9 @@ async function ingestCameraEventInternal(
               transaction.set(
                   stateRef,
                   {
-                    activeEventId:
+                    [activeEventIdStateField]:
                       eventRef.id,
-                    lastReceivedAt:
+                    [lastReceivedAtStateField]:
                       nowTimestamp,
                   },
                   {
@@ -2687,9 +2815,9 @@ async function ingestCameraEventInternal(
             transaction.set(
                 stateRef,
                 {
-                  activeEventId:
+                  [activeEventIdStateField]:
                     eventRef.id,
-                  lastReceivedAt:
+                  [lastReceivedAtStateField]:
                     nowTimestamp,
                 },
                 {

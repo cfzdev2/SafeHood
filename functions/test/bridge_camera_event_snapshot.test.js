@@ -32,6 +32,8 @@ const aggregationCode = [
     "normalizeCameraEventType", "normalizeCameraEventSource",
     "normalizeConfidence",
     "normalizeOptionalUrl", "normalizeOccurredAt", "isDetectionCameraEvent",
+    "getCameraEventAggregationGroup", "getCameraEventStateFields",
+    "canMergeCameraEventTimeline",
     "selectCameraEventType", "mergeConfidence",
     "normalizeBridgeExternalEventId",
     "ingestCameraEventInternal",
@@ -310,6 +312,32 @@ test("scalenie ONVIF i AI zachowuje możliwość uploadu", async () => {
   assert.equal(afterOnvif.hasLocalAiDetection, true);
 });
 
+test("osobno agreguje obraz, dźwięk i sabotaż", async () => {
+  const harness = createHarness({event: null});
+  const visual = await harness.aggregate({source: "onvif", type: "motion"});
+  const sound = await harness.aggregate({source: "onvif", type: "sound"});
+  const tamper = await harness.aggregate({source: "onvif", type: "tamper"});
+  const person = await harness.aggregate({source: "onvif", type: "person"});
+
+  assert.equal(person.eventId, visual.eventId);
+  assert.notEqual(sound.eventId, visual.eventId);
+  assert.notEqual(tamper.eventId, visual.eventId);
+  assert.notEqual(tamper.eventId, sound.eventId);
+  assert.equal(eventDocuments(harness).length, 3);
+  assert.equal(
+      harness.documents.get(`cameraEvents/${visual.eventId}`).occurrenceCount,
+      2,
+  );
+
+  const state = harness.documents.get(
+      `cameraEventStates/${ownerId}_${cameraId}_detection`,
+  );
+  assert.equal(state.activeEventId, visual.eventId);
+  assert.equal(state.soundActiveEventId, sound.eventId);
+  assert.equal(state.tamperActiveEventId, tamper.eventId);
+  assert.equal(harness.notifications.length, 3);
+});
+
 test("starsze AI nadal przyjmuje zdjęcie po scaleniu", async () => {
   const harness = createHarness({event: {type: "person", status: "new"}});
   harness.documents.set(`cameraEventStates/${ownerId}_${cameraId}_detection`, {
@@ -568,3 +596,28 @@ test("opóźnione wykrycie zachowuje zakres czasu zdarzenia", async () => {
   assert.equal(data.lastOccurredAt.toMillis(), later);
   assert.equal(data.occurrenceCount, 2);
 });
+
+test("ciągła aktywność po dwóch minutach rozpoczyna nowe zdarzenie",
+    async () => {
+      const h = createHarness({event: null});
+      const original = Date.now() - 5 * 60 * 1000;
+      const first = await h.aggregate({
+        ...receiptInput,
+        occurredAt: new Date(original).toISOString(),
+      });
+      const firstDocument = h.documents.get(`cameraEvents/${first.eventId}`);
+      firstDocument.lastOccurredAt = Timestamp.fromMillis(original + 119000);
+
+      const second = await h.aggregate({
+        bridgeReceipt: {
+          ...receipt,
+          externalEventId: "22222222-2222-4222-8222-222222222222",
+        },
+        occurredAt: new Date(original + 120001).toISOString(),
+      });
+
+      assert.notEqual(second.eventId, first.eventId);
+      assert.equal(eventDocuments(h).length, 2);
+      assert.equal(firstDocument.occurrenceCount, 1);
+      assert.equal(h.notifications.length, 2);
+    });
