@@ -44,7 +44,8 @@ zdarzeniem wizualnym, jednym zdjęciem i jednym nagraniem. Cztery potwierdzone
 ślady mogą zwiększyć `occurrenceCount` oraz podsumowanie AI, ale nie tworzą
 czterech osobnych alertów.
 
-## Następny etap
+## Powiązane reguły alertów
 
-Po zatwierdzeniu agregacji przechodzimy do reguł alertów: eskalacji typu
-zdarzenia, godzin ciszy i kontrolowanej częstotliwości powiadomień.
+Agregację uzupełniają reguły opisane w `camera_alert_rules.md`: pojedynczy
+alert dla jednego wpisu, eskalacja z wyłączonego ruchu do włączonej osoby oraz
+konfigurowalny odstęp pomiędzy kolejnymi alertami.

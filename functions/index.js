@@ -118,6 +118,15 @@ const cameraEventMergeWindowMs =
 const cameraEventMaximumDurationMs =
         2 * 60 * 1000;
 
+const allowedCameraNotificationCooldownSeconds =
+    new Set([
+      0,
+      30,
+      60,
+      5 * 60,
+      15 * 60,
+    ]);
+
 const cameraEventAggregationGroups =
     Object.freeze({
       motion: "visual",
@@ -132,14 +141,17 @@ const cameraEventStateFields =
       visual: Object.freeze({
         activeEventId: "activeEventId",
         lastReceivedAt: "lastReceivedAt",
+        lastNotificationAt: "lastNotificationAt",
       }),
       sound: Object.freeze({
         activeEventId: "soundActiveEventId",
         lastReceivedAt: "soundLastReceivedAt",
+        lastNotificationAt: "soundLastNotificationAt",
       }),
       tamper: Object.freeze({
         activeEventId: "tamperActiveEventId",
         lastReceivedAt: "tamperLastReceivedAt",
+        lastNotificationAt: "tamperLastNotificationAt",
       }),
     });
 
@@ -2118,6 +2130,81 @@ function isCameraEventNotificationEnabled(
 
   return settings[settingKey] !== false;
 }
+
+/**
+ * Odczytuje dozwolony odstęp pomiędzy alertami jednej grupy.
+ *
+ * Brak pola oznacza dotychczasowe zachowanie bez dodatkowego cooldownu.
+ * Nieprawidłowa wartość również nie może trwale zablokować alertów.
+ *
+ * @param {Object|undefined} settings Ustawienia kamery.
+ * @return {number} Liczba sekund.
+ */
+function normalizeCameraNotificationCooldownSeconds(settings) {
+  if (!settings || typeof settings !== "object") {
+    return 0;
+  }
+
+  const value = settings.cooldownSeconds;
+  return allowedCameraNotificationCooldownSeconds.has(value) ? value : 0;
+}
+
+/**
+ * Decyduje, czy bieżące zdarzenie ma wysłać jeden alert.
+ *
+ * Nowe zdarzenia zawsze mają jawny stan wersji 1. Brak tego stanu w starszym
+ * aktywnym zdarzeniu uznajemy za obsłużony, żeby wdrożenie nie wysłało
+ * powtórnego powiadomienia. Stan z `sentAt: null` pozwala natomiast wysłać
+ * alert później, gdy wyłączony ruch zostanie podniesiony do włączonej
+ * osoby.
+ *
+ * @param {Object} input Dane decyzji.
+ * @return {boolean} Czy należy wysłać alert.
+ */
+function shouldSendCameraEventNotification({
+  settings,
+  eventType,
+  nowMillis,
+  lastNotificationAt,
+  notificationState,
+  isNewEvent,
+}) {
+  const knownState =
+      notificationState &&
+      typeof notificationState === "object" &&
+      notificationState.schemaVersion === 1;
+
+  if (!isNewEvent && !knownState) {
+    return false;
+  }
+
+  if (knownState && notificationState.sentAt !== null) {
+    return false;
+  }
+
+  if (!isCameraEventNotificationEnabled(settings, eventType)) {
+    return false;
+  }
+
+  const cooldownMillis =
+      normalizeCameraNotificationCooldownSeconds(settings) * 1000;
+
+  if (cooldownMillis === 0) {
+    return true;
+  }
+
+  const lastNotificationMillis =
+      lastNotificationAt &&
+      typeof lastNotificationAt.toMillis === "function" ?
+        lastNotificationAt.toMillis() :
+        null;
+
+  if (!Number.isFinite(lastNotificationMillis)) {
+    return true;
+  }
+
+  return nowMillis - lastNotificationMillis >= cooldownMillis;
+}
 /**
  * Wysyła powiadomienie o wykryciu
  * tylko do właściciela kamery.
@@ -2452,6 +2539,11 @@ async function ingestCameraEventInternal(
         null :
         aggregationStateFields.lastReceivedAt;
 
+  const lastNotificationAtStateField =
+      aggregationStateFields === null ?
+        null :
+        aggregationStateFields.lastNotificationAt;
+
   const stateId =
       `${ownerId}_${cameraId}_detection`;
 
@@ -2597,6 +2689,15 @@ async function ingestCameraEventInternal(
                 occurredAtMillis,
             );
 
+          let lastNotificationAt = null;
+
+          if (canMerge &&
+              stateSnapshot !== null &&
+              stateSnapshot.exists) {
+            lastNotificationAt =
+              stateSnapshot.data()[lastNotificationAtStateField] || null;
+          }
+
           if (canMerge &&
             stateSnapshot !== null &&
             stateSnapshot.exists &&
@@ -2670,6 +2771,17 @@ async function ingestCameraEventInternal(
                     type,
                 );
 
+              const notificationRequired =
+                shouldSendCameraEventNotification({
+                  settings: cameraData.notificationSettings,
+                  eventType: type,
+                  nowMillis,
+                  lastNotificationAt,
+                  notificationState:
+                    activeEvent.notificationState,
+                  isNewEvent: false,
+                });
+
               const currentCount =
                 typeof activeEvent
                     .occurrenceCount ===
@@ -2734,19 +2846,34 @@ async function ingestCameraEventInternal(
                   );
               }
 
+              if (notificationRequired) {
+                updatedEventData.notificationState = {
+                  schemaVersion: 1,
+                  sentAt: nowTimestamp,
+                  type,
+                };
+              }
+
               transaction.update(
                   eventRef,
                   updatedEventData,
               );
 
+              const updatedStateData = {
+                [activeEventIdStateField]:
+                  eventRef.id,
+                [lastReceivedAtStateField]:
+                  nowTimestamp,
+              };
+
+              if (notificationRequired) {
+                updatedStateData[lastNotificationAtStateField] =
+                  nowTimestamp;
+              }
+
               transaction.set(
                   stateRef,
-                  {
-                    [activeEventIdStateField]:
-                      eventRef.id,
-                    [lastReceivedAtStateField]:
-                      nowTimestamp,
-                  },
+                  updatedStateData,
                   {
                     merge: true,
                   },
@@ -2759,6 +2886,9 @@ async function ingestCameraEventInternal(
                 occurrenceCount:
                     currentCount + 1,
                 cameraName,
+                notificationRequired,
+                notificationType:
+                  notificationRequired ? type : null,
                 snapshotRequired:
                   source === "local-ai" &&
                   !(typeof activeEvent.snapshotPath === "string" &&
@@ -2781,6 +2911,16 @@ async function ingestCameraEventInternal(
                 },
             );
 
+          const notificationRequired =
+            shouldSendCameraEventNotification({
+              settings: cameraData.notificationSettings,
+              eventType: type,
+              nowMillis,
+              lastNotificationAt,
+              notificationState: null,
+              isNewEvent: true,
+            });
+
           const eventData = {
             cameraId,
             ownerId,
@@ -2796,6 +2936,17 @@ async function ingestCameraEventInternal(
             confidence,
             snapshotUrl,
             clipUrl,
+            notificationState: {
+              schemaVersion: 1,
+              sentAt:
+                notificationRequired ?
+                  nowTimestamp :
+                  null,
+              type:
+                notificationRequired ?
+                  type :
+                  null,
+            },
             ...(eventAiMetadata === null ? {} : {
               aiMetadata: eventAiMetadata,
             }),
@@ -2812,14 +2963,21 @@ async function ingestCameraEventInternal(
           );
 
           if (canMerge) {
+            const newStateData = {
+              [activeEventIdStateField]:
+                eventRef.id,
+              [lastReceivedAtStateField]:
+                nowTimestamp,
+            };
+
+            if (notificationRequired) {
+              newStateData[lastNotificationAtStateField] =
+                nowTimestamp;
+            }
+
             transaction.set(
                 stateRef,
-                {
-                  [activeEventIdStateField]:
-                    eventRef.id,
-                  [lastReceivedAtStateField]:
-                    nowTimestamp,
-                },
+                newStateData,
                 {
                   merge: true,
                 },
@@ -2832,11 +2990,14 @@ async function ingestCameraEventInternal(
             type,
             occurrenceCount: 1,
             cameraName,
+            notificationRequired,
+            notificationType:
+              notificationRequired ? type : null,
             snapshotRequired: source === "local-ai",
           });
         },
     );
-  if (!result.merged && !result.duplicate) {
+  if (result.notificationRequired && !result.duplicate) {
     try {
       await sendCameraEventNotification({
         ownerId,
@@ -2846,7 +3007,7 @@ async function ingestCameraEventInternal(
         eventId:
     result.eventId,
         eventType:
-    result.type,
+    result.notificationType,
       });
     } catch (error) {
       console.error(

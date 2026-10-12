@@ -11,6 +11,7 @@ void main() {
       expect(settings.personEnabled, isTrue);
       expect(settings.vehicleEnabled, isTrue);
       expect(settings.soundEnabled, isTrue);
+      expect(settings.cooldownSeconds, 0);
     });
 
     test('odczytuje ustawienia z mapy', () {
@@ -20,6 +21,7 @@ void main() {
         'person': true,
         'vehicle': false,
         'sound': false,
+        'cooldownSeconds': 300,
       });
 
       expect(settings.enabled, isTrue);
@@ -27,6 +29,7 @@ void main() {
       expect(settings.personEnabled, isTrue);
       expect(settings.vehicleEnabled, isFalse);
       expect(settings.soundEnabled, isFalse);
+      expect(settings.cooldownSeconds, 300);
     });
 
     test('używa bezpiecznych wartości dla błędnych danych', () {
@@ -34,6 +37,7 @@ void main() {
         'enabled': 'false',
         'motion': null,
         'person': 0,
+        'cooldownSeconds': 31,
       });
 
       expect(settings.enabled, isTrue);
@@ -41,6 +45,7 @@ void main() {
       expect(settings.personEnabled, isTrue);
       expect(settings.vehicleEnabled, isTrue);
       expect(settings.soundEnabled, isTrue);
+      expect(settings.cooldownSeconds, 0);
     });
 
     test('używa wartości domyślnych bez mapy', () {
@@ -51,6 +56,7 @@ void main() {
       expect(settings.personEnabled, isTrue);
       expect(settings.vehicleEnabled, isTrue);
       expect(settings.soundEnabled, isTrue);
+      expect(settings.cooldownSeconds, 0);
     });
 
     test('copyWith zmienia tylko wybrane ustawienia', () {
@@ -62,6 +68,7 @@ void main() {
       final updated = original.copyWith(
         personEnabled: true,
         soundEnabled: false,
+        cooldownSeconds: 60,
       );
 
       expect(updated.enabled, isTrue);
@@ -69,6 +76,7 @@ void main() {
       expect(updated.personEnabled, isTrue);
       expect(updated.vehicleEnabled, isTrue);
       expect(updated.soundEnabled, isFalse);
+      expect(updated.cooldownSeconds, 60);
     });
 
     test('toMap zapisuje prawidłowe nazwy pól', () {
@@ -78,6 +86,7 @@ void main() {
         personEnabled: false,
         vehicleEnabled: true,
         soundEnabled: false,
+        cooldownSeconds: 900,
       );
 
       expect(settings.toMap(), {
@@ -86,6 +95,7 @@ void main() {
         'person': false,
         'vehicle': true,
         'sound': false,
+        'cooldownSeconds': 900,
       });
     });
   });

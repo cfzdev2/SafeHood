@@ -35,6 +35,9 @@ const aggregationCode = [
     "getCameraEventAggregationGroup", "getCameraEventStateFields",
     "canMergeCameraEventTimeline",
     "selectCameraEventType", "mergeConfidence",
+    "isCameraEventNotificationEnabled",
+    "normalizeCameraNotificationCooldownSeconds",
+    "shouldSendCameraEventNotification",
     "normalizeBridgeExternalEventId",
     "ingestCameraEventInternal",
   ].map((name) => {
@@ -347,6 +350,113 @@ test("starsze AI nadal przyjmuje zdjęcie po scaleniu", async () => {
   assert.equal(result.merged, true);
   assert.equal(harness.documents.get(eventPath).hasLocalAiDetection, true);
   assert.equal((await harness.send()).statusCode, 200);
+  assert.equal(harness.notifications.length, 0);
+});
+
+test("wyłączony ruch nie blokuje późniejszego alertu osoby", async () => {
+  const harness = createHarness({
+    event: null,
+    camera: {
+      notificationSettings: {
+        enabled: true,
+        motion: false,
+        person: true,
+        vehicle: true,
+        sound: true,
+        cooldownSeconds: 0,
+      },
+    },
+  });
+
+  const motion = await harness.aggregate({source: "onvif", type: "motion"});
+  assert.equal(harness.notifications.length, 0);
+
+  const person = await harness.aggregate({source: "onvif", type: "person"});
+  assert.equal(person.eventId, motion.eventId);
+  assert.equal(harness.notifications.length, 1);
+  assert.equal(harness.notifications[0].eventType, "person");
+
+  const stored = harness.documents.get(`cameraEvents/${motion.eventId}`);
+  assert.equal(stored.notificationState.schemaVersion, 1);
+  assert.equal(stored.notificationState.type, "person");
+  assert.ok(stored.notificationState.sentAt instanceof Timestamp);
+});
+
+test("jedno zagregowane zdarzenie wysyła maksymalnie jeden alert", async () => {
+  const harness = createHarness({event: null});
+  const vehicle = await harness.aggregate({source: "onvif", type: "vehicle"});
+  const person = await harness.aggregate({source: "onvif", type: "person"});
+
+  assert.equal(person.eventId, vehicle.eventId);
+  assert.equal(harness.notifications.length, 1);
+  assert.equal(harness.notifications[0].eventType, "vehicle");
+});
+
+test("cooldown ogranicza alerty, ale nie zapis nowych zdarzeń", async () => {
+  const harness = createHarness({
+    event: null,
+    camera: {
+      notificationSettings: {
+        enabled: true,
+        motion: true,
+        person: true,
+        vehicle: true,
+        sound: true,
+        cooldownSeconds: 60,
+      },
+    },
+  });
+
+  const first = await harness.aggregate({source: "onvif", type: "motion"});
+  const firstDocument = harness.documents.get(`cameraEvents/${first.eventId}`);
+  firstDocument.lastOccurredAt = Timestamp.fromMillis(Date.now() - 60000);
+  const state = harness.documents.get(
+      `cameraEventStates/${ownerId}_${cameraId}_detection`,
+  );
+  state.lastReceivedAt = Timestamp.fromMillis(Date.now() - 60000);
+
+  const second = await harness.aggregate({source: "onvif", type: "motion"});
+  assert.notEqual(second.eventId, first.eventId);
+  assert.equal(harness.notifications.length, 1);
+  assert.equal(eventDocuments(harness).length, 2);
+
+  const refreshedState = harness.documents.get(
+      `cameraEventStates/${ownerId}_${cameraId}_detection`,
+  );
+  refreshedState.lastNotificationAt =
+    Timestamp.fromMillis(Date.now() - 61000);
+  refreshedState.lastReceivedAt = Timestamp.fromMillis(Date.now() - 60000);
+  harness.documents.get(`cameraEvents/${second.eventId}`).lastOccurredAt =
+    Timestamp.fromMillis(Date.now() - 60000);
+
+  await harness.aggregate({source: "onvif", type: "motion"});
+  assert.equal(harness.notifications.length, 2);
+  assert.equal(eventDocuments(harness).length, 3);
+});
+
+test("cooldown jest niezależny dla obrazu, dźwięku i sabotażu", async () => {
+  const harness = createHarness({
+    event: null,
+    camera: {
+      notificationSettings: {
+        enabled: true,
+        motion: true,
+        person: true,
+        vehicle: true,
+        sound: true,
+        cooldownSeconds: 60,
+      },
+    },
+  });
+
+  await harness.aggregate({source: "onvif", type: "motion"});
+  await harness.aggregate({source: "onvif", type: "sound"});
+  await harness.aggregate({source: "onvif", type: "tamper"});
+
+  assert.deepEqual(
+      harness.notifications.map((notification) => notification.eventType),
+      ["motion", "sound", "tamper"],
+  );
 });
 
 const receipt = {

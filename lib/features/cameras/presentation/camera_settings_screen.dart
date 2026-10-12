@@ -21,6 +21,14 @@ class CameraSettingsScreen extends StatefulWidget {
 }
 
 class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
+  static const _notificationCooldownLabels = <int, String>{
+    0: 'Bez ograniczeń',
+    30: '30 s',
+    60: '1 min',
+    300: '5 min',
+    900: '15 min',
+  };
+
   final CameraService _cameraService = CameraService();
   final UserProfileService _profileService = UserProfileService();
 
@@ -545,8 +553,9 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         children: [
           Text(
             'Informacje',
-            style: Theme.of(context).textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Card(
@@ -596,8 +605,9 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           const SizedBox(height: 24),
           Text(
             'Monitoring',
-            style: Theme.of(context).textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Card(
@@ -628,8 +638,9 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
             const SizedBox(height: 24),
             Text(
               'Analiza AI',
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.bold),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             StreamBuilder<AppUser?>(
@@ -777,8 +788,9 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           const SizedBox(height: 24),
           Text(
             'Powiadomienia',
-            style: Theme.of(context).textTheme.titleMedium
-                ?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
           Card(
@@ -871,6 +883,42 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                           );
                         }
                       : null,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  enabled: notificationTypesEnabled,
+                  leading: const Icon(Icons.timer_outlined),
+                  title: const Text('Odstęp między alertami'),
+                  subtitle: const Text(
+                    'Osobne limity dla obrazu, dźwięku i sabotażu. '
+                    'Zdarzenia nadal są zapisywane.',
+                  ),
+                  trailing: DropdownButton<int>(
+                    value: _notificationSettings.cooldownSeconds,
+                    items: _notificationCooldownLabels.entries
+                        .map(
+                          (entry) => DropdownMenuItem<int>(
+                            value: entry.key,
+                            child: Text(entry.value),
+                          ),
+                        )
+                        .toList(growable: false),
+                    onChanged: notificationTypesEnabled
+                        ? (seconds) {
+                            if (seconds == null) {
+                              return;
+                            }
+
+                            unawaited(
+                              _setNotificationSettings(
+                                _notificationSettings.copyWith(
+                                  cooldownSeconds: seconds,
+                                ),
+                              ),
+                            );
+                          }
+                        : null,
+                  ),
                 ),
                 if (_loadingNotifications || _savingNotifications)
                   const LinearProgressIndicator(),

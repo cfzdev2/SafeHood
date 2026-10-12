@@ -42,6 +42,14 @@ const rulesPath = path.resolve(
 const initialTimestamp = Timestamp.fromMillis(
     1700000000000,
 );
+const validNotificationSettings = {
+  enabled: true,
+  motion: true,
+  person: true,
+  vehicle: true,
+  sound: true,
+  cooldownSeconds: 60,
+};
 
 let testEnvironment;
 
@@ -145,6 +153,60 @@ test("nagrywanie wymaga bool i właściciela kamery", async () => {
   await assertFails(updateDoc(stranger, {
     aiRecordingEnabled: true, updatedAt: serverTimestamp(),
   }));
+});
+
+test("właściciel ustawia dozwolony odstęp między alertami", async () => {
+  const reference = doc(firestoreFor(ownerId),
+      "users", ownerId, "cameras", cameraId);
+
+  for (const cooldownSeconds of [0, 30, 60, 300, 900]) {
+    await assertSucceeds(updateDoc(reference, {
+      notificationSettings: {
+        ...validNotificationSettings,
+        cooldownSeconds,
+      },
+      updatedAt: serverTimestamp(),
+    }));
+  }
+
+  assert.equal(
+      (await getDoc(reference)).data().notificationSettings.cooldownSeconds,
+      900,
+  );
+});
+
+test("starszy klient zapisuje ustawienia bez cooldownu", async () => {
+  const reference = doc(firestoreFor(ownerId),
+      "users", ownerId, "cameras", cameraId);
+  const legacySettings = {
+    enabled: true,
+    motion: true,
+    person: true,
+    vehicle: true,
+    sound: true,
+  };
+
+  await assertSucceeds(updateDoc(reference, {
+    notificationSettings: legacySettings,
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test("kamera odrzuca nieprawidłowe reguły alertów", async () => {
+  const reference = doc(firestoreFor(ownerId),
+      "users", ownerId, "cameras", cameraId);
+
+  for (const notificationSettings of [
+    {...validNotificationSettings, cooldownSeconds: 31},
+    {...validNotificationSettings, cooldownSeconds: "60"},
+    {...validNotificationSettings, motion: "true"},
+    {...validNotificationSettings, unknown: true},
+  ]) {
+    await assertFails(updateDoc(reference, {
+      notificationSettings,
+      updatedAt: serverTimestamp(),
+    }));
+  }
 });
 
 test("klient nie podpina własnego filmu do zdarzenia", async () => {

@@ -178,6 +178,43 @@ service cloud.firestore {
         );
   }
 
+  function isValidCameraNotificationSettings(settings) {
+    return settings is map
+        && settings.keys().hasOnly([
+          'enabled',
+          'motion',
+          'person',
+          'vehicle',
+          'sound',
+          'cooldownSeconds'
+        ])
+        && settings.keys().hasAll([
+          'enabled',
+          'motion',
+          'person',
+          'vehicle',
+          'sound'
+        ])
+        && settings.enabled is bool
+        && settings.motion is bool
+        && settings.person is bool
+        && settings.vehicle is bool
+        && settings.sound is bool
+        && (
+          !settings.keys().hasAny(['cooldownSeconds'])
+          || (
+            settings.cooldownSeconds is int
+            && settings.cooldownSeconds in [
+              0,
+              30,
+              60,
+              300,
+              900
+            ]
+          )
+        );
+  }
+
   function isValidCameraUpdate() {
     let changedKeys = request.resource.data
         .diff(resource.data)
@@ -282,8 +319,9 @@ service cloud.firestore {
           !changedKeys.hasAny([
             'notificationSettings'
           ])
-          || request.resource.data.notificationSettings
-             is map
+          || isValidCameraNotificationSettings(
+            request.resource.data.notificationSettings
+          )
         )
 
         && (
