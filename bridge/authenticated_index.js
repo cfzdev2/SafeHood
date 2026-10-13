@@ -46,6 +46,7 @@ const {SnapshotUploadQueue} = require('./ai/snapshot_upload_queue');
 const {AiEventOutbox} = require('./ai/event_outbox');
 const {ClipUploadQueue} = require('./ai/clip_upload_queue');
 const {EventRecordingManager} = require('./ai/event_recording_manager');
+const {buildBridgeDiagnostics} = require('./ai/bridge_diagnostics');
 
 const CONFIG_PATH =
   path.join(
@@ -134,6 +135,14 @@ const sessions =
 
 const aiSessions =
   new Map();
+
+let desiredAiSessionCount = 0;
+
+let desiredAiSessionsFingerprint =
+  null;
+
+let desiredAiSessionsStartedAtMillis =
+  null;
 
 let aiScheduler = null;
 
@@ -493,6 +502,21 @@ function queueStateReport(
               status,
               cameraStatuses:
                 cameraStatusPayload(),
+              ...(status === 'online' ? {
+                diagnostics:
+                  buildBridgeDiagnostics({
+                    sessions: aiSessions,
+                    expectedSessions:
+                      desiredAiSessionCount,
+                    expectedSessionsStartedAtMillis:
+                      desiredAiSessionsStartedAtMillis,
+                    scheduler: aiScheduler,
+                    eventOutbox,
+                    snapshotQueue,
+                    clipQueue,
+                    recordingManager,
+                  }),
+              } : {}),
             },
           );
 
@@ -911,6 +935,39 @@ async function syncAiSessions(
   }
 
   snapshotQueue.retainCameras(desired.keys());
+
+  const desiredFingerprint =
+    JSON.stringify(
+      [...desired.entries()]
+        .map(
+          ([cameraId, camera]) => [
+            cameraId,
+            aiSessionFingerprint(camera),
+          ],
+        )
+        .sort(
+          ([firstCameraId], [secondCameraId]) =>
+            firstCameraId.localeCompare(
+              secondCameraId,
+            ),
+        ),
+    );
+
+  if (
+    desiredFingerprint !==
+      desiredAiSessionsFingerprint
+  ) {
+    desiredAiSessionsFingerprint =
+      desiredFingerprint;
+
+    desiredAiSessionsStartedAtMillis =
+      desired.size > 0 ?
+        Date.now() :
+        null;
+  }
+
+  desiredAiSessionCount =
+    desired.size;
 
   for (
     const cameraId of

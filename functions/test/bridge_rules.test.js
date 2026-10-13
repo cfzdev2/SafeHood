@@ -121,6 +121,12 @@ beforeEach(async () => {
                   ownerId,
                   name: "Bridge testowy",
                   status: "online",
+                  diagnostics: {
+                    schemaVersion: 1,
+                    health: "healthy",
+                    updatedAt:
+                      Timestamp.fromMillis(1000),
+                  },
                   updatedAt:
                     Timestamp.fromMillis(1000),
                 },
@@ -154,6 +160,10 @@ test(
       );
 
       assert.equal(snapshot.exists(), true);
+      assert.equal(
+          snapshot.data().diagnostics.health,
+          "healthy",
+      );
     },
 );
 
@@ -234,6 +244,23 @@ test(
               bridgeRef(db),
               {
                 status: "offline",
+              },
+          ),
+      );
+    },
+);
+
+test(
+    "właściciel nie fałszuje diagnostyki Bridge",
+    async () => {
+      const db = firestoreFor(ownerId);
+
+      await assertFails(
+          updateDoc(
+              bridgeRef(db),
+              {
+                "diagnostics.health":
+                    "healthy",
               },
           ),
       );

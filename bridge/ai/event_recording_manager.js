@@ -19,6 +19,14 @@ class EventRecordingManager {
     this._controller = new AbortController();
   }
 
+  get bufferCount() {
+    return this._recorders.size;
+  }
+
+  get activeCaptureCount() {
+    return this._captures;
+  }
+
   start() {
     if (!this._started) this._started = this._start();
     return this._started;

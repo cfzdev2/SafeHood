@@ -448,6 +448,9 @@ class CameraAiSession {
     const timestampMillis =
       this.now();
 
+    this._stats.lastFrameAtMillis =
+      timestampMillis;
+
     const trackingResult =
       this.tracker.update(
         zoneResult.accepted,
@@ -560,6 +563,7 @@ class CameraAiSession {
       confirmedEvents: 0,
       eventErrors: 0,
       startedAtMillis: null,
+      lastFrameAtMillis: null,
       stoppedAtMillis: null,
     };
   }

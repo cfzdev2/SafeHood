@@ -1,3 +1,5 @@
+import 'bridge_diagnostics.dart';
+
 class BridgeStatus {
   final String id;
   final String name;
@@ -8,6 +10,7 @@ class BridgeStatus {
   final DateTime? lastSeenAt;
   final DateTime? pairedAt;
   final bool isActive;
+  final BridgeDiagnostics? diagnostics;
 
   const BridgeStatus({
     required this.id,
@@ -19,6 +22,7 @@ class BridgeStatus {
     required this.lastSeenAt,
     this.pairedAt,
     this.isActive = false,
+    this.diagnostics,
   });
 
   bool isOnlineAt(DateTime now) {

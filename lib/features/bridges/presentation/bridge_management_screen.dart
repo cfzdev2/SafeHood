@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../data/bridge_service.dart';
 import '../domain/bridge_status.dart';
 import 'bridge_pairing_screen.dart';
+import 'widgets/bridge_diagnostics_panel.dart';
 
 class BridgeManagementScreen extends StatefulWidget {
   const BridgeManagementScreen({super.key});
@@ -352,6 +353,12 @@ class _BridgeManagementScreenState extends State<BridgeManagementScreen> {
                   : bridge.isSecurelyPaired
                   ? 'Bezpiecznie sparowany'
                   : 'Tryb deweloperski',
+            ),
+            const SizedBox(height: 8),
+            const Divider(),
+            BridgeDiagnosticsPanel(
+              diagnostics: bridge.diagnostics,
+              bridgeOnline: isOnline,
             ),
             const SizedBox(height: 16),
             Row(

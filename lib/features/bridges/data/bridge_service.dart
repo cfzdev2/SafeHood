@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../domain/bridge_diagnostics.dart';
 import '../domain/bridge_status.dart';
 
 class BridgeService {
@@ -40,6 +41,7 @@ class BridgeService {
           lastSeenAt: _parseDateTime(data['lastSeenAt']),
           pairedAt: _parseDateTime(data['pairedAt']),
           isActive: data['isActive'] as bool? ?? false,
+          diagnostics: BridgeDiagnostics.tryParse(data['diagnostics']),
         );
       }).toList();
 

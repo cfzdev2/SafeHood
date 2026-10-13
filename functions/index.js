@@ -69,6 +69,11 @@ const {
   normalizeCameraAiZoneConfiguration,
 } = require("./camera_ai_zones");
 
+const {
+  BridgeDiagnosticsError,
+  normalizeBridgeDiagnostics,
+} = require("./bridge_diagnostics");
+
 initializeApp();
 
 const db = getFirestore();
@@ -4241,6 +4246,13 @@ exports.reportBridgeState = onRequest(
         const body =
             request.body || {};
 
+        const bridgeDiagnostics =
+            body.diagnostics == null ?
+              null :
+              normalizeBridgeDiagnostics(
+                  body.diagnostics,
+              );
+
         const bridgeStatus =
             body.status === "offline" ?
               "offline" :
@@ -4403,6 +4415,13 @@ exports.reportBridgeState = onRequest(
                   timestamp,
               updatedAt:
                   timestamp,
+              ...(bridgeDiagnostics ? {
+                diagnostics: {
+                  ...bridgeDiagnostics,
+                  updatedAt:
+                      timestamp,
+                },
+              } : {}),
             },
             {
               merge: true,
@@ -4422,8 +4441,21 @@ exports.reportBridgeState = onRequest(
                 activeCameraCount :
                 0,
           acceptedCameraCount,
+          diagnosticsAccepted:
+              bridgeDiagnostics !== null,
         });
       } catch (error) {
+        if (
+          error instanceof
+            BridgeDiagnosticsError
+        ) {
+          response.status(400).json({
+            error: error.message,
+          });
+
+          return;
+        }
+
         console.error(
             "BRIDGE STATE ERROR:",
             error,

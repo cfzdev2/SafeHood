@@ -236,6 +236,11 @@ test(
       1,
     );
 
+    assert.equal(
+      session.stats.lastFrameAtMillis,
+      3000,
+    );
+
     await session.stop();
 
     assert.equal(
