@@ -64,11 +64,19 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   void _save() {
     if (!_form.currentState!.validate()) return;
     final user = _username.text.trim();
+    final rtspUri = parseManualRtspUri(_rtsp.text);
+    final unchangedRtsp = rtspUri == widget.initial.rtspUri;
+    final unchangedLogin =
+        user == (widget.initial.login?.username ?? '') &&
+        _password.text == (widget.initial.login?.password ?? '');
     Navigator.pop(
       context,
       LocalCameraConnection(
         login: user.isEmpty ? null : CameraLogin(user, _password.text),
-        rtspUri: parseManualRtspUri(_rtsp.text),
+        rtspUri: rtspUri,
+        reolinkUid: unchangedRtsp ? widget.initial.reolinkUid : null,
+        rtspVerified:
+            unchangedRtsp && unchangedLogin && widget.initial.rtspVerified,
         onvifUri: widget.allowOnvifOverride
             ? parseManualOnvifUri(_onvif.text)
             : widget.initial.onvifUri,

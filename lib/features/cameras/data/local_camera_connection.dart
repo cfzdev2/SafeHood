@@ -14,13 +14,26 @@ class CameraLogin {
 }
 
 class LocalCameraConnection {
-  const LocalCameraConnection({this.login, this.rtspUri, this.onvifUri});
+  const LocalCameraConnection({
+    this.login,
+    this.rtspUri,
+    this.onvifUri,
+    this.reolinkUid,
+    this.rtspVerified = false,
+  });
 
   final CameraLogin? login;
   final Uri? rtspUri;
   final Uri? onvifUri;
+  final String? reolinkUid;
+  final bool rtspVerified;
 
   bool get isEmpty => login == null && rtspUri == null && onvifUri == null;
+
+  Uri? get playbackUri {
+    final uri = rtspUri;
+    return uri == null || rtspVerified ? uri : applyCameraLogin(uri, login);
+  }
 
   Camera cameraWithLocalEndpoint(Camera camera) {
     final endpoint = onvifUri;
@@ -59,12 +72,18 @@ class LocalCameraConnectionStore {
     final password = data['password'] as String?;
     final rtsp = data['rtsp'] as String?;
     final onvif = data['onvif'] as String?;
+    final reolinkUid = data['reolinkUid'] as String?;
     return LocalCameraConnection(
       login: username == null || password == null
           ? null
           : CameraLogin(username, password),
       rtspUri: rtsp == null ? null : parseManualRtspUri(rtsp),
       onvifUri: onvif == null ? null : parseManualOnvifUri(onvif),
+      rtspVerified: data['rtspVerified'] == true,
+      reolinkUid:
+          reolinkUid != null && RegExp(r'^[A-Z0-9]{16}$').hasMatch(reolinkUid)
+          ? reolinkUid
+          : null,
     );
   }
 
@@ -82,6 +101,8 @@ class LocalCameraConnectionStore {
         'password': connection.login?.password,
         'rtsp': connection.rtspUri?.toString(),
         'onvif': connection.onvifUri?.toString(),
+        'reolinkUid': connection.reolinkUid,
+        'rtspVerified': connection.rtspVerified,
       }),
     );
   }

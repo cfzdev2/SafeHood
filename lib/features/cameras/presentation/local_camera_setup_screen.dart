@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/camera_discovery_service.dart';
+import '../data/local_camera_connection.dart';
+import '../data/local_camera_registration.dart';
 import '../data/local_camera_store.dart';
 import '../domain/camera.dart';
 import 'camera_pairing_screen.dart';
@@ -13,9 +15,14 @@ import 'local_camera_preview.dart';
 enum LocalCameraSetupResult { saved }
 
 class LocalCameraSetupScreen extends StatelessWidget {
-  const LocalCameraSetupScreen({super.key, required this.store});
+  const LocalCameraSetupScreen({
+    super.key,
+    required this.onSave,
+    this.savedSource,
+  });
 
-  final LocalCameraStore store;
+  final SaveLocalCamera onSave;
+  final LocalCameraSource? savedSource;
 
   Future<void> _open(BuildContext context, Widget child) async {
     final saved = await Navigator.of(
@@ -28,8 +35,52 @@ class LocalCameraSetupScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final saved = savedSource;
+    if (saved != null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Przenieś kamerę')),
+        body: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text(saved.name, style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Text('Zapisany podgląd: ${saved.uri.host}'),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: const Icon(Icons.wifi_find),
+              title: const Text('Wykryj ONVIF tej kamery'),
+              subtitle: const Text(
+                'Zachowaj obraz i umożliw przypisanie kamery do Bridge.',
+              ),
+              onTap: () => _open(
+                context,
+                _LocalOnvifScreen(onSave: onSave, savedSource: saved),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam_outlined),
+              title: const Text('Przenieś sam podgląd RTSP'),
+              subtitle: const Text('Obraz bez monitoringu przez Bridge.'),
+              onTap: () => _open(
+                context,
+                LocalCameraPreview(
+                  source: saved,
+                  refreshSource: true,
+                  onSave: (source, location) => onSave(
+                    LocalCameraRegistration.fromPreview(
+                      source: source,
+                      location: location,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Scaffold(
-      appBar: AppBar(title: const Text('Dodaj kamerę lokalną')),
+      appBar: AppBar(title: const Text('Skonfiguruj kamerę')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -43,15 +94,15 @@ class LocalCameraSetupScreen extends StatelessWidget {
                 'E1 Pro / E330 w wersji z Bluetooth · pilotaż',
               ),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () => _open(context, _ReolinkSetupScreen(store: store)),
+              onTap: () => _open(context, _ReolinkSetupScreen(onSave: onSave)),
             ),
           ),
           Card(
             child: ListTile(
               leading: const Icon(Icons.wifi_protected_setup),
-              title: const Text('Hotspot kamery ONVIF'),
+              title: const Text('Hotspot kamery (ONVIF lub DVRIP)'),
               subtitle: const Text(
-                'Dla kamer z konfiguracją Wi-Fi przez ONVIF',
+                'Połącz kamerę z domowym Wi-Fi i sprawdź obraz',
               ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () async {
@@ -61,7 +112,7 @@ class LocalCameraSetupScreen extends StatelessWidget {
                   ),
                 );
                 if (discover == true && context.mounted) {
-                  await _open(context, _LocalOnvifScreen(store: store));
+                  await _open(context, _LocalOnvifScreen(onSave: onSave));
                 }
               },
             ),
@@ -78,7 +129,7 @@ class LocalCameraSetupScreen extends StatelessWidget {
               title: const Text('Wykryj kamerę ONVIF'),
               subtitle: const Text('Znajdź kamerę połączoną z tą samą siecią'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () => _open(context, _LocalOnvifScreen(store: store)),
+              onTap: () => _open(context, _LocalOnvifScreen(onSave: onSave)),
             ),
           ),
           Card(
@@ -86,11 +137,11 @@ class LocalCameraSetupScreen extends StatelessWidget {
               leading: const Icon(Icons.link),
               title: const Text('Wpisz adres RTSP'),
               subtitle: const Text(
-                'Sprawdź obraz i zapisz kamerę na telefonie',
+                'Sprawdź obraz i dodaj kamerę do swojej listy',
               ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () =>
-                  _open(context, ManualLocalCameraScreen(store: store)),
+                  _open(context, _ManualLocalCameraScreen(onSave: onSave)),
             ),
           ),
         ],
@@ -100,9 +151,10 @@ class LocalCameraSetupScreen extends StatelessWidget {
 }
 
 class _LocalOnvifScreen extends StatefulWidget {
-  const _LocalOnvifScreen({required this.store});
+  const _LocalOnvifScreen({required this.onSave, this.savedSource});
 
-  final LocalCameraStore store;
+  final SaveLocalCamera onSave;
+  final LocalCameraSource? savedSource;
 
   @override
   State<_LocalOnvifScreen> createState() => _LocalOnvifScreenState();
@@ -112,11 +164,13 @@ class _LocalOnvifScreenState extends State<_LocalOnvifScreen> {
   late Future<List<DetectedCamera>> _cameras = _discover();
 
   Future<List<DetectedCamera>> _discover() async {
+    final savedHost = widget.savedSource?.uri.host;
     final devices = await CameraDiscoveryService().discoverCameras();
     return devices
         .where((camera) {
           final address = camera.ipAddress;
           return address != null &&
+              (savedHost == null || address == savedHost) &&
               parseLocalRtsp('rtsp://$address/') != null &&
               camera.connectionType == CameraConnectionType.onvif;
         })
@@ -126,8 +180,11 @@ class _LocalOnvifScreenState extends State<_LocalOnvifScreen> {
   Future<void> _open(DetectedCamera camera) async {
     final saved = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
-        builder: (_) =>
-            _LocalOnvifConnection(store: widget.store, camera: camera),
+        builder: (_) => _LocalOnvifConnection(
+          onSave: widget.onSave,
+          camera: camera,
+          savedSource: widget.savedSource,
+        ),
       ),
     );
     if (saved == true && mounted) Navigator.of(context).pop(true);
@@ -143,6 +200,7 @@ class _LocalOnvifScreenState extends State<_LocalOnvifScreen> {
           return const Center(child: CircularProgressIndicator());
         }
         final cameras = snapshot.data ?? [];
+        final saved = widget.savedSource;
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -161,6 +219,20 @@ class _LocalOnvifScreenState extends State<_LocalOnvifScreen> {
               onPressed: () => setState(() => _cameras = _discover()),
               child: const Text('Szukaj ponownie'),
             ),
+            if (saved != null)
+              TextButton(
+                onPressed: () => _open(
+                  DetectedCamera(
+                    deviceId: 'onvif-${saved.uri.host}',
+                    displayName: saved.name,
+                    brand: 'Nieznany producent',
+                    model: 'Nieznany model',
+                    ipAddress: saved.uri.host,
+                    connectionType: CameraConnectionType.onvif,
+                  ),
+                ),
+                child: const Text('Podaj adres ONVIF tej kamery'),
+              ),
           ],
         );
       },
@@ -169,10 +241,15 @@ class _LocalOnvifScreenState extends State<_LocalOnvifScreen> {
 }
 
 class _LocalOnvifConnection extends StatefulWidget {
-  const _LocalOnvifConnection({required this.store, required this.camera});
+  const _LocalOnvifConnection({
+    required this.onSave,
+    required this.camera,
+    this.savedSource,
+  });
 
-  final LocalCameraStore store;
+  final SaveLocalCamera onSave;
   final DetectedCamera camera;
+  final LocalCameraSource? savedSource;
 
   @override
   State<_LocalOnvifConnection> createState() => _LocalOnvifConnectionState();
@@ -187,7 +264,7 @@ class _LocalOnvifConnectionState extends State<_LocalOnvifConnection> {
 
   String _defaultEndpoint() {
     final camera = widget.camera;
-    final advertised = Uri.tryParse(camera.onvifServiceUrl ?? '');
+    final advertised = parseManualOnvifUri(camera.onvifServiceUrl ?? '');
     if (advertised != null &&
         advertised.scheme == 'http' &&
         advertised.host == camera.ipAddress &&
@@ -213,11 +290,10 @@ class _LocalOnvifConnectionState extends State<_LocalOnvifConnection> {
 
   Future<void> _preview() async {
     if (_busy) return;
-    final endpoint = Uri.tryParse(_endpoint.text.trim());
+    final endpoint = parseManualOnvifUri(_endpoint.text);
     if (endpoint == null ||
         endpoint.scheme != 'http' ||
-        endpoint.host != widget.camera.ipAddress ||
-        endpoint.userInfo.isNotEmpty) {
+        endpoint.host != widget.camera.ipAddress) {
       setState(
         () => _problem = 'Wpisz adres HTTP usługi ONVIF dla tej kamery.',
       );
@@ -229,19 +305,27 @@ class _LocalOnvifConnectionState extends State<_LocalOnvifConnection> {
       _problem = null;
     });
     try {
+      final user = _user.text.trim();
+      final password = _password.text;
       final uri = await const LocalCameraPlayer()
-          .resolveOnvif(endpoint, _user.text.trim(), _password.text)
+          .resolveOnvif(endpoint, user, password)
           .timeout(const Duration(seconds: 24));
       if (!mounted) return;
       final saved = await Navigator.of(context).push<bool>(
         MaterialPageRoute<bool>(
           builder: (_) => LocalCameraPreview(
-            source: LocalCameraSource(
-              name: widget.camera.displayName,
-              uri: uri,
+            source:
+                widget.savedSource ??
+                LocalCameraSource(name: widget.camera.displayName, uri: uri),
+            onSave: (source, location) => widget.onSave(
+              LocalCameraRegistration.fromPreview(
+                source: source,
+                location: location,
+                detected: widget.camera,
+                onvifEndpoint: endpoint,
+                login: user.isEmpty ? null : CameraLogin(user, password),
+              ),
             ),
-            store: widget.store,
-            allowSave: true,
           ),
         ),
       );
@@ -292,6 +376,9 @@ class _LocalOnvifConnectionState extends State<_LocalOnvifConnection> {
         const SizedBox(height: 8),
         ExpansionTile(
           title: const Text('Adres usługi ONVIF'),
+          initiallyExpanded:
+              widget.camera.onvifServiceUrl == null &&
+              widget.savedSource != null,
           children: [
             TextField(
               controller: _endpoint,
@@ -314,25 +401,18 @@ class _LocalOnvifConnectionState extends State<_LocalOnvifConnection> {
   );
 }
 
-class ManualLocalCameraScreen extends StatefulWidget {
-  const ManualLocalCameraScreen({
-    super.key,
-    required this.store,
-    this.existing,
-  });
+class _ManualLocalCameraScreen extends StatefulWidget {
+  const _ManualLocalCameraScreen({required this.onSave});
 
-  final LocalCameraStore store;
-  final SavedLocalCamera? existing;
+  final SaveLocalCamera onSave;
 
   @override
-  State<ManualLocalCameraScreen> createState() =>
+  State<_ManualLocalCameraScreen> createState() =>
       _ManualLocalCameraScreenState();
 }
 
-class _ManualLocalCameraScreenState extends State<ManualLocalCameraScreen> {
-  late final _address = TextEditingController(
-    text: widget.existing?.source.uri.toString(),
-  );
+class _ManualLocalCameraScreenState extends State<_ManualLocalCameraScreen> {
+  final _address = TextEditingController();
   String? _problem;
 
   @override
@@ -350,13 +430,13 @@ class _ManualLocalCameraScreenState extends State<ManualLocalCameraScreen> {
     final saved = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => LocalCameraPreview(
-          source: LocalCameraSource(
-            name: widget.existing?.source.name ?? 'Kamera',
-            uri: uri,
+          source: LocalCameraSource(name: 'Kamera', uri: uri),
+          onSave: (source, location) => widget.onSave(
+            LocalCameraRegistration.fromPreview(
+              source: source,
+              location: location,
+            ),
           ),
-          store: widget.store,
-          existingId: widget.existing?.id,
-          allowSave: true,
         ),
       ),
     );
@@ -403,9 +483,9 @@ class _ManualLocalCameraScreenState extends State<ManualLocalCameraScreen> {
 }
 
 class _ReolinkSetupScreen extends StatefulWidget {
-  const _ReolinkSetupScreen({required this.store});
+  const _ReolinkSetupScreen({required this.onSave});
 
-  final LocalCameraStore store;
+  final SaveLocalCamera onSave;
 
   @override
   State<_ReolinkSetupScreen> createState() => _ReolinkSetupScreenState();
@@ -545,8 +625,12 @@ class _ReolinkSetupScreenState extends State<_ReolinkSetupScreen> {
         MaterialPageRoute<bool>(
           builder: (_) => LocalCameraPreview(
             source: source,
-            store: widget.store,
-            allowSave: true,
+            onSave: (source, location) => widget.onSave(
+              LocalCameraRegistration.fromPreview(
+                source: source,
+                location: location,
+              ),
+            ),
           ),
         ),
       );

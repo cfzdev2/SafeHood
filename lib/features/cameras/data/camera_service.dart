@@ -56,17 +56,32 @@ class CameraService {
   Future<void> addCamera(
     Camera camera, {
     LocalCameraConnection connection = const LocalCameraConnection(),
+    String? legacyId,
   }) async {
     final userId = _uid;
     final userRef = _firestore.collection('users').doc(userId);
 
-    final document = _camerasCollection.doc();
+    if (legacyId != null && !RegExp(r'^[a-f0-9-]{36}$').hasMatch(legacyId)) {
+      throw ArgumentError('Nieprawidłowy identyfikator zapisanej kamery.');
+    }
+    final document = userRef
+        .collection('cameras')
+        .doc(legacyId == null ? null : 'local-$legacyId');
+    // Retry the same import if removing the old entry failed. Never replace
+    // an existing camera's settings or device credentials on that retry.
+    if (legacyId != null &&
+        (await document.get(const GetOptions(source: Source.server))).exists) {
+      return;
+    }
 
     const store = LocalCameraConnectionStore();
     if (!connection.isEmpty) await store.save(userId, document.id, connection);
 
     try {
       await _firestore.runTransaction<void>((transaction) async {
+        if (legacyId != null && (await transaction.get(document)).exists) {
+          return;
+        }
         final userSnapshot = await transaction.get(userRef);
 
         final userData = userSnapshot.data();

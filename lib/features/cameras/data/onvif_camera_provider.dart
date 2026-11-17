@@ -172,9 +172,9 @@ class OnvifCameraProvider
     try {
       final settings = await const LocalCameraConnectionStore().read(camera.id);
       if (_disposed) return;
-      final manualUri = settings.rtspUri;
+      final manualUri = settings.playbackUri;
       if (manualUri != null) {
-        _streamUri = applyCameraLogin(manualUri, settings.login);
+        _streamUri = manualUri;
       } else {
         final device = await openOnvifDevice(
           settings.cameraWithLocalEndpoint(camera),

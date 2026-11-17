@@ -8,13 +8,15 @@ import '../../bridges/domain/bridge_status.dart';
 import '../../bridges/presentation/bridge_management_screen.dart';
 import '../../bridges/presentation/widgets/bridge_status_card.dart';
 import '../data/camera_service.dart';
+import '../data/local_camera_registration.dart';
 import '../data/local_camera_store.dart';
 import '../domain/camera.dart';
 import 'add_camera_screen.dart';
 import 'camera_details_screen.dart';
 import 'local_camera_setup_screen.dart';
-import 'local_cameras_screen.dart';
 import 'widgets/camera_card.dart';
+
+typedef _LegacyCamera = ({LocalCameraStore store, SavedLocalCamera camera});
 
 class CamerasScreen extends StatefulWidget {
   const CamerasScreen({super.key});
@@ -31,6 +33,7 @@ class _CamerasScreenState extends State<CamerasScreen> {
   late final Stream<List<Camera>> _camerasStream;
 
   late final Stream<List<BridgeStatus>> _bridgesStream;
+  Future<List<_LegacyCamera>>? _legacyCameras;
 
   Timer? _statusRefreshTimer;
 
@@ -45,6 +48,11 @@ class _CamerasScreenState extends State<CamerasScreen> {
     _camerasStream = _cameraService.watchCameras();
 
     _bridgesStream = _bridgeService.watchBridges();
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && supportsLocalCameraSetup) {
+      _legacyCameras = _readLegacyCameras(uid);
+    }
 
     // Wymusza ponowne sprawdzenie wieku
     // heartbeat również wtedy, gdy Bridge
@@ -99,7 +107,101 @@ class _CamerasScreenState extends State<CamerasScreen> {
     );
   }
 
-  String get _localScope => FirebaseAuth.instance.currentUser?.uid ?? 'guest';
+  Future<List<_LegacyCamera>> _readLegacyCameras(String uid) async {
+    final saved = <_LegacyCamera>[];
+    for (final store in [
+      LocalCameraStore(uid),
+      const LocalCameraStore('guest'),
+    ]) {
+      try {
+        for (final camera in await store.list()) {
+          saved.add((store: store, camera: camera));
+        }
+      } catch (_) {
+        debugPrint('Nie udało się odczytać starszych kamer z tego telefonu.');
+      }
+    }
+    return saved;
+  }
+
+  Future<void> _pickLegacyCamera(
+    BuildContext context,
+    List<_LegacyCamera> cameras,
+  ) async {
+    final selected = await showModalBottomSheet<_LegacyCamera>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheet) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const ListTile(
+              title: Text('Wybierz kamerę do przeniesienia'),
+              subtitle: Text('Kamera zachowa zapisany podgląd.'),
+            ),
+            for (final saved in cameras)
+              ListTile(
+                leading: const Icon(Icons.videocam_outlined),
+                title: Text(saved.camera.source.name),
+                subtitle: Text(saved.camera.source.uri.host),
+                onTap: () => Navigator.of(sheet).pop(saved),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (context.mounted && selected != null) {
+      await _openSetup(context, legacy: selected);
+    }
+  }
+
+  Future<void> _openSetup(BuildContext context, {_LegacyCamera? legacy}) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null ||
+        (legacy != null &&
+            legacy.store.scope != uid &&
+            legacy.store.scope != 'guest')) {
+      return;
+    }
+    final result = await Navigator.of(context).push<LocalCameraSetupResult>(
+      MaterialPageRoute<LocalCameraSetupResult>(
+        builder: (_) => LocalCameraSetupScreen(
+          savedSource: legacy?.camera.source,
+          onSave: (LocalCameraRegistration setup) async {
+            if (FirebaseAuth.instance.currentUser?.uid != uid) {
+              throw StateError(
+                'Konto SafeHood zmieniło się podczas dodawania.',
+              );
+            }
+            await _cameraService.addCamera(
+              setup.camera,
+              connection: setup.connection,
+              legacyId: legacy?.camera.id,
+            );
+          },
+        ),
+      ),
+    );
+    if (result != LocalCameraSetupResult.saved || !context.mounted) return;
+    if (legacy != null) {
+      try {
+        await legacy.store.delete(legacy.camera.id);
+      } catch (_) {
+        // The account camera is already saved; a retry won't duplicate it.
+        debugPrint('Nie udało się usunąć przeniesionego wpisu z telefonu.');
+      }
+      if (!mounted ||
+          !context.mounted ||
+          FirebaseAuth.instance.currentUser?.uid != uid) {
+        return;
+      }
+      setState(() => _legacyCameras = _readLegacyCameras(uid));
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Kamera jest na liście Moje kamery.')),
+    );
+  }
 
   Future<void> _chooseHowToAdd(BuildContext context) async {
     if (!supportsLocalCameraSetup) {
@@ -115,17 +217,15 @@ class _CamerasScreenState extends State<CamerasScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.wifi_find),
-              title: const Text('Skonfiguruj kamerę lub sprawdź obraz'),
-              subtitle: const Text(
-                'Reolink, hotspot ONVIF, lokalny ONVIF lub RTSP',
-              ),
+              title: const Text('Skonfiguruj kamerę i sprawdź obraz'),
+              subtitle: const Text('Bluetooth, hotspot kamery, ONVIF lub RTSP'),
               onTap: () => Navigator.of(sheet).pop(true),
             ),
             ListTile(
               leading: const Icon(Icons.hub_outlined),
-              title: const Text('Dodaj kamerę do monitoringu'),
+              title: const Text('Inne sposoby dodawania kamery'),
               subtitle: const Text(
-                'Dotychczasowa konfiguracja Bridge i integracji producentów',
+                'Integracja producenta lub ręczna konfiguracja',
               ),
               onTap: () => Navigator.of(sheet).pop(false),
             ),
@@ -138,15 +238,7 @@ class _CamerasScreenState extends State<CamerasScreen> {
       await _openAddCameraScreen(context);
       return;
     }
-    final scope = _localScope;
-    final saved = await Navigator.of(context).push<LocalCameraSetupResult>(
-      MaterialPageRoute<LocalCameraSetupResult>(
-        builder: (_) => LocalCameraSetupScreen(store: LocalCameraStore(scope)),
-      ),
-    );
-    if (saved == LocalCameraSetupResult.saved && context.mounted) {
-      openLocalCameras(context, scope);
-    }
+    await _openSetup(context);
   }
 
   @override
@@ -155,12 +247,6 @@ class _CamerasScreenState extends State<CamerasScreen> {
       appBar: AppBar(
         title: const Text('Moje kamery'),
         actions: [
-          if (supportsLocalCameraSetup)
-            IconButton(
-              tooltip: 'Kamery lokalne na telefonie',
-              onPressed: () => openLocalCameras(context, _localScope),
-              icon: const Icon(Icons.videocam_outlined),
-            ),
           IconButton(
             tooltip: 'Zarządzaj Bridge',
             onPressed: () {
@@ -185,6 +271,21 @@ class _CamerasScreenState extends State<CamerasScreen> {
                     bridgeSnapshot.connectionState == ConnectionState.waiting,
                 error: bridgeSnapshot.error,
               ),
+              if (_legacyCameras != null)
+                FutureBuilder<List<_LegacyCamera>>(
+                  future: _legacyCameras,
+                  builder: (context, snapshot) {
+                    final cameras = snapshot.data;
+                    if (cameras == null || cameras.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return TextButton.icon(
+                      onPressed: () => _pickLegacyCamera(context, cameras),
+                      icon: const Icon(Icons.move_to_inbox_outlined),
+                      label: const Text('Przenieś wcześniej zapisaną kamerę'),
+                    );
+                  },
+                ),
               Expanded(child: _buildCameraList(bridges)),
             ],
           );

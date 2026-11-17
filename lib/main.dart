@@ -11,9 +11,7 @@ import 'package:flutter/material.dart';
 
 import 'app/app.dart';
 import 'core/services/push_notification_service.dart';
-import 'features/cameras/data/local_camera_store.dart';
 import 'features/cameras/presentation/local_camera_setup_screen.dart';
-import 'features/cameras/presentation/local_cameras_screen.dart';
 import 'firebase_options.dart';
 
 const _useFirebaseEmulators = bool.fromEnvironment(
@@ -177,11 +175,22 @@ Future<void> main() async {
     await _initializeBackend().timeout(const Duration(seconds: 8));
   } catch (error) {
     if (!supportsLocalCameraSetup) rethrow;
-    // A Firebase startup problem must not lock users out of device-only cameras.
+    debugPrint('FIREBASE START ERROR: ${error.runtimeType}');
     runApp(
       const MaterialApp(
         debugShowCheckedModeBanner: false,
-        home: LocalCamerasScreen(store: LocalCameraStore('guest')),
+        home: Scaffold(
+          body: Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Nie udało się połączyć z SafeHood. '
+                'Sprawdź połączenie i uruchom aplikację ponownie.',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ),
       ),
     );
     return;

@@ -1,22 +1,28 @@
 # Lokalne dodawanie kamer na Androidzie
 
-**Moje kamery → Dodaj kamerę → Skonfiguruj kamerę lub sprawdź obraz** otwiera kreator.
-Ten sam kreator jest dostępny z **Kamery lokalne** przy ładowaniu profilu albo
-z **Kamery lokalne bez konta** na ekranie logowania.
+**Moje kamery → Dodaj kamerę → Skonfiguruj kamerę i sprawdź obraz** otwiera kreator.
+Po sprawdzeniu obrazu zapis tworzy zwykły wpis kamery na koncie.
 
 | Ścieżka | Co sprawdza aplikacja |
 | --- | --- |
 | Reolink przez Bluetooth | Pilotaż E1 Pro / E330 w rewizji z BLE, Android 10+. Wpisz UID z etykiety. Aplikacja wysyła ustawienia Wi-Fi po dopasowaniu reklamy BLE, szuka tego UID w LAN, konfiguruje konto lokalne i RTSP. |
-| Hotspot kamery ONVIF | Dla kamer, które udostępniają konfigurację sieci przez ONVIF już w trybie parowania. Po zmianie sieci telefon wraca do domowego Wi-Fi i wyszukuje kamerę. |
+| Hotspot kamery (ONVIF lub DVRIP) | Po zmianie sieci telefon wraca do domowego Wi-Fi i wyszukuje kamerę, żeby sprawdzić ONVIF i obraz. |
 | Kamera ONVIF w sieci | Aplikacja wyszukuje kamerę oraz pyta o lokalne dane ONVIF, jeśli są potrzebne. Próbuje usługi Media i Media2, preferuje profil H.264 i prosi o adres RTSP. |
 | Ręczny RTSP | Wpisz pełny adres strumienia H.264, np. `rtsp://192.168.1.50:554/live`. Domyślnie odbiór przez TCP; po niepowodzeniu można spróbować UDP, gdy Wi-Fi kamery jest główną siecią telefonu. |
 
-Można zapisać kamerę po wyrenderowaniu pierwszej klatki. Sprawdź na ekranie,
-czy obraz się porusza. Kamery lokalne są osobną listą. Dane strumienia są
-zaszyfrowane kluczem Android Keystore i zapisane poza kopią aplikacji.
-Hasło domowego Wi-Fi nie trafia do tej listy ani do Firebase. Gość i każdy
-zalogowany użytkownik mają osobną listę na telefonie. Monitoring, nagrania,
-AI i powiadomienia nadal należą do dotychczasowych ścieżek.
+Zapis jest dostępny po wyrenderowaniu pierwszej klatki. Wpisz nazwę i
+lokalizację, a potem otwórz kamerę z **Moje kamery**. Pełny adres strumienia
+i dane logowania kamery pozostają w bezpiecznym magazynie telefonu.
+Hasło domowego Wi-Fi jest używane wyłącznie podczas parowania.
+
+Jeśli ten telefon ma wpisy ze starszej listy, w **Moje kamery** pojawi się
+przycisk **Przenieś wcześniej zapisaną kamerę**. Wybierz wpis i wykryj jego
+ONVIF albo zachowaj sam RTSP. Kreator wykorzysta zapisany adres obrazu bez
+ponownego parowania. Starszy wpis zostanie usunięty po zapisie na koncie.
+
+Potwierdzony ONVIF jest rejestrowany z adresem usługi i przypisywany do
+aktywnego Bridge konta. AI, zdarzenia, nagrania i powiadomienia wymagają, żeby
+Bridge mógł sam połączyć się z kamerą w sieci. Ręczny RTSP umożliwia podgląd.
 
 Na Reolinku aplikacja sprawdza UID ponownie po lokalnym logowaniu. Przy
 otwieraniu zapisanej kamery odszukuje ją po UID nawet po zmianie IP.
@@ -28,9 +34,10 @@ Wi-Fi. Odpowiedź BLE albo otwarty port nie oznacza działającego obrazu.
 
 ## Próba na telefonie
 
-1. Otwórz aplikację na Androidzie. Zamknij Bridge, a w trybie bez konta
-   sprawdź **Kamery lokalne → Dodaj kamerę**. Dla RTSP lub ONVIF w tej
-   samej sieci zaczekaj na obraz, zapisz i otwórz podgląd ponownie.
+1. Otwórz aplikację na Androidzie i zaloguj się. W **Moje kamery → Dodaj
+   kamerę** wybierz RTSP lub ONVIF. Zaczekaj na obraz, zapisz i otwórz
+   podgląd z głównej listy. Jeśli masz starszy wpis, sprawdź też jego
+   przeniesienie i przypisanie do aktywnego Bridge.
 2. Na testowym Reolinku E1 Pro / E330 z BLE uruchom tryb pierwszej
    konfiguracji zgodnie z instrukcją modelu. Wpisz UID, zezwól na Bluetooth,
    wpisz dane Wi-Fi 2,4 GHz, ustaw hasło kamery i otwórz podgląd. Zanotuj

@@ -2,8 +2,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../../app/app_shell.dart';
-import '../../cameras/presentation/local_camera_setup_screen.dart';
-import '../../cameras/presentation/local_cameras_screen.dart';
 import '../../profile/data/user_profile_service.dart';
 import '../../profile/domain/app_user.dart';
 import '../../profile/presentation/account_setup_screen.dart';
@@ -41,20 +39,12 @@ class AuthGate extends StatelessWidget {
           stream: profileService.watchProfile(firebaseUser.uid),
           builder: (context, profileSnapshot) {
             if (profileSnapshot.connectionState == ConnectionState.waiting) {
-              return _ProfileLoadingScreen(scope: firebaseUser.uid);
+              return const _ProfileLoadingScreen();
             }
 
             if (profileSnapshot.hasError) {
-              return Scaffold(
-                body: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text('Nie udało się wczytać profilu.'),
-                      _LocalCamerasShortcut(scope: firebaseUser.uid),
-                    ],
-                  ),
-                ),
+              return const Scaffold(
+                body: Center(child: Text('Nie udało się wczytać profilu.')),
               );
             }
 
@@ -73,9 +63,7 @@ class AuthGate extends StatelessWidget {
 }
 
 class _ProfileLoadingScreen extends StatelessWidget {
-  const _ProfileLoadingScreen({required this.scope});
-
-  final String scope;
+  const _ProfileLoadingScreen();
 
   @override
   Widget build(BuildContext context) {
@@ -101,31 +89,10 @@ class _ProfileLoadingScreen extends StatelessWidget {
                   'automatycznie.',
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 12),
-                _LocalCamerasShortcut(scope: scope),
               ],
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _LocalCamerasShortcut extends StatelessWidget {
-  const _LocalCamerasShortcut({required this.scope});
-
-  final String scope;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!supportsLocalCameraSetup) return const SizedBox.shrink();
-    return SafeArea(
-      minimum: const EdgeInsets.all(8),
-      child: OutlinedButton.icon(
-        onPressed: () => openLocalCameras(context, scope),
-        icon: const Icon(Icons.videocam_outlined),
-        label: const Text('Kamery lokalne'),
       ),
     );
   }

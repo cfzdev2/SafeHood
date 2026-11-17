@@ -1,8 +1,11 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../domain/camera.dart';
 import '../domain/camera_provider.dart';
 import 'local_camera_connection.dart';
+import 'local_camera_store.dart';
 
 class RtspCameraProvider extends CameraProvider {
   RtspCameraProvider({required this.camera})
@@ -45,13 +48,16 @@ class RtspCameraProvider extends CameraProvider {
     _emit(_state.copyWith(isConnecting: true, isOnline: false, isLive: false));
     try {
       final settings = await const LocalCameraConnectionStore().read(camera.id);
-      final address = settings.rtspUri;
+      final address = settings.playbackUri;
       if (address == null) {
         throw const CameraConnectionIssue(
           'Dodaj adres RTSP w ustawieniach kamery. Adres jest zapisany tylko na tym telefonie.',
         );
       }
-      _uri = applyCameraLogin(address, settings.login);
+      final uid = settings.reolinkUid;
+      _uri = uid != null && defaultTargetPlatform == TargetPlatform.android
+          ? await const LocalCameraPlayer().refreshReolink(uid, address)
+          : address;
     } finally {
       _emit(_state.copyWith(isConnecting: false));
     }

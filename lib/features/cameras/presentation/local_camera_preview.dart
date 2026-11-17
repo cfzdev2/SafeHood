@@ -5,21 +5,19 @@ import 'package:flutter/services.dart';
 
 import '../data/local_camera_store.dart';
 
-/// Shared player for the add flow and previously saved local cameras.
+/// Verifies the stream before adding the camera to the account.
 /// Saving is only possible after the Android player renders a video frame.
 class LocalCameraPreview extends StatefulWidget {
   const LocalCameraPreview({
     super.key,
     required this.source,
-    required this.store,
-    this.existingId,
-    this.allowSave = false,
+    required this.onSave,
+    this.refreshSource = false,
   });
 
   final LocalCameraSource source;
-  final LocalCameraStore store;
-  final String? existingId;
-  final bool allowSave;
+  final Future<void> Function(LocalCameraSource source, String location) onSave;
+  final bool refreshSource;
 
   @override
   State<LocalCameraPreview> createState() => _LocalCameraPreviewState();
@@ -28,7 +26,9 @@ class LocalCameraPreview extends StatefulWidget {
 class _LocalCameraPreviewState extends State<LocalCameraPreview>
     with WidgetsBindingObserver {
   late final _name = TextEditingController(text: widget.source.name);
+  final _location = TextEditingController(text: 'Dom');
   final _player = const LocalCameraPlayer();
+  Uri? _openedUri;
   int? _texture;
   Timer? _timer;
   int _generation = 0;
@@ -50,6 +50,7 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
     WidgetsBinding.instance.removeObserver(this);
     _release();
     _name.dispose();
+    _location.dispose();
     super.dispose();
   }
 
@@ -72,6 +73,7 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
     _timer = null;
     final texture = _texture;
     _texture = null;
+    _openedUri = null;
     _confirmed = false;
     if (texture != null) unawaited(_stop(texture));
   }
@@ -94,7 +96,7 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
     try {
       var uri = widget.source.uri;
       final uid = widget.source.reolinkUid;
-      if (!widget.allowSave && uid != null) {
+      if (widget.refreshSource && uid != null) {
         uri = await _player.refreshReolink(uid, uri);
       }
       if (!mounted || generation != _generation) return;
@@ -104,6 +106,7 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
         return;
       }
       _texture = texture;
+      _openedUri = uri;
       final startup = Stopwatch()..start();
       _schedulePoll(texture, generation, startup);
     } on PlatformException catch (error) {
@@ -172,16 +175,24 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
 
   Future<void> _save() async {
     final name = _name.text.trim();
-    if (!_confirmed || _saving || name.isEmpty) return;
+    final location = _location.text.trim();
+    final uri = _openedUri;
+    if (!_confirmed ||
+        _saving ||
+        uri == null ||
+        name.isEmpty ||
+        location.isEmpty) {
+      return;
+    }
     setState(() => _saving = true);
     try {
-      await widget.store.save(
+      await widget.onSave(
         LocalCameraSource(
           name: name,
-          uri: widget.source.uri,
+          uri: uri,
           reolinkUid: widget.source.reolinkUid,
         ),
-        id: widget.existingId,
+        location,
       );
       if (mounted) Navigator.of(context).pop(true);
     } catch (_) {
@@ -189,7 +200,9 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Nie udało się zapisać kamery na telefonie.'),
+          content: Text(
+            'Nie udało się dodać kamery do konta. Spróbuj ponownie.',
+          ),
         ),
       );
     }
@@ -199,9 +212,7 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
   Widget build(BuildContext context) {
     final texture = _texture;
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.allowSave ? 'Sprawdź obraz' : widget.source.name),
-      ),
+      appBar: AppBar(title: const Text('Sprawdź obraz')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -242,26 +253,34 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
             ),
           ] else
             Text(_confirmed ? 'Podgląd na żywo' : 'Czekam na obraz…'),
-          if (widget.allowSave) ...[
-            const SizedBox(height: 16),
-            TextField(
-              controller: _name,
-              maxLength: 80,
-              onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(labelText: 'Nazwa kamery'),
-            ),
-            const Text(
-              'Sprawdź, czy obraz się porusza, zanim zapiszesz kamerę.',
-            ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: _confirmed && !_saving && _name.text.trim().isNotEmpty
-                  ? _save
-                  : null,
-              icon: const Icon(Icons.check),
-              label: Text(_saving ? 'Zapisuję…' : 'Zapisz na telefonie'),
-            ),
-          ],
+          const SizedBox(height: 16),
+          TextField(
+            controller: _name,
+            enabled: !_saving,
+            maxLength: 60,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: 'Nazwa kamery'),
+          ),
+          TextField(
+            controller: _location,
+            enabled: !_saving,
+            maxLength: 100,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: 'Lokalizacja'),
+          ),
+          const Text('Sprawdź, czy obraz się porusza, zanim zapiszesz kamerę.'),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed:
+                _confirmed &&
+                    !_saving &&
+                    _name.text.trim().isNotEmpty &&
+                    _location.text.trim().isNotEmpty
+                ? _save
+                : null,
+            icon: const Icon(Icons.check),
+            label: Text(_saving ? 'Zapisuję…' : 'Dodaj kamerę'),
+          ),
         ],
       ),
     );

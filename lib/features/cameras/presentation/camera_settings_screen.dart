@@ -573,11 +573,12 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
     final bridgeId = widget.camera.bridgeId;
+    final rtspOnly = widget.camera.connectionType == CameraConnectionType.rtsp;
     final notificationsBusy =
         _loadingNotifications || _savingNotifications || _deleting;
 
     final notificationTypesEnabled =
-        _notificationSettings.enabled && !notificationsBusy;
+        _notificationSettings.enabled && !notificationsBusy && !rtspOnly;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Ustawienia kamery')),
@@ -683,15 +684,21 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                   secondary: const Icon(Icons.sensors_outlined),
                   title: const Text('Monitoring przez SafeHood'),
                   subtitle: Text(
-                    _monitoringEnabled
+                    rtspOnly
+                        ? 'Połączenie RTSP służy do podglądu. Monitoring przez '
+                              'Bridge wymaga kamery ONVIF.'
+                        : _monitoringEnabled
                         ? 'SafeHood odbiera i zapisuje '
                               'zdarzenia z kamery.'
                         : 'Zdarzenia z kamery nie są '
                               'odbierane ani zapisywane.',
                   ),
-                  value: _monitoringEnabled,
+                  value: _monitoringEnabled && !rtspOnly,
                   onChanged:
-                      _loadingMonitoring || _savingMonitoring || _deleting
+                      rtspOnly ||
+                          _loadingMonitoring ||
+                          _savingMonitoring ||
+                          _deleting
                       ? null
                       : _setMonitoringEnabled,
                 ),
@@ -700,7 +707,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
               ],
             ),
           ),
-          if (user != null) ...[
+          if (user != null && !rtspOnly) ...[
             const SizedBox(height: 24),
             Text(
               'Analiza AI',
@@ -866,13 +873,15 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                   secondary: const Icon(Icons.notifications_outlined),
                   title: const Text('Powiadomienia z kamery'),
                   subtitle: Text(
-                    _notificationSettings.enabled
+                    rtspOnly
+                        ? 'To połączenie nie dostarcza zdarzeń do powiadomień.'
+                        : _notificationSettings.enabled
                         ? 'SafeHood wyśle wybrane alerty.'
                         : 'Zdarzenia będą zapisywane, '
                               'ale bez powiadomień.',
                   ),
-                  value: _notificationSettings.enabled,
-                  onChanged: notificationsBusy
+                  value: _notificationSettings.enabled && !rtspOnly,
+                  onChanged: notificationsBusy || rtspOnly
                       ? null
                       : (enabled) {
                           unawaited(

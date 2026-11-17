@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:safehood/features/cameras/data/local_camera_registration.dart';
 import 'package:safehood/features/cameras/data/local_camera_store.dart';
+import 'package:safehood/features/cameras/domain/camera.dart';
 import 'package:safehood/features/cameras/presentation/local_camera_preview.dart';
 import 'package:safehood/features/cameras/presentation/local_camera_setup_screen.dart';
 
-const _store = LocalCameraStore('guest');
 const _player = MethodChannel('safehood/local_camera_player');
-const _catalog = MethodChannel('safehood/local_camera_store');
 const _reolink = MethodChannel('safehood/reolink_pairing');
 
 void main() {
@@ -33,7 +33,7 @@ void main() {
     }
   });
 
-  testWidgets('saves only after a frame and closes the foreground player', (
+  testWidgets('imports the saved stream only after a frame and allows retry', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(800, 960));
@@ -42,6 +42,9 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     final calls = <MethodCall>[];
     var firstFrame = false;
+    var attempts = 0;
+    LocalCameraRegistration? added;
+    LocalCameraSetupResult? result;
     messenger.setMockMethodCallHandler(_player, (call) async {
       calls.add(call);
       return switch (call.method) {
@@ -55,41 +58,42 @@ void main() {
         _ => null,
       };
     });
-    messenger.setMockMethodCallHandler(_catalog, (call) async {
-      calls.add(call);
-      return null;
-    });
-    addTearDown(() {
-      messenger.setMockMethodCallHandler(_player, null);
-      messenger.setMockMethodCallHandler(_catalog, null);
-    });
+    addTearDown(() => messenger.setMockMethodCallHandler(_player, null));
     final source = LocalCameraSource(
       name: 'Kamera',
-      uri: Uri.parse('rtsp://192.168.1.40/live'),
+      uri: Uri.parse('rtsp://user:example@192.168.1.40/live?sub=1'),
     );
     await tester.pumpWidget(
       MaterialApp(
         home: Builder(
           builder: (context) => TextButton(
-            onPressed: () => Navigator.of(context).push<bool>(
-              MaterialPageRoute<bool>(
-                builder: (_) => LocalCameraPreview(
-                  source: source,
-                  store: _store,
-                  allowSave: true,
+            onPressed: () async {
+              result = await Navigator.of(context).push<LocalCameraSetupResult>(
+                MaterialPageRoute<LocalCameraSetupResult>(
+                  builder: (_) => LocalCameraSetupScreen(
+                    savedSource: source,
+                    onSave: (camera) async {
+                      if (++attempts == 1) {
+                        throw StateError('Firestore offline');
+                      }
+                      added = camera;
+                    },
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
             child: const Text('Open preview'),
           ),
         ),
       ),
     );
     await tester.tap(find.text('Open preview'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Przenieś sam podgląd RTSP'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
     final save = find.ancestor(
-      of: find.text('Zapisz na telefonie'),
+        of: find.text('Dodaj kamerę'),
       matching: find.byWidgetPredicate((widget) => widget is FilledButton),
     );
     expect(tester.widget<FilledButton>(save).onPressed, isNull);
@@ -98,9 +102,16 @@ void main() {
     expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
     await tester.tap(save);
     await tester.pumpAndSettle();
-    final saved = calls.singleWhere((call) => call.method == 'save');
-    expect(saved.arguments['scope'], 'guest');
-    expect(saved.arguments['source']['uri'], source.uri.toString());
+    expect(added, isNull);
+    expect(result, isNull);
+    expect(find.byType(LocalCameraPreview), findsOneWidget);
+    expect(find.textContaining('Nie udało się dodać kamery'), findsOneWidget);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(result, LocalCameraSetupResult.saved);
+    expect(added?.connection.rtspUri, source.uri);
+    expect(added?.camera.ipAddress, source.uri.host);
+    expect(added?.camera.connectionType, CameraConnectionType.rtsp);
     expect(
       calls.any((call) => call.method == 'stop' && call.arguments['id'] == 12),
       isTrue,
@@ -124,7 +135,11 @@ void main() {
       });
       addTearDown(() => messenger.setMockMethodCallHandler(_reolink, null));
       await tester.pumpWidget(
-        const MaterialApp(home: LocalCameraSetupScreen(store: _store)),
+        MaterialApp(
+          home: LocalCameraSetupScreen(
+            onSave: (_) async => fail('No verified preview to save'),
+          ),
+        ),
       );
       await tester.tap(find.text('Reolink przez Bluetooth'));
       await tester.pumpAndSettle();
