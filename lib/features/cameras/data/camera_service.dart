@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/foundation.dart';
+
+import 'local_camera_connection.dart';
 
 import '../domain/camera.dart';
 import '../domain/camera_ai_zone.dart';
@@ -50,44 +53,69 @@ class CameraService {
     return Camera.fromMap(document.id, data);
   }
 
-  Future<void> addCamera(Camera camera) async {
-    final userRef = _firestore.collection('users').doc(_uid);
+  Future<void> addCamera(
+    Camera camera, {
+    LocalCameraConnection connection = const LocalCameraConnection(),
+  }) async {
+    final userId = _uid;
+    final userRef = _firestore.collection('users').doc(userId);
 
     final document = _camerasCollection.doc();
 
-    await _firestore.runTransaction<void>((transaction) async {
-      final userSnapshot = await transaction.get(userRef);
+    const store = LocalCameraConnectionStore();
+    if (!connection.isEmpty) await store.save(userId, document.id, connection);
 
-      final userData = userSnapshot.data();
+    try {
+      await _firestore.runTransaction<void>((transaction) async {
+        final userSnapshot = await transaction.get(userRef);
 
-      final activeBridgeValue = userData?['activeBridgeId'];
+        final userData = userSnapshot.data();
 
-      final activeBridgeId =
-          activeBridgeValue is String && activeBridgeValue.trim().isNotEmpty
-          ? activeBridgeValue.trim()
-          : null;
+        final activeBridgeValue = userData?['activeBridgeId'];
 
-      final cameraData = camera.toMap();
+        final activeBridgeId =
+            activeBridgeValue is String && activeBridgeValue.trim().isNotEmpty
+            ? activeBridgeValue.trim()
+            : null;
 
-      if (camera.connectionType == CameraConnectionType.onvif &&
-          activeBridgeId != null) {
-        cameraData['monitoringMode'] = CameraMonitoringMode.bridge.name;
+        final cameraData = camera.toMap();
 
-        cameraData['bridgeId'] = activeBridgeId;
+        if (camera.connectionType == CameraConnectionType.onvif &&
+            activeBridgeId != null) {
+          cameraData['monitoringMode'] = CameraMonitoringMode.bridge.name;
 
-        cameraData['bridgeAssignedAt'] = FieldValue.serverTimestamp();
+          cameraData['bridgeId'] = activeBridgeId;
 
-        cameraData['bridgeMonitoringStatus'] = camera.motionDetectionEnabled
-            ? CameraMonitoringRuntimeStatus.connecting.name
-            : CameraMonitoringRuntimeStatus.offline.name;
-      }
+          cameraData['bridgeAssignedAt'] = FieldValue.serverTimestamp();
 
-      transaction.set(document, {
-        ...cameraData,
-        'createdAt': FieldValue.serverTimestamp(),
+          cameraData['bridgeMonitoringStatus'] = camera.motionDetectionEnabled
+              ? CameraMonitoringRuntimeStatus.connecting.name
+              : CameraMonitoringRuntimeStatus.offline.name;
+        }
+
+        transaction.set(document, {
+          ...cameraData,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
       });
-    });
+    } catch (_) {
+      if (!connection.isEmpty) {
+        try {
+          await store.delete(userId, document.id);
+        } catch (_) {
+          debugPrint(
+            'Nie udało się usunąć lokalnych danych niedodanej kamery.',
+          );
+        }
+      }
+      rethrow;
+    }
   }
+
+  Future<void> saveLocalCameraConnection(
+    String cameraId,
+    LocalCameraConnection connection,
+  ) => const LocalCameraConnectionStore().save(_uid, cameraId, connection);
 
   Future<void> updateCameraDetails({
     required String cameraId,
@@ -167,9 +195,7 @@ class CameraService {
     _validateAiZones(ignoreZones);
 
     return _camerasCollection.doc(cameraId).update({
-      'aiDetectionZones': detectionZones
-          .map((zone) => zone.toMap())
-          .toList(),
+      'aiDetectionZones': detectionZones.map((zone) => zone.toMap()).toList(),
       'aiIgnoreZones': ignoreZones.map((zone) => zone.toMap()).toList(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
@@ -224,8 +250,17 @@ class CameraService {
       throw ArgumentError('Brak identyfikatora kamery.');
     }
 
+    final userId = _uid;
     final callable = _functions.httpsCallable('deleteCamera');
 
     await callable.call<void>({'cameraId': normalizedCameraId});
+    try {
+      await const LocalCameraConnectionStore().delete(
+        userId,
+        normalizedCameraId,
+      );
+    } catch (_) {
+      debugPrint('Nie udało się usunąć lokalnych danych kamery.');
+    }
   }
 }

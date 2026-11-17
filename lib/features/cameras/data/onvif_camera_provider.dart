@@ -1,15 +1,17 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import '../domain/camera.dart';
 import '../domain/camera_provider.dart';
+import 'local_camera_connection.dart';
+import 'onvif_media_resolver.dart';
+import 'onvif_soap_client.dart';
 
 class OnvifCameraProvider
     implements
         CameraProvider,
+        CameraLiveStreamAlternatives,
         CameraDetectionSource,
         CameraDetectionMonitoringController {
   @override
@@ -25,6 +27,11 @@ class OnvifCameraProvider
 
   String? _profileToken;
   Uri? _streamUri;
+  OnvifDevice? _device;
+  List<Uri> _alternatives = const [];
+
+  @override
+  List<Uri> get liveStreamAlternatives => _alternatives;
 
   Timer? _eventPollingTimer;
   Timer? _eventReconnectTimer;
@@ -60,7 +67,7 @@ class OnvifCameraProvider
   @override
   CameraCapabilities get capabilities => CameraCapabilities(
     supportsLive: _streamUri != null,
-    supportsAudio: false,
+    supportsAudio: _streamUri != null,
     supportsTalk: false,
     supportsMotionDetection: false,
     supportsPersonDetection: false,
@@ -105,8 +112,12 @@ class OnvifCameraProvider
     _startingDetectionMonitoring = true;
 
     try {
-      final endpoint = _resolveDeviceServiceUrl();
-      final eventsUrl = await _getEventsServiceUrl(endpoint);
+      final settings = await const LocalCameraConnectionStore().read(camera.id);
+      final device = _device ??= await openOnvifDevice(
+        settings.cameraWithLocalEndpoint(camera),
+        settings.login,
+      );
+      final eventsUrl = await _getEventsServiceUrl(device);
 
       if (!_detectionMonitoringRequested || _disposed) {
         return;
@@ -122,7 +133,7 @@ class OnvifCameraProvider
 
       _eventsServiceUrl = eventsUrl;
 
-      debugPrint('ONVIF EVENTS: service = $eventsUrl');
+      debugPrint('ONVIF EVENTS: usługa dostępna');
 
       final subscriptionCreated = await _createEventSubscription(eventsUrl);
 
@@ -152,102 +163,44 @@ class OnvifCameraProvider
 
   @override
   Future<void> connect() async {
+    _streamUri = null;
+    _alternatives = const [];
+    _mediaServiceUrl = null;
+    _profileToken = null;
     _emit(_state.copyWith(isConnecting: true, isOnline: false, isLive: false));
 
     try {
-      final endpoint = _resolveDeviceServiceUrl();
-
-      debugPrint('ONVIF: próbuję $endpoint');
-
-      final result = await _probeDeviceService(endpoint);
-
-      switch (result) {
-        case _OnvifProbeResult.available:
-          debugPrint('ONVIF: urządzenie odpowiada');
-
-          //
-          // Media / RTSP
-          //
-
-          final mediaUrl = await _getMediaServiceUrl(endpoint);
-
-          if (mediaUrl != null) {
-            _mediaServiceUrl = mediaUrl;
-
-            debugPrint(
-              'ONVIF: Media Service = '
-              '$mediaUrl',
-            );
-
-            final profileToken = await _getFirstProfileToken(mediaUrl);
-
-            if (profileToken != null) {
-              _profileToken = profileToken;
-
-              debugPrint(
-                'ONVIF: profile token = '
-                '$profileToken',
-              );
-
-              final streamUri = await _getStreamUri(mediaUrl, profileToken);
-
-              if (streamUri != null) {
-                _streamUri = streamUri;
-
-                debugPrint(
-                  'ONVIF: RTSP URI = '
-                  '$streamUri',
-                );
-              } else {
-                debugPrint(
-                  'ONVIF: nie udało się '
-                  'pobrać RTSP URI',
-                );
-              }
-            } else {
-              debugPrint(
-                'ONVIF: nie udało się '
-                'pobrać profilu Media',
-              );
-            }
-          } else {
-            debugPrint(
-              'ONVIF: nie udało się '
-              'ustalić Media Service',
-            );
-          }
-
-          _emit(
-            _state.copyWith(isConnecting: false, isOnline: true, isLive: false),
-          );
-
-        case _OnvifProbeResult.authenticationRequired:
-          debugPrint(
-            'ONVIF: urządzenie odpowiada, '
-            'ale wymaga logowania',
-          );
-
-          _emit(
-            _state.copyWith(isConnecting: false, isOnline: true, isLive: false),
-          );
-
-        case _OnvifProbeResult.unavailable:
-          debugPrint('ONVIF: brak poprawnej odpowiedzi');
-
-          _emit(
-            _state.copyWith(
-              isConnecting: false,
-              isOnline: false,
-              isLive: false,
-            ),
-          );
+      final settings = await const LocalCameraConnectionStore().read(camera.id);
+      if (_disposed) return;
+      final manualUri = settings.rtspUri;
+      if (manualUri != null) {
+        _streamUri = applyCameraLogin(manualUri, settings.login);
+      } else {
+        final device = await openOnvifDevice(
+          settings.cameraWithLocalEndpoint(camera),
+          settings.login,
+        );
+        if (_disposed) return;
+        _device = device;
+        final streams = await OnvifMediaResolver(device).resolve();
+        if (_disposed) return;
+        final selected = streams.first;
+        _streamUri = selected.uri;
+        _profileToken = selected.profileToken;
+        _mediaServiceUrl = selected.mediaEndpoint;
+        _alternatives = streams.skip(1).map((item) => item.uri).toList();
       }
-    } catch (error) {
-      debugPrint('ONVIF CONNECT ERROR: $error');
-
+      debugPrint(
+        'ONVIF: dostępny strumień RTSP (${_alternatives.length + 1} profili)',
+      );
+      _emit(
+        _state.copyWith(isConnecting: false, isOnline: true, isLive: false),
+      );
+    } catch (_) {
       _emit(
         _state.copyWith(isConnecting: false, isOnline: false, isLive: false),
       );
+      rethrow;
     }
   }
 
@@ -264,6 +217,8 @@ class OnvifCameraProvider
 
     _profileToken = null;
     _streamUri = null;
+    _alternatives = const [];
+    _device = null;
 
     _emit(_state.copyWith(isConnecting: false, isOnline: false, isLive: false));
   }
@@ -283,10 +238,7 @@ class OnvifCameraProvider
       return;
     }
 
-    debugPrint(
-      'ONVIF: uruchamiam LIVE: '
-      '$streamUri',
-    );
+    debugPrint('ONVIF: uruchamiam LIVE');
 
     _emit(_state.copyWith(isOnline: true, isConnecting: false, isLive: true));
   }
@@ -312,305 +264,20 @@ class OnvifCameraProvider
     );
   }
 
-  Uri _resolveDeviceServiceUrl() {
-    final stored = camera.onvifServiceUrl;
-
-    if (stored != null && stored.trim().isNotEmpty) {
-      final uri = Uri.tryParse(stored.trim());
-
-      if (uri != null &&
-          (uri.scheme == 'http' || uri.scheme == 'https') &&
-          uri.host.isNotEmpty) {
-        return uri;
-      }
-    }
-
-    final ip = camera.ipAddress;
-
-    if (ip == null || ip.trim().isEmpty) {
-      throw StateError('Kamera ONVIF nie ma adresu IP.');
-    }
-
-    var scheme = 'http';
-    var port = 80;
-
-    if (camera.openPorts.contains(80)) {
-      scheme = 'http';
-      port = 80;
-    } else if (camera.openPorts.contains(443)) {
-      scheme = 'https';
-      port = 443;
-    } else if (camera.openPorts.contains(8080)) {
-      scheme = 'http';
-      port = 8080;
-    } else if (camera.openPorts.contains(8443)) {
-      scheme = 'https';
-      port = 8443;
-    } else if (camera.openPorts.contains(8000)) {
-      scheme = 'http';
-      port = 8000;
-    } else if (camera.openPorts.contains(8899)) {
-      scheme = 'http';
-      port = 8899;
-    }
-
-    return Uri(
-      scheme: scheme,
-      host: ip,
-      port: port,
-      path: '/onvif/device_service',
+  Future<Uri?> _getEventsServiceUrl(OnvifDevice device) async {
+    final reply = await device.call(
+      'GetCapabilities',
+      body: '<o:Category>All</o:Category>',
     );
-  }
-
-  Future<_OnvifProbeResult> _probeDeviceService(Uri endpoint) async {
-    final client = HttpClient();
-
-    client.connectionTimeout = const Duration(seconds: 3);
-
-    client.badCertificateCallback = (X509Certificate _, String host, int _) {
-      return _isPrivateIpv4(host);
-    };
-
-    try {
-      final request = await client
-          .postUrl(endpoint)
-          .timeout(const Duration(seconds: 4));
-
-      request.headers.set(
-        HttpHeaders.contentTypeHeader,
-        'application/soap+xml; '
-        'charset=utf-8',
-      );
-
-      request.headers.set(HttpHeaders.userAgentHeader, 'SafeHood/1.0');
-
-      request.write(_getSystemDateAndTimeSoap);
-
-      final response = await request.close().timeout(
-        const Duration(seconds: 4),
-      );
-
-      debugPrint(
-        'ONVIF: HTTP '
-        '${response.statusCode}',
-      );
-
-      if (response.statusCode == 401 || response.statusCode == 403) {
-        await response.drain<void>();
-
-        return _OnvifProbeResult.authenticationRequired;
-      }
-
-      final buffer = StringBuffer();
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer.write(chunk);
-
-        if (buffer.length > 32768) {
-          break;
-        }
-      }
-
-      final body = buffer.toString().toLowerCase();
-
-      if (response.statusCode == 200 && _looksLikeSoap(body)) {
-        return _OnvifProbeResult.available;
-      }
-
-      //
-      // SOAP Fault nadal potwierdza,
-      // że trafiliśmy w usługę
-      // SOAP/ONVIF.
-      //
-
-      if (body.contains('soap') && body.contains('fault')) {
-        return _OnvifProbeResult.available;
-      }
-
-      return _OnvifProbeResult.unavailable;
-    } on SocketException catch (error) {
-      debugPrint('ONVIF SOCKET ERROR: $error');
-
-      return _OnvifProbeResult.unavailable;
-    } on TimeoutException {
-      debugPrint('ONVIF: timeout');
-
-      return _OnvifProbeResult.unavailable;
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  Future<Uri?> _getMediaServiceUrl(Uri deviceServiceUrl) async {
-    final response = await _sendSoapRequest(
-      deviceServiceUrl,
-      _getCapabilitiesSoap,
+    final events = onvifElements(
+      reply.response('GetCapabilities'),
+      'Events',
+    ).firstOrNull;
+    return onvifAdvertisedUri(
+      onvifText(events, 'XAddr'),
+      device.endpoint,
+      schemes: const {'http', 'https'},
     );
-
-    if (response == null) {
-      return null;
-    }
-
-    final match = RegExp(
-      r'<(?:\w+:)?Media[^>]*>[\s\S]*?'
-      r'<(?:\w+:)?XAddr[^>]*>'
-      r'(.*?)'
-      r'</(?:\w+:)?XAddr>',
-      caseSensitive: false,
-    ).firstMatch(response);
-
-    final value = match?.group(1)?.trim();
-
-    if (value == null || value.isEmpty) {
-      debugPrint('ONVIF: brak Media XAddr');
-
-      return null;
-    }
-
-    final uri = Uri.tryParse(value);
-
-    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
-      debugPrint(
-        'ONVIF: niepoprawny '
-        'Media XAddr: $value',
-      );
-
-      return null;
-    }
-
-    return uri;
-  }
-
-  Future<String?> _getFirstProfileToken(Uri mediaServiceUrl) async {
-    final response = await _sendSoapRequest(mediaServiceUrl, _getProfilesSoap);
-
-    if (response == null) {
-      return null;
-    }
-
-    final match = RegExp(
-      r'''<(?:\w+:)?Profiles[^>]*token=["']([^"']+)["']''',
-      caseSensitive: false,
-    ).firstMatch(response);
-
-    final token = match?.group(1)?.trim();
-
-    if (token == null || token.isEmpty) {
-      debugPrint('ONVIF: brak profilu Media');
-
-      return null;
-    }
-
-    return token;
-  }
-
-  Future<Uri?> _getStreamUri(Uri mediaServiceUrl, String profileToken) async {
-    final body = _buildGetStreamUriSoap(profileToken);
-
-    final response = await _sendSoapRequest(mediaServiceUrl, body);
-
-    if (response == null) {
-      return null;
-    }
-
-    final match = RegExp(
-      r'<(?:\w+:)?Uri[^>]*>'
-      r'(.*?)'
-      r'</(?:\w+:)?Uri>',
-      caseSensitive: false,
-    ).firstMatch(response);
-
-    final value = match?.group(1)?.trim();
-
-    if (value == null || value.isEmpty) {
-      debugPrint('ONVIF: brak Stream URI');
-
-      return null;
-    }
-
-    final uri = Uri.tryParse(value);
-
-    if (uri == null || uri.scheme.toLowerCase() != 'rtsp') {
-      debugPrint(
-        'ONVIF: niepoprawny '
-        'RTSP URI: $value',
-      );
-
-      return null;
-    }
-
-    return uri;
-  }
-
-  Future<Uri?> _getEventsServiceUrl(Uri deviceServiceUrl) async {
-    final response = await _sendSoapRequest(
-      deviceServiceUrl,
-      _getCapabilitiesSoap,
-    );
-
-    if (response == null) {
-      debugPrint(
-        'ONVIF EVENTS: brak odpowiedzi '
-        'GetCapabilities',
-      );
-
-      return null;
-    }
-
-    final eventsMatch = RegExp(
-      r'<(?:[A-Za-z_][A-Za-z0-9_.-]*:)?Events\b[^>]*>'
-      r'([\s\S]*?)'
-      r'</(?:[A-Za-z_][A-Za-z0-9_.-]*:)?Events>',
-      caseSensitive: false,
-    ).firstMatch(response);
-
-    if (eventsMatch == null) {
-      debugPrint(
-        'ONVIF EVENTS: '
-        'brak sekcji Events w XML',
-      );
-
-      return null;
-    }
-
-    final eventsBlock = eventsMatch.group(1) ?? '';
-
-    final xAddrMatch = RegExp(
-      r'<(?:[A-Za-z_][A-Za-z0-9_.-]*:)?XAddr\b[^>]*>'
-      r'\s*([^<]+?)\s*'
-      r'</(?:[A-Za-z_][A-Za-z0-9_.-]*:)?XAddr>',
-      caseSensitive: false,
-    ).firstMatch(eventsBlock);
-
-    final value = xAddrMatch?.group(1)?.trim();
-
-    if (value == null || value.isEmpty) {
-      debugPrint(
-        'ONVIF EVENTS: '
-        'sekcja Events istnieje, '
-        'ale brak XAddr',
-      );
-
-      return null;
-    }
-
-    final uri = Uri.tryParse(value);
-
-    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
-      debugPrint(
-        'ONVIF EVENTS: '
-        'niepoprawny XAddr: $value',
-      );
-
-      return null;
-    }
-
-    debugPrint(
-      'ONVIF EVENTS: '
-      'znaleziono XAddr = $uri',
-    );
-
-    return uri;
   }
 
   Future<bool> _createEventSubscription(Uri eventsServiceUrl) async {
@@ -647,22 +314,15 @@ class OnvifCameraProvider
       return false;
     }
 
-    final uri = Uri.tryParse(value);
-
-    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
-      debugPrint(
-        'ONVIF EVENTS: '
-        'niepoprawny PullPoint: $value',
-      );
-
-      return false;
-    }
+    final uri = onvifAdvertisedUri(
+      value,
+      eventsServiceUrl,
+      schemes: const {'http', 'https'},
+    );
+    if (uri == null) return false;
 
     _pullPointUrl = uri;
-
     debugPrint('ONVIF EVENTS: PullPoint utworzony');
-
-    debugPrint('ONVIF EVENTS: subscription = $uri');
 
     _startEventPolling();
 
@@ -844,115 +504,22 @@ class OnvifCameraProvider
     Duration responseTimeout = const Duration(seconds: 5),
     bool logSuccess = true,
   }) async {
-    final client = HttpClient();
-
-    client.connectionTimeout = connectionTimeout;
-
-    client.badCertificateCallback = (X509Certificate _, String host, int _) {
-      return _isPrivateIpv4(host);
-    };
-
+    final device = _device;
+    if (device == null) return null;
     try {
-      final request = await client.postUrl(endpoint).timeout(connectionTimeout);
-
-      request.headers.set(
-        HttpHeaders.contentTypeHeader,
-        'application/soap+xml; charset=utf-8',
+      final reply = await device.soap.postEnvelope(
+        endpoint,
+        body,
+        timeout: connectionTimeout + responseTimeout,
       );
-
-      request.headers.set(HttpHeaders.userAgentHeader, 'SafeHood/1.0');
-
-      request.write(body);
-
-      final response = await request.close().timeout(responseTimeout);
-
-      if (logSuccess ||
-          response.statusCode < 200 ||
-          response.statusCode >= 300) {
-        debugPrint(
-          'ONVIF SOAP: '
-          '${endpoint.path} → '
-          '${response.statusCode}',
-        );
+      if (logSuccess || !reply.ok) {
+        debugPrint('ONVIF EVENTS SOAP: HTTP ${reply.status}');
       }
-
-      if (response.statusCode == 401 || response.statusCode == 403) {
-        await response.drain<void>();
-
-        debugPrint('ONVIF SOAP: wymagane logowanie');
-
-        return null;
-      }
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        await response.drain<void>();
-
-        return null;
-      }
-
-      final buffer = StringBuffer();
-
-      await for (final chunk in response.transform(utf8.decoder)) {
-        buffer.write(chunk);
-
-        if (buffer.length >= 65536) {
-          break;
-        }
-      }
-
-      final responseBody = buffer.toString();
-
-      if (responseBody.isEmpty) {
-        return null;
-      }
-
-      return responseBody;
-    } on SocketException catch (error) {
-      debugPrint('ONVIF SOAP SOCKET ERROR [${endpoint.path}]: $error');
-
+      return reply.ok ? reply.xml.toString() : null;
+    } on Exception catch (error) {
+      debugPrint('ONVIF EVENTS SOAP: ${error.runtimeType}');
       return null;
-    } on TimeoutException {
-      debugPrint('ONVIF SOAP TIMEOUT: ${endpoint.path}');
-
-      return null;
-    } finally {
-      client.close(force: true);
     }
-  }
-
-  bool _looksLikeSoap(String body) {
-    return body.contains('envelope') &&
-        (body.contains('getsystemdateandtimeresponse') ||
-            body.contains('onvif') ||
-            body.contains('soap'));
-  }
-
-  bool _isPrivateIpv4(String host) {
-    final parts = host.split('.');
-
-    if (parts.length != 4) {
-      return false;
-    }
-
-    final values = parts.map(int.tryParse).toList();
-
-    if (values.any((value) => value == null)) {
-      return false;
-    }
-
-    final a = values[0]!;
-
-    final b = values[1]!;
-
-    if (a == 10) {
-      return true;
-    }
-
-    if (a == 192 && b == 168) {
-      return true;
-    }
-
-    return a == 172 && b >= 16 && b <= 31;
   }
 
   void _emit(CameraRuntimeState state) {
@@ -976,8 +543,6 @@ class OnvifCameraProvider
   }
 }
 
-enum _OnvifProbeResult { available, authenticationRequired, unavailable }
-
 const String _createPullPointSubscriptionSoap =
     '''<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope
@@ -985,9 +550,7 @@ const String _createPullPointSubscriptionSoap =
  <s:Body>
   <CreatePullPointSubscription
    xmlns="http://www.onvif.org/ver10/events/wsdl">
-   <InitialTerminationTime>
-    PT1H
-   </InitialTerminationTime>
+   <InitialTerminationTime>PT1H</InitialTerminationTime>
   </CreatePullPointSubscription>
  </s:Body>
 </s:Envelope>''';
@@ -1003,67 +566,3 @@ const String _pullMessagesSoap = '''<?xml version="1.0" encoding="UTF-8"?>
   </PullMessages>
  </s:Body>
 </s:Envelope>''';
-
-const String _getSystemDateAndTimeSoap =
-    '''<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope
- xmlns:s="http://www.w3.org/2003/05/soap-envelope">
- <s:Body>
-  <GetSystemDateAndTime
-   xmlns="http://www.onvif.org/ver10/device/wsdl"/>
- </s:Body>
-</s:Envelope>''';
-
-const String _getCapabilitiesSoap = '''<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope
- xmlns:s="http://www.w3.org/2003/05/soap-envelope">
- <s:Body>
-  <GetCapabilities
-   xmlns="http://www.onvif.org/ver10/device/wsdl">
-   <Category>All</Category>
-  </GetCapabilities>
- </s:Body>
-</s:Envelope>''';
-
-const String _getProfilesSoap = '''<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope
- xmlns:s="http://www.w3.org/2003/05/soap-envelope">
- <s:Body>
-  <GetProfiles
-   xmlns="http://www.onvif.org/ver10/media/wsdl"/>
- </s:Body>
-</s:Envelope>''';
-
-String _buildGetStreamUriSoap(String profileToken) {
-  final safeToken = _escapeXml(profileToken);
-
-  return '''<?xml version="1.0" encoding="UTF-8"?>
-<s:Envelope
- xmlns:s="http://www.w3.org/2003/05/soap-envelope">
- <s:Body>
-  <GetStreamUri
-   xmlns="http://www.onvif.org/ver10/media/wsdl">
-   <StreamSetup>
-    <Stream
-     xmlns="http://www.onvif.org/ver10/schema">
-     RTP-Unicast
-    </Stream>
-    <Transport
-     xmlns="http://www.onvif.org/ver10/schema">
-     <Protocol>RTSP</Protocol>
-    </Transport>
-   </StreamSetup>
-   <ProfileToken>$safeToken</ProfileToken>
-  </GetStreamUri>
- </s:Body>
-</s:Envelope>''';
-}
-
-String _escapeXml(String value) {
-  return value
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&apos;');
-}

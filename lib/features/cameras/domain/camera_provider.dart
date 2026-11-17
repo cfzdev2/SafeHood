@@ -145,6 +145,11 @@ abstract interface class CameraSnapshotSource {
   Future<CameraSnapshot> captureSnapshot();
 }
 
+/// Ordered alternate video profiles of the same camera.
+abstract interface class CameraLiveStreamAlternatives {
+  List<Uri> get liveStreamAlternatives;
+}
+
 abstract class CameraProvider {
   Camera get camera;
 

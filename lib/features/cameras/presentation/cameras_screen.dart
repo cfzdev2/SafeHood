@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../bridges/data/bridge_service.dart';
@@ -7,9 +8,12 @@ import '../../bridges/domain/bridge_status.dart';
 import '../../bridges/presentation/bridge_management_screen.dart';
 import '../../bridges/presentation/widgets/bridge_status_card.dart';
 import '../data/camera_service.dart';
+import '../data/local_camera_store.dart';
 import '../domain/camera.dart';
 import 'add_camera_screen.dart';
 import 'camera_details_screen.dart';
+import 'local_camera_setup_screen.dart';
+import 'local_cameras_screen.dart';
 import 'widgets/camera_card.dart';
 
 class CamerasScreen extends StatefulWidget {
@@ -66,15 +70,27 @@ class _CamerasScreenState extends State<CamerasScreen> {
   }
 
   Future<void> _openAddCameraScreen(BuildContext context) async {
-    final newCamera = await Navigator.of(
-      context,
-    ).push<Camera>(MaterialPageRoute(builder: (_) => const AddCameraScreen()));
+    final newCamera = await Navigator.of(context).push<AddCameraSelection>(
+      MaterialPageRoute(builder: (_) => const AddCameraScreen()),
+    );
 
     if (newCamera == null) {
       return;
     }
 
-    await _cameraService.addCamera(newCamera);
+    try {
+      await _cameraService.addCamera(
+        newCamera.camera,
+        connection: newCamera.connection,
+      );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nie udało się zapisać kamery. Spróbuj ponownie.'),
+        ),
+      );
+    }
   }
 
   void _openCamera(BuildContext context, Camera camera) {
@@ -83,12 +99,68 @@ class _CamerasScreenState extends State<CamerasScreen> {
     );
   }
 
+  String get _localScope => FirebaseAuth.instance.currentUser?.uid ?? 'guest';
+
+  Future<void> _chooseHowToAdd(BuildContext context) async {
+    if (!supportsLocalCameraSetup) {
+      await _openAddCameraScreen(context);
+      return;
+    }
+    final local = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.wifi_find),
+              title: const Text('Skonfiguruj kamerę lub sprawdź obraz'),
+              subtitle: const Text(
+                'Reolink, hotspot ONVIF, lokalny ONVIF lub RTSP',
+              ),
+              onTap: () => Navigator.of(sheet).pop(true),
+            ),
+            ListTile(
+              leading: const Icon(Icons.hub_outlined),
+              title: const Text('Dodaj kamerę do monitoringu'),
+              subtitle: const Text(
+                'Dotychczasowa konfiguracja Bridge i integracji producentów',
+              ),
+              onTap: () => Navigator.of(sheet).pop(false),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted || local == null) return;
+    if (!local) {
+      await _openAddCameraScreen(context);
+      return;
+    }
+    final scope = _localScope;
+    final saved = await Navigator.of(context).push<LocalCameraSetupResult>(
+      MaterialPageRoute<LocalCameraSetupResult>(
+        builder: (_) => LocalCameraSetupScreen(store: LocalCameraStore(scope)),
+      ),
+    );
+    if (saved == LocalCameraSetupResult.saved && context.mounted) {
+      openLocalCameras(context, scope);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Moje kamery'),
         actions: [
+          if (supportsLocalCameraSetup)
+            IconButton(
+              tooltip: 'Kamery lokalne na telefonie',
+              onPressed: () => openLocalCameras(context, _localScope),
+              icon: const Icon(Icons.videocam_outlined),
+            ),
           IconButton(
             tooltip: 'Zarządzaj Bridge',
             onPressed: () {
@@ -121,7 +193,7 @@ class _CamerasScreenState extends State<CamerasScreen> {
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'cameras_add_camera_fab',
         onPressed: () {
-          _openAddCameraScreen(context);
+          _chooseHowToAdd(context);
         },
         icon: const Icon(Icons.add),
         label: const Text('Dodaj kamerę'),

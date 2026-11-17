@@ -1,6 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../../cameras/presentation/local_camera_setup_screen.dart';
+import '../../cameras/presentation/local_cameras_screen.dart';
 import '../data/auth_service.dart';
 import 'register_screen.dart';
 
@@ -260,6 +262,12 @@ class _LoginScreenState extends State<LoginScreen> {
                         },
                   child: const Text('Nie masz konta? Zarejestruj się'),
                 ),
+                if (supportsLocalCameraSetup)
+                  OutlinedButton.icon(
+                    onPressed: () => openLocalCameras(context, 'guest'),
+                    icon: const Icon(Icons.videocam_outlined),
+                    label: const Text('Kamery lokalne bez konta'),
+                  ),
               ],
             ),
           ),

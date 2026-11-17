@@ -6,6 +6,7 @@ import 'debug_safe_ark_camera_provider.dart';
 import 'dekco_safeark_camera_provider.dart';
 import 'mock_camera_provider.dart';
 import 'onvif_camera_provider.dart';
+import 'rtsp_camera_provider.dart';
 import 'unavailable_camera_provider.dart';
 
 class CameraProviderFactory {
@@ -20,12 +21,7 @@ class CameraProviderFactory {
         return OnvifCameraProvider(camera: camera);
 
       case CameraConnectionType.rtsp:
-        return UnavailableCameraProvider(
-          camera: camera,
-          reason:
-              'Provider RTSP nie został '
-              'jeszcze uruchomiony.',
-        );
+        return RtspCameraProvider(camera: camera);
 
       case CameraConnectionType.manufacturerCloud:
         return _createManufacturerCloudProvider(camera);

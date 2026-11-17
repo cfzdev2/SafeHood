@@ -643,7 +643,8 @@ class OnvifCameraSession {
                 'SafeHood-Bridge/1.0',
             },
 
-            body,
+            body: body.trim(),
+            redirect: 'error',
             signal:
               controller.signal,
           },

@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../../incidents/data/incident_service.dart';
 import '../data/camera_provider_factory.dart';
+import '../data/camera_live_playback.dart';
+import '../data/local_camera_connection.dart';
 import '../domain/camera.dart';
 import '../domain/camera_provider.dart';
 import '../../camera_events/presentation/camera_event_history_screen.dart';
@@ -31,6 +33,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   final CameraService _cameraService = CameraService();
 
   VideoPlayerController? _videoController;
+  CameraLivePlayback? _livePlayback;
 
   Timer? _liveWatchdogTimer;
   bool _reconnectLiveOnResume = false;
@@ -69,7 +72,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     }
   }
 
-  Future<void> _initializeLive() async {
+  Future<void> _initializeLive({bool tryAlternate = false}) async {
     if (_liveSuspendedForCoveredRoute || !mounted) {
       return;
     }
@@ -78,39 +81,23 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     VideoPlayerController? nextController;
 
     try {
-      await _cameraProvider.connect();
-
-      if (!_isLiveSessionCurrent(sessionToken)) {
-        return;
+      if (!tryAlternate) {
+        await _cameraProvider.connect();
+        if (!_isLiveSessionCurrent(sessionToken)) return;
+        _livePlayback = CameraLivePlayback(_cameraProvider);
       }
 
-      final streamUri = _cameraProvider.liveStreamUri;
-
-      if (streamUri == null) {
-        throw StateError(
-          'Kamera nie udostępniła '
-          'strumienia LIVE.',
-        );
-      }
-
-      await _cameraProvider.startLive();
-
-      if (!_isLiveSessionCurrent(sessionToken)) {
-        return;
-      }
-
-      nextController = VideoPlayerController.networkUrl(streamUri);
-
-      await nextController.initialize();
-
+      nextController = await _livePlayback!.openNext(
+        isActive: () => _isLiveSessionCurrent(sessionToken),
+        volume: _audioEnabled ? 1 : 0,
+      );
+      if (nextController == null) return;
       if (!_isLiveSessionCurrent(sessionToken)) {
         await nextController.dispose();
         return;
       }
 
-      await nextController.setLooping(false);
-      await nextController.setVolume(_audioEnabled ? 1 : 0);
-      await nextController.play();
+      await _cameraProvider.startLive();
 
       if (!_isLiveSessionCurrent(sessionToken)) {
         await nextController.dispose();
@@ -179,18 +166,39 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       return;
     }
 
-    final description =
-        value.errorDescription ?? 'Strumień LIVE został przerwany.';
+    debugPrint('CAMERA LIVE PLAYBACK ERROR [${widget.camera.id}]');
+    unawaited(_recoverLive('Odtwarzacz przerwał podgląd.'));
+  }
 
-    debugPrint(
-      'CAMERA LIVE PLAYBACK ERROR '
-      '[${widget.camera.id}]: $description',
-    );
+  Future<void> _recoverLive(String message) async {
+    if (!mounted || _liveLoading || _liveError != null) return;
     _stopLiveWatchdog();
+    final controller = _videoController;
+    final canRetry = _livePlayback?.hasNext == true;
+    final token = _liveSessionToken;
+    controller?.removeListener(_handleLiveControllerChanged);
     setState(() {
-      _liveError = StateError(description);
+      _videoController = null;
+      _liveLoading = canRetry;
+      _liveError = canRetry ? null : CameraConnectionIssue(message);
     });
-    unawaited(_persistCameraAvailability(false));
+    try {
+      await controller?.dispose().timeout(const Duration(seconds: 3));
+    } catch (_) {
+      debugPrint('CAMERA LIVE: nie udało się zamknąć podglądu.');
+    }
+    if (!_isLiveSessionCurrent(token)) return;
+    try {
+      await _cameraProvider.stopLive();
+    } catch (_) {
+      // A failed remote stream may already have closed.
+    }
+    if (!_isLiveSessionCurrent(token)) return;
+    if (canRetry) {
+      await _initializeLive(tryAlternate: true);
+    } else {
+      unawaited(_persistCameraAvailability(false));
+    }
   }
 
   void _startLiveWatchdog() {
@@ -254,12 +262,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       '[${widget.camera.id}]: $message',
     );
 
-    _stopLiveWatchdog();
-
-    setState(() {
-      _liveError = StateError(message);
-    });
-    unawaited(_persistCameraAvailability(false));
+    unawaited(_recoverLive(message));
   }
 
   Future<void> _retryLive() async {
@@ -679,7 +682,8 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       );
     }
 
-    if (_liveError != null) {
+    final liveError = _liveError;
+    if (liveError != null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -692,9 +696,10 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
                 color: Colors.white70,
               ),
               const SizedBox(height: 12),
-              const Text(
-                'Nie udało się połączyć '
-                'ze strumieniem LIVE.',
+              Text(
+                liveError is CameraConnectionIssue
+                    ? liveError.message
+                    : 'Nie udało się połączyć ze strumieniem LIVE.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white70),
               ),

@@ -47,7 +47,14 @@ dependencies:
   firebase_app_installations: ^0.4.2+7
   flutter_local_device_discovery: ^1.1.0
   video_player: ^2.14.0
+  crypto: ^3.0.7
+  xml: ^6.6.1
+  flutter_secure_storage: ^11.2.0
   firebase_storage: ^13.6.0
+
+dependency_overrides:
+  video_player_android:
+    path: third_party/video_player_android
 
 dev_dependencies:
   flutter_test:

@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../data/camera_service.dart';
+import '../data/local_camera_connection.dart';
+import 'camera_wifi_setup_screen.dart';
+import 'local_camera_connection_dialog.dart';
 import '../domain/camera.dart';
 import '../domain/camera_ai_zone.dart';
 import '../domain/camera_notification_settings.dart';
@@ -462,6 +465,36 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     );
   }
 
+  Future<void> _editLocalConnection() async {
+    try {
+      final camera = widget.camera;
+      final current = await const LocalCameraConnectionStore().read(camera.id);
+      if (!mounted) return;
+      final connection = await showLocalCameraConnectionDialog(
+        context,
+        initial: current,
+        requireRtsp: camera.connectionType == CameraConnectionType.rtsp,
+        allowOnvifOverride: camera.connectionType == CameraConnectionType.onvif,
+      );
+      if (!mounted || connection == null) return;
+      await _cameraService.saveLocalCameraConnection(camera.id, connection);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Zapisano lokalne ustawienia połączenia.'),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nie udało się zapisać ustawień na telefonie.'),
+        ),
+      );
+    }
+  }
+
   Future<void> _deleteCamera() async {
     if (_deleting) {
       return;
@@ -602,6 +635,39 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
               ],
             ),
           ),
+          if (widget.camera.connectionType == CameraConnectionType.onvif ||
+              widget.camera.connectionType == CameraConnectionType.rtsp) ...[
+            const SizedBox(height: 12),
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.vpn_key_outlined),
+                    title: const Text('Adres i dane logowania kamery'),
+                    subtitle: const Text(
+                      'Ustawienia podglądu na tym telefonie',
+                    ),
+                    onTap: _deleting ? null : _editLocalConnection,
+                  ),
+                  if (widget.camera.connectionType ==
+                      CameraConnectionType.onvif)
+                    ListTile(
+                      leading: const Icon(Icons.wifi),
+                      title: const Text('Połącz kamerę z Wi-Fi'),
+                      onTap: _deleting
+                          ? null
+                          : () => Navigator.of(context).push<bool>(
+                              MaterialPageRoute(
+                                builder: (_) => CameraWifiSetupScreen(
+                                  camera: widget.camera,
+                                ),
+                              ),
+                            ),
+                    ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 24),
           Text(
             'Monitoring',

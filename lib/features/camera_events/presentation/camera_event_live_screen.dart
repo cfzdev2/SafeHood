@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../cameras/data/camera_provider_factory.dart';
+import '../../cameras/data/camera_live_playback.dart';
 import '../../cameras/domain/camera.dart';
 import '../../cameras/domain/camera_provider.dart';
 import 'package:flutter/services.dart';
@@ -43,30 +44,18 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
 
       await _cameraProvider.connect();
 
-      final streamUri = _cameraProvider.liveStreamUri;
-
-      if (streamUri == null) {
-        throw StateError(
-          'Kamera nie udostępniła '
-          'strumienia LIVE.',
-        );
-      }
-
-      await _cameraProvider.startLive();
-
-      final controller = VideoPlayerController.networkUrl(streamUri);
-
-      _videoController = controller;
-
-      await controller.initialize();
-
-      await controller.setLooping(false);
-
-      await controller.play();
-
+      if (!mounted) return;
+      final controller = await CameraLivePlayback(
+        _cameraProvider,
+      ).openNext(isActive: () => mounted, volume: 1);
+      if (controller == null) return;
       if (!mounted) {
+        await controller.dispose();
         return;
       }
+      _videoController = controller;
+      await _cameraProvider.startLive();
+      if (!mounted) return;
 
       setState(() {
         _loading = false;

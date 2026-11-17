@@ -11,6 +11,9 @@ import 'package:flutter/material.dart';
 
 import 'app/app.dart';
 import 'core/services/push_notification_service.dart';
+import 'features/cameras/data/local_camera_store.dart';
+import 'features/cameras/presentation/local_camera_setup_screen.dart';
+import 'features/cameras/presentation/local_cameras_screen.dart';
 import 'firebase_options.dart';
 
 const _useFirebaseEmulators = bool.fromEnvironment(
@@ -52,12 +55,12 @@ Future<void> _configureFirebaseBackend() async {
 
   final firestore = FirebaseFirestore.instance;
 
-  firestore.useFirestoreEmulator(emulatorHost, 8080);
+  firestore.useFirestoreEmulator(emulatorHost, 8080, automaticHostMapping: false,);
   firestore.settings = const Settings(persistenceEnabled: false);
 
   FirebaseFunctions.instanceFor(
     region: 'europe-central2',
-  ).useFunctionsEmulator(emulatorHost, 5001);
+  ).useFunctionsEmulator(emulatorHost, 5001, automaticHostMapping: false,);
 
   await FirebaseStorage.instance.useStorageEmulator(
     emulatorHost,
@@ -170,8 +173,19 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  await _configureFirebaseBackend();
+  try {
+    await _initializeBackend().timeout(const Duration(seconds: 8));
+  } catch (error) {
+    if (!supportsLocalCameraSetup) rethrow;
+    // A Firebase startup problem must not lock users out of device-only cameras.
+    runApp(
+      const MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: LocalCamerasScreen(store: LocalCameraStore('guest')),
+      ),
+    );
+    return;
+  }
 
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
@@ -205,4 +219,9 @@ Future<void> main() async {
   runApp(const SafeHoodApp());
 
   unawaited(PushNotificationService.instance.initialize());
+}
+
+Future<void> _initializeBackend() async {
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await _configureFirebaseBackend();
 }

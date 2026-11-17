@@ -6,8 +6,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_device_discovery/flutter_local_device_discovery.dart';
+import 'package:xml/xml.dart';
 
 import '../domain/camera.dart';
+import 'onvif_soap_client.dart';
 
 enum CameraDiscoveryStage {
   preparing,
@@ -761,7 +763,7 @@ Map<String, String> _parseSsdpHeaders(String response) {
 class ActiveLanCameraProbeStrategy implements CameraDiscoveryStrategy {
   static const _rtspPorts = [554, 8554];
 
-  static const _webPorts = [80, 443, 8080, 8443, 8000, 8899];
+  static const _webPorts = [80, 443, 8080, 8443, 8000, 8899, 9000];
 
   @override
   String get name => 'ACTIVE_LAN_PROBE';
@@ -821,41 +823,23 @@ class ActiveLanCameraProbeStrategy implements CameraDiscoveryStrategy {
   }
 
   Future<DetectedCamera?> _scanHost(String ip) async {
-    // Najpierw sprawdzamy KAŻDY
-    // znany port RTSP osobno.
-    for (final port in _rtspPorts) {
-      final rtsp = await ReachabilityProber.probe(
+    DetectedCamera? fallback;
+    for (final port in _webPorts) {
+      final web = await ReachabilityProber.probe(
         ip,
         ports: [port],
         timeout: const Duration(milliseconds: 250),
       );
+      if (web.status != LocalReachabilityStatus.reachable) continue;
 
-      if (rtsp.status != LocalReachabilityStatus.reachable) {
-        continue;
-      }
+      // A camera need not advertise multicast or have a recognizable web page.
+      final onvif = await _confirmOnvif(ip, port);
+      if (onvif != null) return onvif;
+      fallback ??= await _fingerprintWebDevice(ip, port);
+    }
 
-      debugPrint(
-        'ACTIVE LAN: '
-        '$ip:$port otwarty (RTSP?)',
-      );
-
-      final confirmed = await _confirmRtsp(ip, port);
-
-      if (!confirmed) {
-        debugPrint(
-          'ACTIVE LAN: '
-          '$ip:$port nie jest RTSP',
-        );
-
-        continue;
-      }
-
-      debugPrint(
-        'ACTIVE LAN: '
-        'potwierdzono RTSP '
-        '$ip:$port',
-      );
-
+    for (final port in _rtspPorts) {
+      if (!await _confirmRtsp(ip, port)) continue;
       return DetectedCamera(
         deviceId: 'rtsp-$ip-$port',
         displayName: 'Kamera $ip',
@@ -868,53 +852,47 @@ class ActiveLanCameraProbeStrategy implements CameraDiscoveryStrategy {
         openPorts: {port},
       );
     }
+    return fallback;
+  }
 
-    // Potem sprawdzamy KAŻDY
-    // port HTTP/HTTPS osobno.
-    //
-    // Jeżeli jeden otwarty port nie jest
-    // kamerą, przechodzimy do następnego.
-    for (final port in _webPorts) {
-      final web = await ReachabilityProber.probe(
-        ip,
-        ports: [port],
-        timeout: const Duration(milliseconds: 250),
+  Future<DetectedCamera?> _confirmOnvif(String ip, int port) async {
+    final endpoint = Uri(
+      scheme: port == 443 || port == 8443 ? 'https' : 'http',
+      host: ip,
+      port: port,
+      path: '/onvif/device_service',
+    );
+    try {
+      final result = await OnvifSoapClient(ip).call(
+        endpoint,
+        onvifDeviceNamespace,
+        'GetSystemDateAndTime',
+        timeout: const Duration(milliseconds: 750),
+        authenticated: false,
       );
-
-      if (web.status != LocalReachabilityStatus.reachable) {
-        continue;
+      // 401 alone could be a non-camera web server.
+      if (result.response('GetSystemDateAndTime') == null &&
+          !(result.fault != null &&
+              onvifElements(result.fault, 'Value').any(
+                (element) => element.innerText.trim().startsWith('ter:'),
+              ))) {
+        return null;
       }
-
-      debugPrint(
-        'ACTIVE LAN: '
-        '$ip:$port otwarty (WEB)',
+      return DetectedCamera(
+        deviceId: 'onvif-$ip-$port',
+        displayName: 'Kamera ONVIF $ip',
+        brand: 'Nieznany producent',
+        model: 'Nieznany model',
+        ipAddress: ip,
+        onvifServiceUrl: endpoint.toString(),
+        connectionType: CameraConnectionType.onvif,
+        discoverySources: const {'reachability', 'onvif-soap'},
+        confidence: 98,
+        openPorts: {port},
       );
-
-      final camera = await _fingerprintWebDevice(ip, port);
-
-      if (camera == null) {
-        debugPrint(
-          'ACTIVE LAN: '
-          '$ip:$port WEB, '
-          'ale brak fingerprintu kamery',
-        );
-
-        continue;
-      }
-
-      debugPrint(
-        'ACTIVE LAN: '
-        'kamera potwierdzona '
-        '$ip:$port | '
-        '${camera.brand} | '
-        '${camera.connectionType.name} | '
-        '${camera.confidence}%',
-      );
-
-      return camera;
+    } on Exception {
+      return null;
     }
-
-    return null;
   }
 
   Future<bool> _confirmRtsp(String ip, int port) async {

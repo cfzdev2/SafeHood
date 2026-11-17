@@ -1,9 +1,21 @@
 import 'package:flutter/material.dart';
 
 import '../data/camera_discovery_service.dart';
+import '../data/local_camera_connection.dart';
+import 'camera_wifi_setup_screen.dart';
+import 'local_camera_connection_dialog.dart';
 import '../domain/camera.dart';
 import 'safe_ark_connection_screen.dart';
 import '../domain/manufacturer_cloud.dart';
+import 'camera_pairing_screen.dart';
+
+class AddCameraSelection {
+  const AddCameraSelection(this.camera, this.connection);
+  final Camera camera;
+  final LocalCameraConnection connection;
+}
+
+
 
 class AddCameraScreen extends StatefulWidget {
   const AddCameraScreen({super.key});
@@ -20,6 +32,7 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
   final CameraDiscoveryService discoveryService = CameraDiscoveryService();
 
   DetectedCamera? selectedCamera;
+  LocalCameraConnection _localConnection = const LocalCameraConnection();
 
   ManufacturerCloudDevice? selectedCloudDevice;
 
@@ -49,6 +62,7 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
 
     setState(() {
       selectedCamera = null;
+      _localConnection = const LocalCameraConnection();
       selectedCloudDevice = device;
       isDekcoSafeArkSelected = true;
       scanProgress = null;
@@ -66,6 +80,7 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
     setState(() {
       isScanning = true;
       selectedCamera = null;
+      _localConnection = const LocalCameraConnection();
       selectedCloudDevice = null;
       isDekcoSafeArkSelected = false;
       scanProgress = null;
@@ -193,7 +208,13 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
     }
 
     setState(() {
-      selectedCamera = result;
+      selectedCamera =
+          result.connectionType == CameraConnectionType.unknown &&
+              result.ipAddress != null &&
+              isCameraLanHost(result.ipAddress!)
+          ? result.copyWith(connectionType: CameraConnectionType.onvif)
+          : result;
+      _localConnection = const LocalCameraConnection();
       isDekcoSafeArkSelected = false;
       selectedCloudDevice = null;
       nameController.clear();
@@ -253,6 +274,7 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
   void _changeCamera() {
     setState(() {
       selectedCamera = null;
+      _localConnection = const LocalCameraConnection();
       selectedCloudDevice = null;
       isDekcoSafeArkSelected = false;
 
@@ -261,7 +283,129 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
     });
   }
 
-  void _addCamera() {
+  Future<void> _enterOnvifAddress() async {
+    final endpoint = await showDialog<Uri>(
+      context: context,
+      builder: (_) => const _OnvifAddressDialog(),
+    );
+    if (!mounted || endpoint == null) return;
+    setState(() {
+      selectedCamera = DetectedCamera(
+        deviceId: 'onvif-${endpoint.host}',
+        displayName: 'Kamera ONVIF',
+        brand: 'Nieznany producent',
+        model: 'Nieznany model',
+        ipAddress: endpoint.host,
+        onvifServiceUrl: endpoint.toString(),
+        openPorts: {endpoint.port},
+        connectionType: CameraConnectionType.onvif,
+      );
+      _localConnection = const LocalCameraConnection();
+      selectedCloudDevice = null;
+      isDekcoSafeArkSelected = false;
+    });
+  }
+
+  Future<void> _addRtspManually() async {
+    final connection = await showLocalCameraConnectionDialog(
+      context,
+      requireRtsp: true,
+    );
+    if (!mounted || connection?.rtspUri == null) return;
+    final uri = connection!.rtspUri!;
+    setState(() {
+      _localConnection = connection;
+      selectedCamera = DetectedCamera(
+        deviceId: 'rtsp-${uri.host}',
+        displayName: 'Kamera RTSP',
+        brand: 'Nieznany producent',
+        model: 'Nieznany model',
+        ipAddress: uri.host,
+        openPorts: {uri.hasPort ? uri.port : 554},
+        connectionType: CameraConnectionType.rtsp,
+      );
+      selectedCloudDevice = null;
+      isDekcoSafeArkSelected = false;
+    });
+  }
+
+  Future<bool> _editLocalConnection() async {
+    final camera = selectedCamera;
+    if (camera == null) return false;
+    final ip = camera.ipAddress;
+    final rtspHint = ip == null
+        ? null
+        : Uri(
+            scheme: 'rtsp',
+            host: ip,
+            port:
+                camera.openPorts
+                    .where((port) => port == 554 || port == 8554)
+                    .firstOrNull ??
+                554,
+            path: '/stream',
+          ).toString();
+    final connection = await showLocalCameraConnectionDialog(
+      context,
+      initial: _localConnection,
+      requireRtsp: camera.connectionType == CameraConnectionType.rtsp,
+      rtspHint: rtspHint,
+    );
+    if (!mounted || connection == null) return false;
+    setState(() => _localConnection = connection);
+    return true;
+  }
+
+  Camera _localCamera(
+    DetectedCamera detectedCamera,
+    String name,
+    String location,
+  ) => Camera(
+    id: DateTime.now().millisecondsSinceEpoch.toString(),
+    name: name,
+    locationName: location,
+    brand: detectedCamera.brand,
+    model: detectedCamera.model,
+    ipAddress: detectedCamera.ipAddress,
+    macAddress: detectedCamera.macAddress,
+    onvifServiceUrl: parseManualOnvifUri(
+      detectedCamera.onvifServiceUrl ?? '',
+    )?.toString(),
+    openPorts: detectedCamera.openPorts,
+    discoverySources: detectedCamera.discoverySources,
+    isOnline: false,
+    motionDetectionEnabled:
+        detectedCamera.connectionType == CameraConnectionType.onvif,
+    hasSdCard: false,
+    connectionType: detectedCamera.connectionType,
+    monitoringMode: CameraMonitoringMode.bridge,
+  );
+
+  Future<void> _openWifiSetup() async {
+    final camera = selectedCamera;
+    if (camera == null) return;
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => CameraWifiSetupScreen(
+          camera: _localCamera(camera, '', ''),
+          connection: _localConnection,
+        ),
+      ),
+    );
+    if (!mounted || changed != true) return;
+    // Keep the entered name and credentials until the user reselects or saves.
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Po zmianie sieci sprawdź nowy adres kamery.'),
+        action: SnackBarAction(
+          label: 'Wykryj ponownie',
+          onPressed: _detectCameras,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _addCamera() async {
     final detectedCamera = selectedCamera;
     final cloudDevice = selectedCloudDevice;
 
@@ -287,31 +431,15 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
       return;
     }
 
+    if (detectedCamera?.connectionType == CameraConnectionType.rtsp &&
+        _localConnection.rtspUri == null) {
+      if (!await _editLocalConnection() || !mounted) return;
+    }
+
     final camera = cloudDevice != null
         ? cloudDevice.toCamera(name: name, locationName: location)
-        : Camera(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
-            name: name,
-            locationName: location,
-            brand: detectedCamera!.brand,
-            model: detectedCamera.model,
-            ipAddress: detectedCamera.ipAddress,
-            macAddress: detectedCamera.macAddress,
-            onvifServiceUrl: detectedCamera.onvifServiceUrl,
-            openPorts: detectedCamera.openPorts,
-            discoverySources: detectedCamera.discoverySources,
-            isOnline: false,
-            motionDetectionEnabled: true,
-            hasSdCard: false,
-            connectionType: detectedCamera.connectionType,
-            monitoringMode:
-                detectedCamera.connectionType ==
-                    CameraConnectionType.manufacturerCloud
-                ? CameraMonitoringMode.cloud
-                : CameraMonitoringMode.bridge,
-          );
-
-    Navigator.of(context).pop(camera);
+        : _localCamera(detectedCamera!, name, location);
+    Navigator.of(context).pop(AddCameraSelection(camera, _localConnection));
   }
 
   @override
@@ -326,6 +454,21 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           if (!hasSelectedCamera) ...[
+            FilledButton.tonalIcon(
+              onPressed: isScanning
+                  ? null
+                  : () async {
+                      final discover = await Navigator.of(context).push<bool>(
+                        MaterialPageRoute<bool>(
+                          builder: (_) => const CameraPairingScreen(),
+                        ),
+                      );
+                      if (discover == true && mounted) await _detectCameras();
+                    },
+              icon: const Icon(Icons.wifi_protected_setup),
+              label: const Text('Sparuj nową kamerę bez kabla'),
+            ),
+            const SizedBox(height: 16),
             Text(
               'Połącz kamerę z SafeHood',
               style: Theme.of(
@@ -375,9 +518,8 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Upewnij się, że telefon '
-              'i kamera są połączone '
-              'z tą samą siecią Wi-Fi.',
+              'Telefon i kamera muszą być w tej samej sieci lokalnej. '
+              'Kamera może być podłączona do routera przez Wi-Fi albo kabel LAN.',
             ),
             const SizedBox(height: 16),
             FilledButton.icon(
@@ -399,6 +541,34 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
                   style: const TextStyle(fontSize: 16),
                 ),
               ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                OutlinedButton(
+                  onPressed: isScanning ? null : _enterOnvifAddress,
+                  child: const Text('Wpisz adres ONVIF'),
+                ),
+                OutlinedButton(
+                  onPressed: isScanning ? null : _addRtspManually,
+                  child: const Text('Wpisz adres RTSP'),
+                ),
+              ],
+            ),
+            ExpansionTile(
+              leading: const Icon(Icons.wifi),
+              title: const Text('Kamera nie jest jeszcze w sieci?'),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              children: const [
+                Text(
+                  'Podłącz kamerę tymczasowo do routera kablem albo połącz telefon '
+                  'z własną siecią Wi-Fi kamery w ustawieniach telefonu. Wykryj kamerę '
+                  'i wybierz „Połącz kamerę z Wi-Fi”. Jeśli kamera nie udostępnia '
+                  'konfiguracji przez ONVIF, ustaw jej Wi-Fi w aplikacji producenta, '
+                  'potem wróć do SafeHood.',
+                ),
+              ],
             ),
             if (isScanning) ...[
               const SizedBox(height: 20),
@@ -512,6 +682,27 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
                 ),
               ),
             ),
+            if (camera != null) ...[
+              ListTile(
+                leading: const Icon(Icons.vpn_key_outlined),
+                title: const Text('Dane logowania i adres RTSP'),
+                subtitle: Text(
+                  _localConnection.isEmpty
+                      ? 'Opcjonalnie, gdy kamera wymaga konta lub własnego adresu obrazu'
+                      : 'Ustawiono dane połączenia',
+                ),
+                onTap: _editLocalConnection,
+              ),
+              if (camera.connectionType == CameraConnectionType.onvif)
+                ListTile(
+                  leading: const Icon(Icons.wifi),
+                  title: const Text('Połącz kamerę z Wi-Fi'),
+                  subtitle: const Text(
+                    'Dla kamer z konfiguracją Wi-Fi przez ONVIF',
+                  ),
+                  onTap: _openWifiSetup,
+                ),
+            ],
             if (isDekcoSafeArkSelected) ...[
               const SizedBox(height: 12),
               Container(
@@ -587,4 +778,56 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
       ),
     );
   }
+}
+
+class _OnvifAddressDialog extends StatefulWidget {
+  const _OnvifAddressDialog();
+
+  @override
+  State<_OnvifAddressDialog> createState() => _OnvifAddressDialogState();
+}
+
+class _OnvifAddressDialogState extends State<_OnvifAddressDialog> {
+  final _form = GlobalKey<FormState>();
+  final _address = TextEditingController();
+
+  @override
+  void dispose() {
+    _address.dispose();
+    super.dispose();
+  }
+
+  void _confirm() {
+    if (_form.currentState!.validate()) {
+      Navigator.pop(context, parseManualOnvifUri(_address.text));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Dodaj kamerę po adresie ONVIF'),
+    content: Form(
+      key: _form,
+      child: TextFormField(
+        controller: _address,
+        autofocus: true,
+        keyboardType: TextInputType.url,
+        decoration: const InputDecoration(
+          labelText: 'Adres IP lub adres usługi ONVIF',
+          hintText: '192.168.1.6:8899',
+        ),
+        onFieldSubmitted: (_) => _confirm(),
+        validator: (value) => parseManualOnvifUri(value ?? '') == null
+            ? 'Podaj poprawny adres w sieci lokalnej.'
+            : null,
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Anuluj'),
+      ),
+      FilledButton(onPressed: _confirm, child: const Text('Wybierz kamerę')),
+    ],
+  );
 }

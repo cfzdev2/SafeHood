@@ -2,6 +2,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../../app/app_shell.dart';
+import '../../cameras/presentation/local_camera_setup_screen.dart';
+import '../../cameras/presentation/local_cameras_screen.dart';
 import '../../profile/data/user_profile_service.dart';
 import '../../profile/domain/app_user.dart';
 import '../../profile/presentation/account_setup_screen.dart';
@@ -39,15 +41,18 @@ class AuthGate extends StatelessWidget {
           stream: profileService.watchProfile(firebaseUser.uid),
           builder: (context, profileSnapshot) {
             if (profileSnapshot.connectionState == ConnectionState.waiting) {
-              return const _ProfileLoadingScreen();
+              return _ProfileLoadingScreen(scope: firebaseUser.uid);
             }
 
             if (profileSnapshot.hasError) {
               return Scaffold(
                 body: Center(
-                  child: Text(
-                    'Błąd profilu: '
-                    '${profileSnapshot.error}',
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Nie udało się wczytać profilu.'),
+                      _LocalCamerasShortcut(scope: firebaseUser.uid),
+                    ],
                   ),
                 ),
               );
@@ -68,36 +73,59 @@ class AuthGate extends StatelessWidget {
 }
 
 class _ProfileLoadingScreen extends StatelessWidget {
-  const _ProfileLoadingScreen();
+  const _ProfileLoadingScreen({required this.scope});
+
+  final String scope;
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       body: SafeArea(
         child: Center(
           child: Padding(
-            padding: EdgeInsets.all(24),
+            padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 20),
-                Text(
+                const CircularProgressIndicator(),
+                const SizedBox(height: 20),
+                const Text(
                   'Łączenie z profilem...',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                 ),
-                SizedBox(height: 8),
-                Text(
+                const SizedBox(height: 8),
+                const Text(
                   'Jeżeli trwa to dłużej, sprawdź połączenie '
                   'z internetem. Aplikacja spróbuje ponownie '
                   'automatycznie.',
                   textAlign: TextAlign.center,
                 ),
+                const SizedBox(height: 12),
+                _LocalCamerasShortcut(scope: scope),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _LocalCamerasShortcut extends StatelessWidget {
+  const _LocalCamerasShortcut({required this.scope});
+
+  final String scope;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!supportsLocalCameraSetup) return const SizedBox.shrink();
+    return SafeArea(
+      minimum: const EdgeInsets.all(8),
+      child: OutlinedButton.icon(
+        onPressed: () => openLocalCameras(context, scope),
+        icon: const Icon(Icons.videocam_outlined),
+        label: const Text('Kamery lokalne'),
       ),
     );
   }
