@@ -38,13 +38,17 @@ class AuthGate extends StatelessWidget {
         return StreamBuilder<AppUser?>(
           stream: profileService.watchProfile(firebaseUser.uid),
           builder: (context, profileSnapshot) {
+            Future<void> signOut() =>
+                authService.logout(cleanupTimeout: const Duration(seconds: 3));
+
             if (profileSnapshot.connectionState == ConnectionState.waiting) {
-              return const _ProfileLoadingScreen();
+              return ProfileConnectionScreen(onSignOut: signOut);
             }
 
             if (profileSnapshot.hasError) {
-              return const Scaffold(
-                body: Center(child: Text('Nie udało się wczytać profilu.')),
+              return ProfileConnectionScreen(
+                loadFailed: true,
+                onSignOut: signOut,
               );
             }
 
@@ -62,8 +66,40 @@ class AuthGate extends StatelessWidget {
   }
 }
 
-class _ProfileLoadingScreen extends StatelessWidget {
-  const _ProfileLoadingScreen();
+class ProfileConnectionScreen extends StatefulWidget {
+  const ProfileConnectionScreen({
+    super.key,
+    this.loadFailed = false,
+    required this.onSignOut,
+  });
+
+  final bool loadFailed;
+  final Future<void> Function() onSignOut;
+
+  @override
+  State<ProfileConnectionScreen> createState() =>
+      _ProfileConnectionScreenState();
+}
+
+class _ProfileConnectionScreenState extends State<ProfileConnectionScreen> {
+  bool _signingOut = false;
+
+  Future<void> _signOut() async {
+    if (_signingOut) return;
+    setState(() => _signingOut = true);
+    try {
+      await widget.onSignOut();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nie udało się wylogować. Spróbuj ponownie.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _signingOut = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -75,19 +111,32 @@ class _ProfileLoadingScreen extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const CircularProgressIndicator(),
-                const SizedBox(height: 20),
-                const Text(
-                  'Łączenie z profilem...',
+                if (!widget.loadFailed) ...[
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 20),
+                ],
+                Text(
+                  widget.loadFailed
+                      ? 'Nie udało się wczytać profilu.'
+                      : 'Łączenie z profilem...',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Jeżeli trwa to dłużej, sprawdź połączenie '
-                  'z internetem. Aplikacja spróbuje ponownie '
-                  'automatycznie.',
+                  'Sprawdź połączenie. Jeżeli profil się nie otwiera, '
+                  'zaloguj się ponownie.',
                   textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: _signingOut ? null : _signOut,
+                  child: Text(
+                    _signingOut ? 'Wylogowuję…' : 'Zaloguj się ponownie',
+                  ),
                 ),
               ],
             ),

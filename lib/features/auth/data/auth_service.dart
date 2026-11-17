@@ -153,11 +153,17 @@ class AuthService {
     await _auth.sendPasswordResetEmail(email: email);
   }
 
-  Future<void> logout() async {
+  Future<void> logout({Duration? cleanupTimeout}) async {
     final user = _auth.currentUser;
 
     if (user != null) {
-      await _unregisterCurrentDeviceSafely(user);
+      final cleanup = _unregisterCurrentDeviceSafely(user);
+      if (cleanupTimeout == null) {
+        await cleanup;
+      } else {
+        // An invalid session can leave a Firestore write waiting indefinitely.
+        await cleanup.timeout(cleanupTimeout, onTimeout: () {});
+      }
     }
 
     await _auth.signOut();
