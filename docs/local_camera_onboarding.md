@@ -1,9 +1,10 @@
 # Lokalne dodawanie kamer na Androidzie
 
 **Moje kamery → Dodaj kamerę** od razu wyszukuje kamery w domowej sieci.
-Użytkownik wskazuje urządzenie i sprawdza obraz. Jeśli kamera nie jest jeszcze
-w sieci, **Połącz nową kamerę z Wi‑Fi** wyszukuje jej sieć i prowadzi przez
-konfigurację. Rodzaj połączenia wybiera SafeHood.
+Wyniki pojawiają się w trakcie skanowania. Użytkownik może od razu wskazać
+urządzenie i sprawdzić obraz, gdy SafeHood szuka kolejnych kamer. Jeśli kamera
+nie jest jeszcze w sieci, **Połącz nową kamerę z Wi‑Fi** wyszukuje jej sieć
+i prowadzi przez konfigurację. Rodzaj połączenia wybiera SafeHood.
 
 | Sytuacja | Co sprawdza aplikacja |
 | --- | --- |

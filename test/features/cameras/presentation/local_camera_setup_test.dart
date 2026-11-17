@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -34,6 +36,8 @@ class _Discovery extends CameraDiscoveryService {
   @override
   Future<List<DetectedCamera>> discoverCameras({
     void Function(CameraDiscoveryProgress progress)? onProgress,
+    void Function(List<DetectedCamera> cameras)? onResults,
+    bool Function()? isCancelled,
   }) async {
     final index = scans++;
     return results[index < results.length ? index : results.length - 1];
@@ -43,6 +47,27 @@ class _Discovery extends CameraDiscoveryService {
   Future<DetectedCamera?> findLocalCamera(String address) async {
     searchedAddresses.add(address);
     return saved;
+  }
+}
+
+class _ControlledProbe implements CameraDiscoveryStrategy {
+  _ControlledProbe(this.name);
+
+  @override
+  final String name;
+  int scans = 0;
+  late Completer<List<DetectedCamera>> result;
+  void Function(List<DetectedCamera>)? publish;
+
+  @override
+  Future<List<DetectedCamera>> discover({
+    void Function(List<DetectedCamera>)? onResults,
+    bool Function()? isCancelled,
+  }) {
+    scans++;
+    publish = onResults;
+    result = Completer();
+    return result.future;
   }
 }
 
@@ -72,6 +97,67 @@ void main() {
     ]) {
       expect(parseLocalRtsp(invalid), isNull, reason: invalid);
     }
+  });
+
+  testWidgets('retry shows a camera before the deeper search finishes', (
+    tester,
+  ) async {
+    final direct = _ControlledProbe('DIRECT');
+    final standard = _ControlledProbe('STANDARD');
+    final lan = _ControlledProbe('LAN');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LocalCameraSetupScreen(
+          discovery: CameraDiscoveryService.withStrategies(
+            networkStrategies: [direct, standard],
+            lanStrategy: lan,
+          ),
+          onSave: (_) async => fail('Search alone must not save a camera'),
+        ),
+      ),
+    );
+    expect([direct.scans, standard.scans], [1, 1]);
+    direct.result.complete([]);
+    standard.result.complete([]);
+    await tester.pump();
+    lan.result.complete([]);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Nie znaleziono kamer'), findsOneWidget);
+
+    await tester.tap(find.text('Szukaj ponownie'));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect([direct.scans, standard.scans, lan.scans], [2, 2, 1]);
+    expect(find.text('Szukam kamer w Twojej sieci…'), findsOneWidget);
+
+    final camera = _nvt.copyWith(confidence: 100);
+    direct.publish!([camera]);
+    await tester.pump();
+    expect(find.text('Szukam kolejnych kamer…'), findsOneWidget);
+    expect(
+      tester
+          .widget<ListTile>(find.widgetWithText(ListTile, '192.168.1.9'))
+          .onTap,
+      isNotNull,
+    );
+
+    direct.result.complete([camera]);
+    standard.result.complete([camera.copyWith(deviceId: 'duplicate')]);
+    await tester.pump();
+    expect(lan.scans, 2);
+    expect(find.text('192.168.1.9'), findsOneWidget);
+
+    lan.result.complete([
+      camera.copyWith(
+        deviceId: 'silent-camera',
+        ipAddress: '192.168.1.10',
+        onvifServiceUrl: 'http://192.168.1.10/onvif/device_service',
+      ),
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.text('192.168.1.9'), findsOneWidget);
+    expect(find.text('192.168.1.10'), findsOneWidget);
+    expect(find.text('Szukaj ponownie'), findsOneWidget);
   });
 
   testWidgets('imports the saved stream only after a frame and allows retry', (

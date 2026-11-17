@@ -12,15 +12,7 @@ import '../domain/camera.dart';
 import 'local_camera_store.dart';
 import 'onvif_soap_client.dart';
 
-enum CameraDiscoveryStage {
-  preparing,
-  standardNetwork,
-  onvif,
-  ssdp,
-  activeLan,
-  merging,
-  finished,
-}
+enum CameraDiscoveryStage { preparing, standardNetwork, activeLan, finished }
 
 class CameraDiscoveryProgress {
   final CameraDiscoveryStage stage;
@@ -99,22 +91,31 @@ class DetectedCamera {
 abstract class CameraDiscoveryStrategy {
   String get name;
 
-  Future<List<DetectedCamera>> discover();
+  Future<List<DetectedCamera>> discover({
+    void Function(List<DetectedCamera>)? onResults,
+    bool Function()? isCancelled,
+  });
 }
 
 class CameraDiscoveryService {
-  final FlutterLocalDeviceDiscovery _discovery = FlutterLocalDeviceDiscovery();
+  CameraDiscoveryService()
+    : this.withStrategies(
+        networkStrategies: [
+          DirectOnvifDiscoveryStrategy(),
+          DirectSsdpDiscoveryStrategy(),
+          StandardNetworkDiscoveryStrategy(),
+        ],
+        lanStrategy: ActiveLanCameraProbeStrategy(),
+      );
 
-  late final List<CameraDiscoveryStrategy> _strategies;
+  @visibleForTesting
+  CameraDiscoveryService.withStrategies({
+    required List<CameraDiscoveryStrategy> networkStrategies,
+    required this._lanStrategy,
+  }) : _networkStrategies = List.unmodifiable(networkStrategies);
 
-  CameraDiscoveryService() {
-    _strategies = [
-      StandardNetworkDiscoveryStrategy(),
-      DirectOnvifDiscoveryStrategy(),
-      DirectSsdpDiscoveryStrategy(),
-      ActiveLanCameraProbeStrategy(),
-    ];
-  }
+  final List<CameraDiscoveryStrategy> _networkStrategies;
+  final CameraDiscoveryStrategy _lanStrategy;
 
   /// Probe only the address of a camera that was already saved on this phone.
   Future<DetectedCamera?> findLocalCamera(String address) async {
@@ -126,10 +127,15 @@ class CameraDiscoveryService {
 
   Future<List<DetectedCamera>> discoverCameras({
     void Function(CameraDiscoveryProgress progress)? onProgress,
+    void Function(List<DetectedCamera> cameras)? onResults,
+    bool Function()? isCancelled,
   }) async {
-    const totalSteps = 6;
+    const totalSteps = 4;
+
+    bool cancelled() => isCancelled?.call() == true;
 
     void report(CameraDiscoveryStage stage, String message, int step) {
+      if (cancelled()) return;
       onProgress?.call(
         CameraDiscoveryProgress(
           stage: stage,
@@ -149,98 +155,64 @@ class CameraDiscoveryService {
       1,
     );
 
-    await _runDiagnostics();
+    // Keep one snapshot per strategy. Results found via several protocols
+    // still represent one device, and protocol completion order is irrelevant.
+    final resultsByStrategy = {
+      for (final strategy in [..._networkStrategies, _lanStrategy])
+        strategy: const <DetectedCamera>[],
+    };
 
-    final allResults = <DetectedCamera>[];
+    List<DetectedCamera> mergedCameras() =>
+        CameraDiscoveryResultMerger.merge([
+              for (final results in resultsByStrategy.values) ...results,
+            ])
+            .map(VendorCameraRecognizer.enrich)
+            .where((camera) => camera.confidence >= 60)
+            .toList()
+          ..sort((a, b) => b.confidence.compareTo(a.confidence));
 
-    for (final strategy in _strategies) {
-      switch (strategy.name) {
-        case 'STANDARD_NETWORK':
-          report(
-            CameraDiscoveryStage.standardNetwork,
-            'Szukam urządzeń w sieci Wi-Fi...',
-            2,
-          );
-
-        case 'DIRECT_ONVIF':
-          report(CameraDiscoveryStage.onvif, 'Szukam kamer ONVIF...', 3);
-
-        case 'DIRECT_SSDP':
-          report(
-            CameraDiscoveryStage.ssdp,
-            'Szukam kamer i urządzeń sieciowych...',
-            4,
-          );
-
-        case 'ACTIVE_LAN_PROBE':
-          report(
-            CameraDiscoveryStage.activeLan,
-            'Sprawdzam adresy, strumienie i panele kamer...',
-            5,
-          );
-      }
-
-      debugPrint('');
+    Future<void> run(CameraDiscoveryStrategy strategy) async {
+      if (cancelled()) return;
       debugPrint('DISCOVERY: start ${strategy.name}');
-
       final stopwatch = Stopwatch()..start();
 
+      void publish(List<DetectedCamera> results) {
+        if (cancelled()) return;
+        resultsByStrategy[strategy] = results;
+        if (onResults != null) onResults(mergedCameras());
+      }
+
       try {
-        final results = await strategy.discover();
-
-        stopwatch.stop();
-
+        final results = await strategy.discover(
+          onResults: onResults == null ? null : publish,
+          isCancelled: isCancelled,
+        );
+        publish(results);
         debugPrint(
           'DISCOVERY: ${strategy.name} '
           '→ ${results.length} wyników '
           '(${stopwatch.elapsedMilliseconds} ms)',
         );
-
-        allResults.addAll(results);
       } catch (error, stackTrace) {
-        stopwatch.stop();
-
-        debugPrint(
-          'DISCOVERY ERROR '
-          '[${strategy.name}]: $error',
-        );
-
-        debugPrint(
-          'DISCOVERY STACK '
-          '[${strategy.name}]: '
-          '$stackTrace',
-        );
+        debugPrint('DISCOVERY ERROR [${strategy.name}]: $error');
+        debugPrint('DISCOVERY STACK [${strategy.name}]: $stackTrace');
       }
     }
 
     report(
-      CameraDiscoveryStage.merging,
-      'Analizuję znalezione urządzenia...',
-      6,
+      CameraDiscoveryStage.standardNetwork,
+      'Szukam kamer w sieci Wi-Fi...',
+      2,
     );
+    await Future.wait(_networkStrategies.map(run));
+    if (cancelled()) return const [];
 
-    final merged = CameraDiscoveryResultMerger.merge(allResults);
+    // Cameras that don't advertise their services still need the LAN probe.
+    report(CameraDiscoveryStage.activeLan, 'Szukam kolejnych kamer...', 3);
+    await run(_lanStrategy);
+    if (cancelled()) return const [];
 
-    final enriched = merged.map(VendorCameraRecognizer.enrich).toList();
-
-    final cameras = enriched.where((camera) => camera.confidence >= 60).toList()
-      ..sort((a, b) => b.confidence.compareTo(a.confidence));
-
-    debugPrint('');
-    debugPrint(
-      'DISCOVERY: surowe wyniki = '
-      '${allResults.length}',
-    );
-
-    debugPrint(
-      'DISCOVERY: po scaleniu = '
-      '${merged.length}',
-    );
-
-    debugPrint(
-      'DISCOVERY: kamery >=60% = '
-      '${cameras.length}',
-    );
+    final cameras = mergedCameras();
 
     for (final camera in cameras) {
       debugPrint(
@@ -262,55 +234,10 @@ class CameraDiscoveryService {
           ? 'Skanowanie zakończone.'
           : 'Znaleziono ${cameras.length} '
                 '${cameras.length == 1 ? "kamerę" : "kamery"}.',
-      6,
+      totalSteps,
     );
 
     return cameras;
-  }
-
-  Future<void> _runDiagnostics() async {
-    try {
-      final capabilities = await _discovery.getCapabilities();
-
-      debugPrint('');
-      debugPrint('DISCOVERY CAPABILITIES:');
-
-      debugPrint(
-        '  neighborTable='
-        '${capabilities.supportsNeighborTable}',
-      );
-
-      debugPrint(
-        '  reachability='
-        '${capabilities.supportsReachability}',
-      );
-
-      debugPrint(
-        '  safePortProbe='
-        '${capabilities.supportsSafePortProbe}',
-      );
-
-      debugPrint(
-        '  multicastHealth='
-        '${capabilities.supportsMulticastHealthCheck}',
-      );
-
-      if (capabilities.supportsMulticastHealthCheck) {
-        final healthy = await _discovery.checkMulticastHealth(
-          timeout: const Duration(milliseconds: 1200),
-        );
-
-        debugPrint(
-          'DISCOVERY MULTICAST: '
-          '${healthy ? "OK" : "PROBLEM"}',
-        );
-      }
-    } catch (error) {
-      debugPrint(
-        'DISCOVERY DIAGNOSTICS ERROR: '
-        '$error',
-      );
-    }
   }
 }
 
@@ -324,28 +251,40 @@ class StandardNetworkDiscoveryStrategy implements CameraDiscoveryStrategy {
   String get name => 'STANDARD_NETWORK';
 
   @override
-  Future<List<DetectedCamera>> discover() async {
+  Future<List<DetectedCamera>> discover({
+    void Function(List<DetectedCamera>)? onResults,
+    bool Function()? isCancelled,
+  }) async {
+    // This package enables reusePort in its shared UDP engines. On Android
+    // keep native DNS-SD and use SafeHood's ONVIF/SSDP probes for the rest.
+    final useDirectUdp = defaultTargetPlatform == TargetPlatform.android;
     final request = LocalDiscoveryRequest(
       mode: LocalDiscoveryMode.servicesAndDevices,
       duration: const Duration(seconds: 6),
-      protocols: const {
+      protocols: {
         LocalDiscoveryProtocol.mdns,
         LocalDiscoveryProtocol.dnsSd,
-        LocalDiscoveryProtocol.ssdp,
-        LocalDiscoveryProtocol.upnp,
-        LocalDiscoveryProtocol.wsDiscovery,
+        if (!useDirectUdp) ...{
+          LocalDiscoveryProtocol.ssdp,
+          LocalDiscoveryProtocol.upnp,
+          LocalDiscoveryProtocol.wsDiscovery,
+        },
       },
       serviceTypes: const {'_http._tcp', '_https._tcp', '_rtsp._tcp'},
-      ssdpSearchTargets: const {'ssdp:all'},
-      wsDiscoveryTypes: const {'dn:NetworkVideoTransmitter'},
+      ssdpSearchTargets: useDirectUdp ? const {} : const {'ssdp:all'},
+      wsDiscoveryTypes: useDirectUdp
+          ? const {}
+          : const {'dn:NetworkVideoTransmitter'},
       resolveServices: true,
-      fetchUpnpDescriptions: true,
+      fetchUpnpDescriptions: !useDirectUdp,
       deduplicateResults: true,
       classifyDevices: true,
+      monitorNetworkChanges: !useDirectUdp,
       metadataSecurityPolicy: MetadataSecurityPolicy.defaultPolicy,
     );
 
     final readiness = await _discovery.checkReadiness(request);
+    if (isCancelled?.call() == true) return const [];
 
     if (!readiness.canStart) {
       throw StateError(
@@ -440,7 +379,10 @@ class DirectOnvifDiscoveryStrategy implements CameraDiscoveryStrategy {
   String get name => 'DIRECT_ONVIF';
 
   @override
-  Future<List<DetectedCamera>> discover() async {
+  Future<List<DetectedCamera>> discover({
+    void Function(List<DetectedCamera>)? onResults,
+    bool Function()? isCancelled,
+  }) async {
     RawDatagramSocket? socket;
 
     try {
@@ -449,6 +391,7 @@ class DirectOnvifDiscoveryStrategy implements CameraDiscoveryStrategy {
         0,
         reuseAddress: true,
       );
+      if (isCancelled?.call() == true) return const [];
 
       final activeSocket = socket;
 
@@ -495,6 +438,7 @@ class DirectOnvifDiscoveryStrategy implements CameraDiscoveryStrategy {
 
           while ((datagram = activeSocket.receive()) != null) {
             final packet = datagram!;
+            if (isCancelled?.call() == true) continue;
 
             final text = utf8.decode(packet.data, allowMalformed: true);
 
@@ -508,8 +452,13 @@ class DirectOnvifDiscoveryStrategy implements CameraDiscoveryStrategy {
 
             final xAddrs = _extractXmlValue(text, 'XAddrs');
             final onvifServiceUrl = _extractFirstHttpUrl(xAddrs);
+            final previous = results[ip];
+            if (previous != null &&
+                (previous.onvifServiceUrl != null || onvifServiceUrl == null)) {
+              continue;
+            }
 
-            final name = _guessOnvifScope(scopes, 'name') ?? 'Kamera ONVIF';
+            final name = _guessOnvifScope(scopes, 'name') ?? 'Kamera $ip';
 
             final model =
                 _guessOnvifScope(scopes, 'hardware') ?? 'Kamera ONVIF';
@@ -528,6 +477,7 @@ class DirectOnvifDiscoveryStrategy implements CameraDiscoveryStrategy {
               },
               confidence: xAddrs == null ? 95 : 100,
             );
+            onResults?.call(results.values.toList());
           }
         },
         onError: (Object error) {
@@ -567,8 +517,12 @@ class NeighborTableDiscoveryStrategy implements CameraDiscoveryStrategy {
   String get name => 'NEIGHBOR_TABLE';
 
   @override
-  Future<List<DetectedCamera>> discover() async {
+  Future<List<DetectedCamera>> discover({
+    void Function(List<DetectedCamera>)? onResults,
+    bool Function()? isCancelled,
+  }) async {
     final entries = await NeighborTable.getEntries();
+    if (isCancelled?.call() == true) return const [];
 
     debugPrint(
       'NEIGHBOR TABLE: '
@@ -631,7 +585,10 @@ class DirectSsdpDiscoveryStrategy implements CameraDiscoveryStrategy {
   String get name => 'DIRECT_SSDP';
 
   @override
-  Future<List<DetectedCamera>> discover() async {
+  Future<List<DetectedCamera>> discover({
+    void Function(List<DetectedCamera>)? onResults,
+    bool Function()? isCancelled,
+  }) async {
     RawDatagramSocket? socket;
 
     try {
@@ -640,6 +597,7 @@ class DirectSsdpDiscoveryStrategy implements CameraDiscoveryStrategy {
         0,
         reuseAddress: true,
       );
+      if (isCancelled?.call() == true) return const [];
 
       final activeSocket = socket;
 
@@ -667,6 +625,7 @@ class DirectSsdpDiscoveryStrategy implements CameraDiscoveryStrategy {
 
           while ((datagram = activeSocket.receive()) != null) {
             final packet = datagram!;
+            if (isCancelled?.call() == true) continue;
 
             final response = utf8.decode(packet.data, allowMalformed: true);
 
@@ -698,7 +657,7 @@ class DirectSsdpDiscoveryStrategy implements CameraDiscoveryStrategy {
 
             final brand = _detectVendor(text) ?? 'Nieznany producent';
 
-            results[ip] = DetectedCamera(
+            final camera = DetectedCamera(
               deviceId: 'ssdp-$ip',
               displayName: brand == 'Nieznany producent'
                   ? 'Urządzenie $ip'
@@ -717,6 +676,15 @@ class DirectSsdpDiscoveryStrategy implements CameraDiscoveryStrategy {
                   ? 70
                   : 45,
             );
+            final previous = results[ip];
+            if (previous != null &&
+                previous.confidence >= camera.confidence &&
+                (previous.connectionType == CameraConnectionType.onvif ||
+                    camera.connectionType != CameraConnectionType.onvif)) {
+              continue;
+            }
+            results[ip] = camera;
+            onResults?.call(results.values.toList());
           }
         },
         onError: (Object error) {
@@ -735,6 +703,10 @@ class DirectSsdpDiscoveryStrategy implements CameraDiscoveryStrategy {
       // zgubić pierwszy pakiet.
       await Future<void>.delayed(const Duration(milliseconds: 350));
 
+      if (isCancelled?.call() == true) {
+        await subscription.cancel();
+        return const [];
+      }
       activeSocket.send(
         utf8.encode(request),
         InternetAddress('239.255.255.250'),
@@ -789,8 +761,12 @@ class ActiveLanCameraProbeStrategy implements CameraDiscoveryStrategy {
   String get name => 'ACTIVE_LAN_PROBE';
 
   @override
-  Future<List<DetectedCamera>> discover() async {
+  Future<List<DetectedCamera>> discover({
+    void Function(List<DetectedCamera>)? onResults,
+    bool Function()? isCancelled,
+  }) async {
     final localIp = await _findPrivateIpv4();
+    if (isCancelled?.call() == true) return const [];
 
     if (localIp == null) {
       debugPrint('ACTIVE LAN: brak IPv4');
@@ -826,39 +802,48 @@ class ActiveLanCameraProbeStrategy implements CameraDiscoveryStrategy {
     const batchSize = 28;
 
     for (var start = 0; start < addresses.length; start += batchSize) {
+      if (isCancelled?.call() == true) break;
       final end = min(start + batchSize, addresses.length);
 
       final batch = addresses.sublist(start, end);
 
-      final batchResults = await Future.wait(batch.map(_scanHost));
-
-      for (final camera in batchResults) {
-        if (camera != null) {
+      await Future.wait(
+        batch.map((ip) async {
+          final camera = await _scanHost(ip, isCancelled: isCancelled);
+          if (camera == null || isCancelled?.call() == true) return;
           results.add(camera);
-        }
-      }
+          onResults?.call(List.of(results));
+        }),
+      );
     }
 
     return results;
   }
 
-  Future<DetectedCamera?> _scanHost(String ip) async {
+  Future<DetectedCamera?> _scanHost(
+    String ip, {
+    bool Function()? isCancelled,
+  }) async {
     DetectedCamera? fallback;
     for (final port in _webPorts) {
+      if (isCancelled?.call() == true) return null;
       final web = await ReachabilityProber.probe(
         ip,
         ports: [port],
         timeout: const Duration(milliseconds: 250),
       );
       if (web.status != LocalReachabilityStatus.reachable) continue;
+      if (isCancelled?.call() == true) return null;
 
       // A camera need not advertise multicast or have a recognizable web page.
       final onvif = await _confirmOnvif(ip, port);
       if (onvif != null) return onvif;
+      if (isCancelled?.call() == true) return null;
       fallback ??= await _fingerprintWebDevice(ip, port);
     }
 
     for (final port in _rtspPorts) {
+      if (isCancelled?.call() == true) return null;
       if (!await _confirmRtsp(ip, port)) continue;
       return DetectedCamera(
         deviceId: 'rtsp-$ip-$port',

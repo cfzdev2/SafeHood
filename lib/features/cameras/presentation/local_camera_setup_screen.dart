@@ -34,31 +34,93 @@ class LocalCameraSetupScreen extends StatefulWidget {
 
 class _LocalCameraSetupScreenState extends State<LocalCameraSetupScreen> {
   late final _discovery = widget.discovery ?? CameraDiscoveryService();
-  late Future<List<DetectedCamera>> _results = _discover();
+  List<DetectedCamera> _cameras = const [];
   Set<String> _previousAddresses = const {};
   bool _afterPairing = false;
+  bool _searching = false;
+  int _scanId = 0;
 
-  Future<List<DetectedCamera>> _discover() async {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.savedSource == null) _startScan();
+  }
+
+  void _startScan({
+    bool afterPairing = false,
+    Set<String> previousAddresses = const {},
+  }) {
+    final scanId = ++_scanId;
+    setState(() {
+      _cameras = const [];
+      _afterPairing = afterPairing;
+      _previousAddresses = previousAddresses;
+      _searching = true;
+    });
+    unawaited(_scan(scanId));
+  }
+
+  Future<void> _scan(int scanId) async {
     final afterPairing = _afterPairing;
     final previous = _previousAddresses;
-    Future<List<DetectedCamera>> scan() async =>
-        (await _discovery.discoverCameras()).where(canTryLocalCamera).toList();
-    var local = await scan();
-    if (afterPairing &&
-        !local.any((device) => !previous.contains(device.ipAddress))) {
-      // Some cameras return from their initial restart after the first scan.
-      await Future<void>.delayed(const Duration(seconds: 2));
-      if (mounted) local = await scan();
+    final byAddress = <String, DetectedCamera>{};
+    bool cancelled() => !mounted || scanId != _scanId;
+
+    void publish(List<DetectedCamera> results) {
+      if (cancelled()) return;
+      for (final device in results.where(canTryLocalCamera)) {
+        byAddress[device.ipAddress!] = device;
+      }
+      setState(() {
+        // Keep each result in place as more information arrives. After
+        // pairing, cameras not seen before are listed first.
+        _cameras = [
+          if (afterPairing)
+            ...byAddress.values.where(
+              (device) => !previous.contains(device.ipAddress),
+            ),
+          ...byAddress.values.where(
+            (device) => !afterPairing || previous.contains(device.ipAddress),
+          ),
+        ];
+      });
     }
-    if (afterPairing) {
-      // Appearance after pairing is a hint; the user still sees and confirms
-      // the image before adding a device to their account.
-      return [
-        ...local.where((device) => !previous.contains(device.ipAddress)),
-        ...local.where((device) => previous.contains(device.ipAddress)),
-      ];
+
+    Future<void> scan() async {
+      publish(
+        await _discovery.discoverCameras(
+          onResults: publish,
+          isCancelled: cancelled,
+        ),
+      );
     }
-    return local;
+
+    try {
+      await scan();
+      if (!cancelled() &&
+          afterPairing &&
+          !byAddress.keys.any((address) => !previous.contains(address))) {
+        // A camera can take another moment to reconnect after restart.
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!cancelled()) await scan();
+      }
+    } catch (error) {
+      debugPrint('CAMERA SETUP DISCOVERY: ${error.runtimeType}');
+    } finally {
+      if (!cancelled()) {
+        setState(() {
+          _searching = false;
+        });
+      }
+    }
+  }
+
+  void _retry() {
+    if (_searching) return;
+    _startScan(
+      afterPairing: _afterPairing,
+      previousAddresses: _previousAddresses,
+    );
   }
 
   void _done() {
@@ -79,7 +141,16 @@ class _LocalCameraSetupScreenState extends State<LocalCameraSetupScreen> {
     if (saved == true) _done();
   }
 
-  Future<void> _pair(List<DetectedCamera> known) async {
+  Future<void> _pair() async {
+    final known = _cameras.map((device) => device.ipAddress!).toSet();
+    final wasSearching = _searching;
+    if (wasSearching) {
+      // Stop probing the current LAN before the phone switches Wi-Fi.
+      ++_scanId;
+      setState(() {
+        _searching = false;
+      });
+    }
     final outcome = await Navigator.of(context).push<CameraPairingResult>(
       MaterialPageRoute<CameraPairingResult>(
         builder: (_) => CameraPairingScreen(
@@ -92,11 +163,9 @@ class _LocalCameraSetupScreenState extends State<LocalCameraSetupScreen> {
     if (outcome == CameraPairingResult.saved) {
       _done();
     } else if (outcome == CameraPairingResult.findOnHomeNetwork) {
-      setState(() {
-        _previousAddresses = known.map((device) => device.ipAddress!).toSet();
-        _afterPairing = true;
-        _results = _discover();
-      });
+      _startScan(afterPairing: true, previousAddresses: known);
+    } else if (wasSearching) {
+      _retry();
     }
   }
 
@@ -123,84 +192,80 @@ class _LocalCameraSetupScreenState extends State<LocalCameraSetupScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Dodaj kamerę')),
       body: SafeArea(
-        child: FutureBuilder<List<DetectedCamera>>(
-          future: _results,
-          builder: (context, snapshot) {
-            final searching =
-                snapshot.connectionState == ConnectionState.waiting;
-            final cameras = snapshot.data ?? const [];
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                if (searching) ...[
-                  const LinearProgressIndicator(),
-                  const SizedBox(height: 12),
-                  Text(
-                    _afterPairing
-                        ? 'Szukam kamery w domowym Wi‑Fi…'
-                        : 'Szukam kamer w Twojej sieci…',
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            if (_searching) ...[
+              const LinearProgressIndicator(),
+              const SizedBox(height: 12),
+              Text(
+                _cameras.isNotEmpty
+                    ? 'Szukam kolejnych kamer…'
+                    : _afterPairing
+                    ? 'Szukam kamery w domowym Wi‑Fi…'
+                    : 'Szukam kamer w Twojej sieci…',
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (_cameras.isNotEmpty) ...[
+              const Text(
+                'Wybierz swoją kamerę. SafeHood sprawdzi, jak się z nią połączyć.',
+              ),
+              const SizedBox(height: 12),
+              for (final camera in _cameras)
+                Card(
+                  key: ValueKey(camera.ipAddress),
+                  child: ListTile(
+                    leading: const Icon(Icons.videocam_outlined),
+                    title: Text(localCameraDisplayName(camera)),
+                    subtitle: Text(
+                      _afterPairing &&
+                              !_previousAddresses.contains(camera.ipAddress)
+                          ? 'Nowa w sieci · ${camera.ipAddress}'
+                          : camera.ipAddress!,
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _openCamera(camera),
                   ),
-                ] else if (cameras.isEmpty)
-                  Text(
-                    _afterPairing
-                        ? 'Kamera może jeszcze łączyć się z Wi‑Fi. Odczekaj chwilę i spróbuj ponownie.'
-                        : 'Nie znaleziono kamer. Sprawdź, czy kamera jest włączona.',
-                  )
-                else ...[
-                  const Text(
-                    'Wybierz swoją kamerę. SafeHood sprawdzi, jak się z nią połączyć.',
+                ),
+            ] else if (!_searching)
+              Text(
+                _afterPairing
+                    ? 'Kamera może jeszcze łączyć się z Wi‑Fi. Odczekaj chwilę i spróbuj ponownie.'
+                    : 'Nie znaleziono kamer. Sprawdź, czy kamera jest włączona.',
+              ),
+            const SizedBox(height: 12),
+            if (!_searching)
+              OutlinedButton(
+                onPressed: _retry,
+                child: const Text('Szukaj ponownie'),
+              ),
+            FilledButton.tonalIcon(
+              onPressed: _pair,
+              icon: const Icon(Icons.wifi),
+              label: const Text('Połącz nową kamerę z Wi‑Fi'),
+            ),
+            const SizedBox(height: 8),
+            if (!_searching)
+              ExpansionTile(
+                title: const Text('Opcje zaawansowane'),
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.link),
+                    title: const Text('Mam adres strumienia'),
+                    onTap: _manual,
                   ),
-                  const SizedBox(height: 12),
-                  for (final camera in cameras)
-                    Card(
-                      child: ListTile(
-                        leading: const Icon(Icons.videocam_outlined),
-                        title: Text(localCameraDisplayName(camera)),
-                        subtitle: Text(
-                          _afterPairing &&
-                                  !_previousAddresses.contains(camera.ipAddress)
-                              ? 'Nowa w sieci · ${camera.ipAddress}'
-                              : camera.ipAddress!,
-                        ),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => _openCamera(camera),
+                  if (widget.onAdvanced case final open?)
+                    ListTile(
+                      leading: const Icon(Icons.hub_outlined),
+                      title: const Text(
+                        'Integracja producenta lub konfiguracja ręczna',
                       ),
+                      onTap: () => open(context),
                     ),
                 ],
-                const SizedBox(height: 12),
-                if (!searching)
-                  OutlinedButton(
-                    onPressed: () => setState(() => _results = _discover()),
-                    child: const Text('Szukaj ponownie'),
-                  ),
-                FilledButton.tonalIcon(
-                  onPressed: searching ? null : () => _pair(cameras),
-                  icon: const Icon(Icons.wifi),
-                  label: const Text('Połącz nową kamerę z Wi‑Fi'),
-                ),
-                const SizedBox(height: 8),
-                if (!searching)
-                  ExpansionTile(
-                    title: const Text('Opcje zaawansowane'),
-                    children: [
-                      ListTile(
-                        leading: const Icon(Icons.link),
-                        title: const Text('Mam adres strumienia'),
-                        onTap: _manual,
-                      ),
-                      if (widget.onAdvanced case final open?)
-                        ListTile(
-                          leading: const Icon(Icons.hub_outlined),
-                          title: const Text(
-                            'Integracja producenta lub konfiguracja ręczna',
-                          ),
-                          onTap: () => open(context),
-                        ),
-                    ],
-                  ),
-              ],
-            );
-          },
+              ),
+          ],
         ),
       ),
     );
