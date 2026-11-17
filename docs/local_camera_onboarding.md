@@ -1,14 +1,16 @@
 # Lokalne dodawanie kamer na Androidzie
 
-**Moje kamery → Dodaj kamerę → Skonfiguruj kamerę i sprawdź obraz** otwiera kreator.
-Po sprawdzeniu obrazu zapis tworzy zwykły wpis kamery na koncie.
+**Moje kamery → Dodaj kamerę** od razu wyszukuje kamery w domowej sieci.
+Użytkownik wskazuje urządzenie i sprawdza obraz. Jeśli kamera nie jest jeszcze
+w sieci, **Połącz nową kamerę z Wi‑Fi** wyszukuje jej sieć i prowadzi przez
+konfigurację. Rodzaj połączenia wybiera SafeHood.
 
-| Ścieżka | Co sprawdza aplikacja |
+| Sytuacja | Co sprawdza aplikacja |
 | --- | --- |
-| Reolink przez Bluetooth | Pilotaż E1 Pro / E330 w rewizji z BLE, Android 10+. Wpisz UID z etykiety. Aplikacja wysyła ustawienia Wi-Fi po dopasowaniu reklamy BLE, szuka tego UID w LAN, konfiguruje konto lokalne i RTSP. |
-| Hotspot kamery (ONVIF lub DVRIP) | Po zmianie sieci telefon wraca do domowego Wi-Fi i wyszukuje kamerę, żeby sprawdzić ONVIF i obraz. |
-| Kamera ONVIF w sieci | Aplikacja wyszukuje kamerę oraz pyta o lokalne dane ONVIF, jeśli są potrzebne. Próbuje usługi Media i Media2, preferuje profil H.264 i prosi o adres RTSP. |
-| Ręczny RTSP | Wpisz pełny adres strumienia H.264, np. `rtsp://192.168.1.50:554/live`. Domyślnie odbiór przez TCP; po niepowodzeniu można spróbować UDP, gdy Wi-Fi kamery jest główną siecią telefonu. |
+| Kamera jest w domowej sieci | SafeHood sprawdza ONVIF i jego profile Media/Media2. Gdy kamera nie poda działającego adresu obrazu, aplikacja kolejno próbuje ograniczonej liczby znanych ścieżek RTSP na tym samym urządzeniu. Prosi o dane kamery przy wymaganym logowaniu lub gdy nie można uruchomić obrazu. |
+| Kamera ma własną sieć na czas konfiguracji | SafeHood sugeruje sieci przypominające kamery. Po wyborze urządzenia sprawdza jego możliwości. Dla znanego profilu `robot…` próbuje najpierw DVRIP i w razie niezgodności sprawdza ONVIF. Po wysłaniu ustawień sam wyszukuje kamerę w domowym Wi‑Fi, także gdy kamera rozłączyła się przed potwierdzeniem. |
+| Kamera ma kod na etykiecie | **Mam kod z etykiety kamery** otwiera wyszukiwanie zgodnej kamery Reolink E1 Pro / E330 z BLE, Android 10+. Aplikacja sprawdza identyfikator przed wysłaniem Wi‑Fi i ponownie przed lokalnym uruchomieniem obrazu. |
+| Użytkownik zna adres strumienia lub potrzebuje integracji producenta | **Opcje zaawansowane** zachowują możliwość użycia pełnego adresu strumienia albo istniejącego konfiguratora producenta. |
 
 Zapis jest dostępny po wyrenderowaniu pierwszej klatki. Wpisz nazwę i
 lokalizację, a potem otwórz kamerę z **Moje kamery**. Pełny adres strumienia
@@ -16,8 +18,9 @@ i dane logowania kamery pozostają w bezpiecznym magazynie telefonu.
 Hasło domowego Wi-Fi jest używane wyłącznie podczas parowania.
 
 Jeśli ten telefon ma wpisy ze starszej listy, w **Moje kamery** pojawi się
-przycisk **Przenieś wcześniej zapisaną kamerę**. Wybierz wpis i wykryj jego
-ONVIF albo zachowaj sam RTSP. Kreator wykorzysta zapisany adres obrazu bez
+przycisk **Przenieś wcześniej zapisaną kamerę**. Po wybraniu wpisu kreator
+sprawdza metodę połączenia pod tym adresem. Zachowuje zapisany strumień jako
+podgląd również wtedy, gdy ONVIF nie daje się potwierdzić. Nie wymaga
 ponownego parowania. Starszy wpis zostanie usunięty po zapisie na koncie.
 
 Potwierdzony ONVIF jest rejestrowany z adresem usługi i przypisywany do
@@ -35,11 +38,11 @@ Wi-Fi. Odpowiedź BLE albo otwarty port nie oznacza działającego obrazu.
 ## Próba na telefonie
 
 1. Otwórz aplikację na Androidzie i zaloguj się. W **Moje kamery → Dodaj
-   kamerę** wybierz RTSP lub ONVIF. Zaczekaj na obraz, zapisz i otwórz
-   podgląd z głównej listy. Jeśli masz starszy wpis, sprawdź też jego
-   przeniesienie i przypisanie do aktywnego Bridge.
+   kamerę** wybierz znalezioną kamerę. Zaczekaj na obraz, zapisz i otwórz
+   podgląd z głównej listy. Jeśli masz starszy wpis, sprawdź, że przeniesienie
+   nie prosi o wybór protokołu i zachowuje działający obraz.
 2. Na testowym Reolinku E1 Pro / E330 z BLE uruchom tryb pierwszej
-   konfiguracji zgodnie z instrukcją modelu. Wpisz UID, zezwól na Bluetooth,
+   konfiguracji zgodnie z instrukcją modelu. Wybierz dodanie z kodu, wpisz go i zezwól na Bluetooth,
    wpisz dane Wi-Fi 2,4 GHz, ustaw hasło kamery i otwórz podgląd. Zanotuj
    model, rewizję i firmware. Potwierdź, że po restarcie routera lub zmianie
    IP podgląd nadal działa. Wyłącz dostęp kamery do internetu i sprawdź ponownie.

@@ -15,8 +15,6 @@ class AddCameraSelection {
   final LocalCameraConnection connection;
 }
 
-
-
 class AddCameraScreen extends StatefulWidget {
   const AddCameraScreen({super.key});
 
@@ -458,12 +456,16 @@ class _AddCameraScreenState extends State<AddCameraScreen> {
               onPressed: isScanning
                   ? null
                   : () async {
-                      final discover = await Navigator.of(context).push<bool>(
-                        MaterialPageRoute<bool>(
-                          builder: (_) => const CameraPairingScreen(),
-                        ),
-                      );
-                      if (discover == true && mounted) await _detectCameras();
+                      final outcome = await Navigator.of(context)
+                          .push<CameraPairingResult>(
+                            MaterialPageRoute<CameraPairingResult>(
+                              builder: (_) => const CameraPairingScreen(),
+                            ),
+                          );
+                      if (outcome == CameraPairingResult.findOnHomeNetwork &&
+                          mounted) {
+                        await _detectCameras();
+                      }
                     },
               icon: const Icon(Icons.wifi_protected_setup),
               label: const Text('Sparuj nową kamerę bez kabla'),

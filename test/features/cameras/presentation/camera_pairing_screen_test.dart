@@ -23,7 +23,7 @@ void main() {
           'homeSsid': 'Dom',
           'networks': [
             {
-              'ssid': 'TestCamera',
+              'ssid': 'Camera-Test',
               'bssid': '00:11:22:33:44:55',
               'security': 'open',
             },
@@ -35,15 +35,15 @@ void main() {
       };
     });
 
-    bool? result;
+    CameraPairingResult? result;
     await tester.pumpWidget(
       MaterialApp(
         home: Builder(
           builder: (context) => Scaffold(
             body: TextButton(
               onPressed: () async {
-                result = await Navigator.of(context).push<bool>(
-                  MaterialPageRoute(
+                result = await Navigator.of(context).push<CameraPairingResult>(
+                  MaterialPageRoute<CameraPairingResult>(
                     builder: (_) => const CameraPairingScreen(),
                   ),
                 );
@@ -58,7 +58,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Wyszukaj sieć kamery'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('TestCamera'));
+    await tester.tap(find.text('Camera-Test'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Połącz z siecią kamery'));
     await tester.pumpAndSettle();
@@ -72,7 +72,7 @@ void main() {
       find.widgetWithText(TextField, 'Hasło domowego Wi-Fi'),
       'test-wifi-123',
     );
-    await tester.tap(find.text('Przekaż dane Wi-Fi kamerze'));
+    await tester.tap(find.text('Połącz kamerę z Wi‑Fi'));
     await tester.pumpAndSettle();
     expect(calls.last.method, 'configure');
     expect(calls.last.arguments, {'ssid': 'Dom', 'password': 'test-wifi-123'});
@@ -84,7 +84,7 @@ void main() {
 
     await tester.tap(find.text('Wykryj kamerę w sieci domowej'));
     await tester.pumpAndSettle();
-    expect(result, isTrue);
+    expect(result, CameraPairingResult.findOnHomeNetwork);
     expect(calls.where((call) => call.method == 'configure'), hasLength(1));
   });
 
@@ -100,7 +100,7 @@ void main() {
               'fresh': true,
               'networks': [
                 {
-                  'ssid': 'LimitedCamera',
+                  'ssid': 'Camera-Limited',
                   'bssid': '00:11:22:33:44:55',
                   'security': 'open',
                 },
@@ -111,14 +111,77 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: CameraPairingScreen()));
     await tester.tap(find.text('Wyszukaj sieć kamery'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('LimitedCamera'));
+    await tester.tap(find.text('Camera-Limited'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Połącz z siecią kamery'));
     await tester.pumpAndSettle();
-    expect(
-      find.textContaining('nie udostępnia przez niego konfiguracji Wi-Fi'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('nie może ustawić Wi‑Fi'), findsOneWidget);
     expect(find.text('Hasło domowego Wi-Fi'), findsNothing);
   });
+
+  testWidgets('tries another setup method after a read-only mismatch', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call.method);
+      return switch (call.method) {
+        'scan' => {
+          'fresh': true,
+          'networks': [
+            {
+              'ssid': 'robot0df2',
+              'bssid': '00:11:22:33:44:55',
+              'security': 'open',
+            },
+          ],
+        },
+        'inspectDvrip' => throw PlatformException(code: 'dvripProfile'),
+        'inspect' => 'Kamera',
+        _ => null,
+      };
+    });
+    await tester.pumpWidget(
+      const MaterialApp(home: CameraPairingScreen(startImmediately: true)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('robot0df2'));
+    await tester.pumpAndSettle();
+    expect(calls, ['scan', 'connect', 'inspectDvrip', 'inspect']);
+    expect(find.text('Hasło domowego Wi-Fi'), findsOneWidget);
+    expect(find.textContaining('DVRIP'), findsNothing);
+  });
+
+  testWidgets(
+    'asks for the camera login without switching after an auth error',
+    (tester) async {
+      final calls = <String>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        return switch (call.method) {
+          'scan' => {
+            'fresh': true,
+            'networks': [
+              {
+                'ssid': 'robot0df2',
+                'bssid': '00:11:22:33:44:55',
+                'security': 'open',
+              },
+            ],
+          },
+          'inspectDvrip' => throw PlatformException(code: 'dvripAuth'),
+          _ => null,
+        };
+      });
+      await tester.pumpWidget(
+        const MaterialApp(home: CameraPairingScreen(startImmediately: true)),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('robot0df2'));
+      await tester.pumpAndSettle();
+      expect(calls, ['scan', 'connect', 'inspectDvrip']);
+      expect(find.widgetWithText(TextField, 'Hasło kamery'), findsOneWidget);
+      expect(find.text('Hasło domowego Wi-Fi'), findsNothing);
+    },
+  );
 }

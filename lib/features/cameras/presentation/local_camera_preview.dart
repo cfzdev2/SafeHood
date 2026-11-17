@@ -13,11 +13,17 @@ class LocalCameraPreview extends StatefulWidget {
     required this.source,
     required this.onSave,
     this.refreshSource = false,
+    this.fallbackUris = const [],
+    this.onEditLogin,
+    this.onSaved,
   });
 
   final LocalCameraSource source;
   final Future<void> Function(LocalCameraSource source, String location) onSave;
   final bool refreshSource;
+  final List<Uri> fallbackUris;
+  final VoidCallback? onEditLogin;
+  final VoidCallback? onSaved;
 
   @override
   State<LocalCameraPreview> createState() => _LocalCameraPreviewState();
@@ -26,6 +32,7 @@ class LocalCameraPreview extends StatefulWidget {
 class _LocalCameraPreviewState extends State<LocalCameraPreview>
     with WidgetsBindingObserver {
   late final _name = TextEditingController(text: widget.source.name);
+  late final _streams = [widget.source.uri, ...widget.fallbackUris];
   final _location = TextEditingController(text: 'Dom');
   final _player = const LocalCameraPlayer();
   Uri? _openedUri;
@@ -35,6 +42,7 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
   double _aspect = 16 / 9;
   bool _connecting = false;
   bool _confirmed = false;
+  bool _hadFrame = false;
   bool _saving = false;
   String? _problem;
 
@@ -75,6 +83,7 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
     _texture = null;
     _openedUri = null;
     _confirmed = false;
+    _hadFrame = false;
     if (texture != null) unawaited(_stop(texture));
   }
 
@@ -86,7 +95,7 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
     }
   }
 
-  Future<void> _connect({bool tryUdp = false}) async {
+  Future<void> _connect({int candidate = 0, bool tryUdp = false}) async {
     _release();
     final generation = _generation;
     setState(() {
@@ -94,7 +103,7 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
       _problem = null;
     });
     try {
-      var uri = widget.source.uri;
+      var uri = _streams[candidate];
       final uid = widget.source.reolinkUid;
       if (widget.refreshSource && uid != null) {
         uri = await _player.refreshReolink(uid, uri);
@@ -108,10 +117,10 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
       _texture = texture;
       _openedUri = uri;
       final startup = Stopwatch()..start();
-      _schedulePoll(texture, generation, startup);
+      _schedulePoll(texture, generation, startup, candidate);
     } on PlatformException catch (error) {
       if (!mounted || generation != _generation) return;
-      _fail(switch (error.code) {
+      final problem = switch (error.code) {
         'notLocalNetwork' =>
           'Połącz telefon z Wi-Fi kamery i spróbuj ponownie.',
         'notFoundLan' => 'Nie znaleziono tej kamery Reolink w Wi-Fi.',
@@ -119,17 +128,28 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
         'udpNeedsDefaultWifi' =>
           'Aby użyć UDP, ustaw Wi-Fi kamery jako główną sieć telefonu.',
         _ =>
-          'Nie udało się otworzyć RTSP. Sprawdź adres, dostęp do kamery i H.264.',
-      });
+          'Nie udało się otworzyć podglądu. Sprawdź, czy kamera jest włączona.',
+      };
+      if (error.code == 'notLocalNetwork' || error.code == 'authFailed') {
+        _fail(problem);
+      } else {
+        _tryNext(candidate, problem);
+      }
     } catch (_) {
       if (!mounted || generation != _generation) return;
-      _fail(
+      _tryNext(
+        candidate,
         'Nie udało się odebrać obrazu. Sprawdź adres, dostęp do kamery i Wi-Fi.',
       );
     }
   }
 
-  void _schedulePoll(int texture, int generation, Stopwatch startup) {
+  void _schedulePoll(
+    int texture,
+    int generation,
+    Stopwatch startup,
+    int candidate,
+  ) {
     _timer = Timer(const Duration(milliseconds: 300), () async {
       try {
         final state = await _player.state(texture);
@@ -138,9 +158,11 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
         if (state['failed'] == true ||
             (!ready &&
                 !_confirmed &&
-                startup.elapsed > const Duration(seconds: 14))) {
-          _fail(
-            'Nie udało się odebrać obrazu. Sprawdź Wi-Fi i strumień H.264.',
+                startup.elapsed >
+                    Duration(seconds: _streams.length > 1 ? 7 : 14))) {
+          _tryNext(
+            candidate,
+            'Nie udało się odebrać obrazu. Sprawdź Wi‑Fi i dane logowania kamery.',
           );
           return;
         }
@@ -154,14 +176,25 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
             _aspect = aspect;
           });
         }
-        if (ready) startup.reset();
-        _schedulePoll(texture, generation, startup);
+        if (ready) {
+          _hadFrame = true;
+          startup.reset();
+        }
+        _schedulePoll(texture, generation, startup, candidate);
       } catch (_) {
         if (mounted && generation == _generation) {
-          _fail('Podgląd przerwany. Połącz ponownie.');
+          _tryNext(candidate, 'Podgląd przerwany. Połącz ponownie.');
         }
       }
     });
+  }
+
+  void _tryNext(int candidate, String problem) {
+    if (!_hadFrame && candidate + 1 < _streams.length) {
+      unawaited(_connect(candidate: candidate + 1));
+    } else {
+      _fail(problem);
+    }
   }
 
   void _fail(String message) {
@@ -194,7 +227,13 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
         ),
         location,
       );
-      if (mounted) Navigator.of(context).pop(true);
+      if (!mounted) return;
+      final onSaved = widget.onSaved;
+      if (onSaved != null) {
+        onSaved();
+      } else {
+        Navigator.of(context).pop(true);
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -248,8 +287,14 @@ class _LocalCameraPreviewState extends State<LocalCameraPreview>
               label: const Text('Połącz ponownie'),
             ),
             TextButton(
-              onPressed: _saving ? null : () => _connect(tryUdp: true),
-              child: const Text('Spróbuj przez UDP'),
+              onPressed: _saving
+                  ? null
+                  : widget.onEditLogin ?? () => _connect(tryUdp: true),
+              child: Text(
+                widget.onEditLogin == null
+                    ? 'Spróbuj przez UDP'
+                    : 'Wpisz dane logowania kamery',
+              ),
             ),
           ] else
             Text(_confirmed ? 'Podgląd na żywo' : 'Czekam na obraz…'),

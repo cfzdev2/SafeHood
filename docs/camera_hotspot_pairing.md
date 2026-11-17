@@ -1,26 +1,27 @@
 # First setup of a camera without Ethernet
 
-In the Android app, use **Dodaj kamerę → Skonfiguruj kamerę lub sprawdź obraz
-→ Hotspot kamery ONVIF**.
-Put the camera into its pairing mode as described by its manufacturer. Tap
-**Wyszukaj sieć kamery** and select the network belonging to the camera.
+In the Android app, use **Dodaj kamerę → Połącz nową kamerę z Wi‑Fi**.
+Put the camera into its pairing mode as described by its manufacturer. The
+wizard starts scanning and suggests likely camera networks. Select your
+camera's network. Use **Pokaż inne sieci w pobliżu** for an uncommon name.
 Android asks for permission to scan nearby Wi-Fi and to temporarily join
 the selected hotspot. The scan lists Wi-Fi access points; an access point
-is identified as an ONVIF camera only after it responds to ONVIF.
+is identified as a compatible camera only after it answers a read-only probe.
 
 SafeHood tries the camera's gateway or other on-link IPv4 address. The
-ONVIF service must be available over HTTP on the hotspot, and it must
-report exactly one wireless interface that the app can configure.
-If the camera asks for authentication, enter its ONVIF credentials.
-You can specify a local IP and port if the automatic check cannot find it.
+app selects a provisioning method automatically. For the supported
+`robot…` hotspot profile, it tries DVRIP before ONVIF. For ONVIF Wi‑Fi setup,
+the service must report a single configurable wireless interface over HTTP.
+The app asks for camera credentials if needed. A manual address is available
+for cases where the automatic check cannot find a service.
 
 After the app identifies the camera, enter the SSID and password of a
 supported **WPA2-Personal** network. The app requests DHCP and changes
-only the verified wireless interface. If the camera requires a reboot,
-the app offers it as a separate action. A lost reply is treated as
-unconfirmed: check the home network before attempting the write again.
-Wait for the phone to reconnect to home Wi-Fi, choose **Wykryj kamerę w
-sieci domowej**, then select the camera and verify that video plays before saving.
+only the verified wireless interface. If the camera requests a reboot after
+accepting the configuration, the wizard handles it. A lost reply is treated
+as unconfirmed: the app searches the home network before another write is
+attempted. Select your camera from the results and verify that video plays
+before saving.
 
 The app does not store Wi-Fi passwords or send them to Firebase or Bridge.
 The setup socket is scoped to the selected Android network and on-link
@@ -30,9 +31,8 @@ Wi-Fi password is not encrypted in transit, so only use the feature with
 a trusted camera in a trusted setting. Credentials stay in memory for the
 current step and are dropped when setup ends or is cancelled.
 
-A camera that does not expose ONVIF Wi-Fi configuration in its setup mode
-needs a separate provisioning integration to be set up entirely in
-SafeHood. Support for local ONVIF or RTSP video does not imply support for
+A camera without a supported provisioning method needs a separate
+integration to be set up entirely in SafeHood. Support for local video does not imply support for
 Wi-Fi setup. Android 10+ is required for this wizard. The existing discovery
 and settings flows still apply to cameras already in the home network.
 

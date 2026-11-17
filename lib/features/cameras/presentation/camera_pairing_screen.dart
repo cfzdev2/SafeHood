@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 
 enum _Step { discover, join, inspect, configure, reboot, finish }
 
+enum CameraPairingResult { findOnHomeNetwork, saved }
+
 class _Hotspot {
   const _Hotspot(this.name, this.bssid, this.security);
 
@@ -15,11 +17,29 @@ class _Hotspot {
   final String security;
 
   bool get isOpen => security == 'open';
+
+  bool get isRobotCamera => RegExp(
+    r'^robot[_-]?[0-9a-f]{4,12}$',
+    caseSensitive: false,
+  ).hasMatch(name);
+
+  bool get resemblesCamera =>
+      isRobotCamera ||
+      RegExp(
+        r'^(?:camerahd|camera|ipcam|ipc|reolink|nvt|tapo)[-_][\w-]+$',
+        caseSensitive: false,
+      ).hasMatch(name);
 }
 
-/// Returns true only when the user asks to look for the camera on home Wi-Fi.
 class CameraPairingScreen extends StatefulWidget {
-  const CameraPairingScreen({super.key});
+  const CameraPairingScreen({
+    super.key,
+    this.startImmediately = false,
+    this.setupWithLabel,
+  });
+
+  final bool startImmediately;
+  final WidgetBuilder? setupWithLabel;
 
   @override
   State<CameraPairingScreen> createState() => _CameraPairingScreenState();
@@ -42,13 +62,23 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
   bool _scanned = false;
   bool _fresh = false;
   bool _acknowledged = false;
-  String _cameraLabel = 'Kamera ONVIF';
+  String _cameraLabel = 'Kamera';
   String? _progress;
   String? _error;
   String? _errorCode;
 
   bool get _supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.startImmediately && _supported) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_scan());
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -147,6 +177,7 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
       _error = null;
       _errorCode = null;
     });
+    if (network.isOpen && widget.startImmediately) unawaited(_connect());
   }
 
   Future<void> _connect() => _run('Czekam na połączenie z kamerą…', () async {
@@ -160,12 +191,12 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
     if (!mounted) return;
     setState(() {
       _step = _Step.inspect;
-      _progress = 'Sprawdzam obsługę ONVIF…';
+      _progress = 'Sprawdzam, jak połączyć kamerę z Wi‑Fi…';
     });
     await _inspectCamera();
   });
 
-  Future<void> _inspectCamera({bool useDvrip = false}) async {
+  Future<void> _inspectCamera() async {
     final portText = _port.text.trim();
     final port = int.tryParse(portText);
     if (portText.isNotEmpty && (port == null || port < 1 || port > 65535)) {
@@ -173,16 +204,34 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
     }
     final password = _cameraPassword.text;
     _cameraPassword.clear();
-    final label = await _channel
-        .invokeMethod<String>(useDvrip ? 'inspectDvrip' : 'inspect', {
-          'username': _cameraUser.text.trim(),
-          'password': password,
-          'host': _host.text.trim(),
-          'port': port,
-        });
+    final host = _host.text.trim();
+    final args = {
+      'username': _cameraUser.text.trim(),
+      'password': password,
+      'host': host,
+      'port': port,
+    };
+    String? label;
+    if (host.isEmpty && port == null && _selected?.isRobotCamera == true) {
+      try {
+        // Read-only: firmware using this pairing profile is verified again by
+        // the native client before it is allowed to receive home Wi-Fi data.
+        label = await _channel.invokeMethod<String>('inspectDvrip', args);
+      } on PlatformException catch (error) {
+        if (!const {
+          'dvripProfile',
+          'dvripRead',
+          'cameraConnection',
+        }.contains(error.code)) {
+          rethrow;
+        }
+      }
+    }
+    if (!mounted) return;
+    label ??= await _channel.invokeMethod<String>('inspect', args);
     if (!mounted || label == null) return;
     setState(() {
-      _cameraLabel = label;
+      _cameraLabel = label!.replaceAll(RegExp(r'\s*\((?:ONVIF|DVRIP)\)$'), '');
       _step = _Step.configure;
     });
   }
@@ -208,16 +257,42 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
       _acknowledged = result == 'ACCEPTED' || result == 'REBOOT_NEEDED';
       _step = result == 'REBOOT_NEEDED' ? _Step.reboot : _Step.finish;
     });
+    if (widget.startImmediately) {
+      if (result == 'REBOOT_NEEDED') {
+        setState(() => _progress = 'Uruchamiam ponownie kamerę…');
+        await _channel.invokeMethod<String>('reboot');
+        if (!mounted) return;
+      }
+      await _findInHomeNetwork();
+    }
   });
 
   Future<void> _reboot() => _run('Uruchamiam ponownie kamerę…', () async {
     await _channel.invokeMethod<String>('reboot');
-    if (mounted) setState(() => _step = _Step.finish);
+    if (!mounted) return;
+    if (widget.startImmediately) {
+      await _findInHomeNetwork();
+    } else {
+      setState(() => _step = _Step.finish);
+    }
   });
 
   Future<void> _findInHomeNetwork() async {
     await _disconnect();
-    if (mounted) Navigator.of(context).pop(true);
+    if (mounted) {
+      Navigator.of(context).pop(CameraPairingResult.findOnHomeNetwork);
+    }
+  }
+
+  Future<void> _useLabel() async {
+    final builder = widget.setupWithLabel;
+    if (builder == null) return;
+    final saved = await Navigator.of(
+      context,
+    ).push<bool>(MaterialPageRoute<bool>(builder: builder));
+    if (saved == true && mounted) {
+      Navigator.of(context).pop(CameraPairingResult.saved);
+    }
   }
 
   Future<void> _openSettings({bool location = false}) =>
@@ -245,17 +320,13 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
     'apPassword' => 'Wpisz hasło do hotspotu z instrukcji kamery.',
     'scanAgain' => 'Odśwież listę sieci i wybierz ponownie hotspot kamery.',
     'onvifNotFound' =>
-      'Nie znaleziono ONVIF na hotspocie. Jeśli znasz adres ONVIF, wpisz go '
-          'poniżej. Niektóre kamery parują się tylko w aplikacji producenta.',
-    'cameraAuth' => 'Wpisz login i hasło ONVIF kamery i sprawdź ją ponownie.',
-    'dvripAuth' => 'Sprawdź lokalny login i hasło kamery.',
-    'dvripRead' => 'Nie udało się odczytać ustawień kamery przez DVRIP.',
-    'dvripProfile' => 'Ta wersja konfiguracji DVRIP nie jest obsługiwana.',
+      'Nie rozpoznano kamery w wybranej sieci. Sprawdź, czy to sieć Twojej kamery.',
+    'cameraAuth' || 'dvripAuth' => 'Kamera wymaga poprawnego loginu i hasła.',
+    'dvripRead' || 'onvifRead' => 'Nie udało się odczytać ustawień kamery.',
+    'dvripProfile' ||
+    'noOnvifWifi' => 'SafeHood nie może ustawić Wi‑Fi w tej wersji kamery.',
     'dvripDhcp' => 'Nie potwierdzono oczekiwanych ustawień DHCP kamery.',
-    'dvripWrite' => 'Kamera odrzuciła zapis ustawień Wi-Fi przez DVRIP.',
-    'noOnvifWifi' =>
-      'Kamera odpowiada przez ONVIF, ale nie udostępnia przez niego '
-          'konfiguracji Wi-Fi. Dla hotspotu robot spróbuj przez DVRIP.',
+    'dvripWrite' => 'Kamera odrzuciła zapis ustawień Wi‑Fi.',
     'ambiguousWifi' =>
       'Kamera zgłasza kilka konfiguracji Wi-Fi. Wybierz właściwą sieć '
           'w konfiguratorze producenta.',
@@ -265,11 +336,9 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
       'Wpisz nazwę sieci (do 32 bajtów) i hasło WPA2 (8–63 znaki ASCII '
           'lub klucz z 64 znaków szesnastkowych).',
     'sameSsid' => 'Wpisz nazwę domowego Wi-Fi, inną niż hotspot kamery.',
-    'onvifRead' =>
-      'Kamera nie udostępniła danych potrzebnych do konfiguracji przez ONVIF.',
     'onvifWrite' =>
       'Kamera odrzuciła ustawienia. Sprawdź, czy obsługuje domowe Wi-Fi '
-          'i czy konto ONVIF ma uprawnienia administratora.',
+          'i czy dane logowania pozwalają zmienić jej ustawienia.',
     'unsupportedPlatform' =>
       'Wyszukiwanie hotspotów w SafeHood jest dostępne od Androida 10. '
           'Skonfiguruj Wi-Fi w aplikacji producenta, potem wykryj kamerę '
@@ -330,46 +399,63 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
     );
   }
 
-  List<Widget> _discovery(bool busy) => [
-    const Text(
-      'Włącz w kamerze tryb parowania zgodnie z jej instrukcją. '
-      'Jeśli kamera tworzy własną sieć Wi-Fi, znajdziesz ją na liście.',
-    ),
-    const SizedBox(height: 12),
-    FilledButton.icon(
-      onPressed: busy ? null : _scan,
-      icon: const Icon(Icons.wifi_find),
-      label: Text(_scanned ? 'Odśwież sieci' : 'Wyszukaj sieć kamery'),
-    ),
-    if (_scanned && !_fresh)
-      const Text('Android zwrócił poprzednią listę. Odśwież ją za chwilę.'),
-    if (_networks.isNotEmpty) ...[
-      const SizedBox(height: 16),
+  List<Widget> _discovery(bool busy) {
+    final suggested = _networks.where((network) => network.resemblesCamera);
+    final others = _networks.where((network) => !network.resemblesCamera);
+    return [
       const Text(
-        'Sieci w pobliżu. Wybierz tylko tę, która należy do Twojej kamery.',
+        'Włącz w kamerze tryb parowania zgodnie z jej instrukcją. '
+        'Jeśli kamera tworzy własną sieć Wi-Fi, znajdziesz ją na liście.',
       ),
-      for (final network in _networks)
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(network.isOpen ? Icons.wifi : Icons.wifi_lock),
-          title: Text(network.name),
-          subtitle: Text(network.bssid),
-          trailing: const Icon(Icons.chevron_right),
-          enabled: !busy,
-          onTap: busy ? null : () => _select(network),
+      const SizedBox(height: 12),
+      FilledButton.icon(
+        onPressed: busy ? null : _scan,
+        icon: const Icon(Icons.wifi_find),
+        label: Text(_scanned ? 'Odśwież sieci' : 'Wyszukaj sieć kamery'),
+      ),
+      if (_scanned && !_fresh)
+        const Text('Android zwrócił poprzednią listę. Odśwież ją za chwilę.'),
+      if (_networks.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        const Text(
+          'Sieci w pobliżu. Wybierz tylko tę, która należy do Twojej kamery.',
         ),
-    ] else if (_scanned) ...[
-      const SizedBox(height: 16),
-      const Text(
-        'Nie znaleziono sieci pasującej do tego sposobu konfiguracji.',
-      ),
-    ],
-    const SizedBox(height: 12),
-    const Text(
-      'Jeśli kamera nie tworzy hotspotu, połącz ją z Wi-Fi w aplikacji '
-      'producenta i wróć do automatycznego wykrywania w SafeHood.',
-    ),
-  ];
+        for (final network in suggested) _networkTile(network, busy),
+        if (others.isNotEmpty)
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: const Text('Pokaż inne sieci w pobliżu'),
+            children: [
+              for (final network in others) _networkTile(network, busy),
+            ],
+          ),
+      ] else if (_scanned) ...[
+        const SizedBox(height: 16),
+        const Text(
+          'Nie znaleziono sieci kamery. Zbliż telefon do kamery i ponów wyszukiwanie.',
+        ),
+      ],
+      const SizedBox(height: 12),
+      if (widget.setupWithLabel != null)
+        TextButton.icon(
+          onPressed: busy ? null : _useLabel,
+          icon: const Icon(Icons.qr_code),
+          label: const Text('Mam kod z etykiety kamery'),
+        ),
+    ];
+  }
+
+  Widget _networkTile(_Hotspot network, bool busy) => ListTile(
+    contentPadding: EdgeInsets.zero,
+    leading: Icon(network.isOpen ? Icons.wifi : Icons.wifi_lock),
+    title: Text(network.name),
+    subtitle: _networks.where((item) => item.name == network.name).length > 1
+        ? Text(network.bssid)
+        : null,
+    trailing: const Icon(Icons.chevron_right),
+    enabled: !busy,
+    onTap: busy ? null : () => _select(network),
+  );
 
   List<Widget> _join(bool busy) => [
     Text('Sieć kamery: ${_selected!.name}'),
@@ -393,56 +479,60 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
     ),
   ];
 
-  List<Widget> _inspection(bool busy) => [
-    const Text(
-      'SafeHood sprawdzi, czy kamera przyjmuje ustawienia Wi-Fi przez ONVIF. '
-      'Jeśli kamera wymaga logowania, użyj jej konta ONVIF.',
-    ),
-    const SizedBox(height: 16),
-    _input(_cameraUser, 'Login ONVIF (opcjonalnie)', busy),
-    _input(_cameraPassword, 'Hasło ONVIF (opcjonalnie)', busy, secret: true),
-    ExpansionTile(
-      tilePadding: EdgeInsets.zero,
-      title: const Text('Wpisz adres ONVIF ręcznie'),
-      children: [
-        _input(_host, 'Adres IPv4 kamery', busy),
-        _input(_port, 'Port (opcjonalnie)', busy, number: true),
-      ],
-    ),
-    FilledButton(
-      onPressed: busy
-          ? null
-          : () => _run('Sprawdzam obsługę ONVIF…', _inspectCamera),
-      child: const Text('Sprawdź kamerę'),
-    ),
-    if (_errorCode == 'noOnvifWifi' ||
-        (_errorCode?.startsWith('dvrip') ?? false))
-      FilledButton.tonal(
+  List<Widget> _inspection(bool busy) {
+    if (busy) return const [];
+    final credentials = [
+      _input(_cameraUser, 'Użytkownik kamery', busy),
+      _input(_cameraPassword, 'Hasło kamery', busy, secret: true),
+    ];
+    return [
+      if (_errorCode == 'cameraAuth' || _errorCode == 'dvripAuth') ...[
+        const Text(
+          'Użyj danych ustawionych w kamerze lub podanych w jej instrukcji.',
+        ),
+        const SizedBox(height: 12),
+        ...credentials,
+      ] else
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: const Text('Mam dane do kamery'),
+          children: credentials,
+        ),
+      ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        title: const Text('Adres kamery (zaawansowane)'),
+        children: [
+          _input(_host, 'Adres IPv4 kamery', busy),
+          _input(_port, 'Port (opcjonalnie)', busy, number: true),
+        ],
+      ),
+      FilledButton(
         onPressed: busy
             ? null
-            : () => _run(
-                'Sprawdzam DVRIP…',
-                () => _inspectCamera(useDvrip: true),
-              ),
-        child: const Text('Spróbuj przez DVRIP'),
+            : () => _run('Sprawdzam kamerę…', _inspectCamera),
+        child: const Text('Sprawdź kamerę'),
       ),
-    if (_errorCode == 'hotspotLost')
-      TextButton(
-        onPressed: busy
-            ? null
-            : () => setState(() {
-                _step = _Step.join;
-                _error = null;
-                _errorCode = null;
-              }),
-        child: const Text('Połącz ponownie z hotspotem'),
-      ),
-  ];
+      if (_errorCode == 'hotspotLost')
+        TextButton(
+          onPressed: busy
+              ? null
+              : () => setState(() {
+                  _step = _Step.join;
+                  _error = null;
+                  _errorCode = null;
+                }),
+          child: const Text('Połącz ponownie z siecią kamery'),
+        ),
+    ];
+  }
 
   List<Widget> _configuration(bool busy) => [
     Text('Kamera: $_cameraLabel'),
     const SizedBox(height: 8),
-    const Text('Podaj domową sieć WPA2-Personal, którą obsługuje kamera.'),
+    const Text(
+      'Wpisz hasło sieci, z której ma korzystać kamera. Podczas łączenia '
+      'kamera może się na chwilę rozłączyć lub uruchomić ponownie.',
+    ),
     const SizedBox(height: 16),
     _input(_homeName, 'Nazwa domowego Wi-Fi', busy),
     _input(_homePassword, 'Hasło domowego Wi-Fi', busy, secret: true),
@@ -450,13 +540,13 @@ class _CameraPairingScreenState extends State<CameraPairingScreen> {
       _selected!.isOpen
           ? 'Hasło zostanie wysłane bezpośrednio do kamery przez otwarty '
                 'hotspot. Dane nie są szyfrowane podczas tej operacji.'
-          : 'Hasło zostanie wysłane bezpośrednio do kamery przez lokalne HTTP. '
+          : 'Hasło zostanie wysłane bezpośrednio do kamery przez jej sieć. '
                 'SafeHood go nie zapisuje.',
     ),
     const SizedBox(height: 8),
     FilledButton(
       onPressed: busy ? null : _configure,
-      child: const Text('Przekaż dane Wi-Fi kamerze'),
+      child: const Text('Połącz kamerę z Wi‑Fi'),
     ),
   ];
 

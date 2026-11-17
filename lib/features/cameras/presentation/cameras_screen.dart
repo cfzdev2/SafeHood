@@ -77,7 +77,10 @@ class _CamerasScreenState extends State<CamerasScreen> {
     );
   }
 
-  Future<void> _openAddCameraScreen(BuildContext context) async {
+  Future<void> _openAddCameraScreen(
+    BuildContext context, {
+    VoidCallback? onSaved,
+  }) async {
     final newCamera = await Navigator.of(context).push<AddCameraSelection>(
       MaterialPageRoute(builder: (_) => const AddCameraScreen()),
     );
@@ -91,6 +94,7 @@ class _CamerasScreenState extends State<CamerasScreen> {
         newCamera.camera,
         connection: newCamera.connection,
       );
+      if (context.mounted) onSaved?.call();
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -168,6 +172,13 @@ class _CamerasScreenState extends State<CamerasScreen> {
       MaterialPageRoute<LocalCameraSetupResult>(
         builder: (_) => LocalCameraSetupScreen(
           savedSource: legacy?.camera.source,
+          onAdvanced: legacy == null
+              ? (page) => _openAddCameraScreen(
+                  page,
+                  onSaved: () =>
+                      Navigator.of(page).pop(LocalCameraSetupResult.saved),
+                )
+              : null,
           onSave: (LocalCameraRegistration setup) async {
             if (FirebaseAuth.instance.currentUser?.uid != uid) {
               throw StateError(
@@ -203,38 +214,8 @@ class _CamerasScreenState extends State<CamerasScreen> {
     );
   }
 
-  Future<void> _chooseHowToAdd(BuildContext context) async {
+  Future<void> _addCamera(BuildContext context) async {
     if (!supportsLocalCameraSetup) {
-      await _openAddCameraScreen(context);
-      return;
-    }
-    final local = await showModalBottomSheet<bool>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.wifi_find),
-              title: const Text('Skonfiguruj kamerę i sprawdź obraz'),
-              subtitle: const Text('Bluetooth, hotspot kamery, ONVIF lub RTSP'),
-              onTap: () => Navigator.of(sheet).pop(true),
-            ),
-            ListTile(
-              leading: const Icon(Icons.hub_outlined),
-              title: const Text('Inne sposoby dodawania kamery'),
-              subtitle: const Text(
-                'Integracja producenta lub ręczna konfiguracja',
-              ),
-              onTap: () => Navigator.of(sheet).pop(false),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (!context.mounted || local == null) return;
-    if (!local) {
       await _openAddCameraScreen(context);
       return;
     }
@@ -294,7 +275,7 @@ class _CamerasScreenState extends State<CamerasScreen> {
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'cameras_add_camera_fab',
         onPressed: () {
-          _chooseHowToAdd(context);
+          _addCamera(context);
         },
         icon: const Icon(Icons.add),
         label: const Text('Dodaj kamerę'),

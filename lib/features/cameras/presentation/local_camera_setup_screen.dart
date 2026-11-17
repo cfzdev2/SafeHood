@@ -5,400 +5,206 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/camera_discovery_service.dart';
-import '../data/local_camera_connection.dart';
+import '../data/local_camera_auto_setup.dart';
 import '../data/local_camera_registration.dart';
 import '../data/local_camera_store.dart';
-import '../domain/camera.dart';
+import 'automatic_local_camera_connection.dart';
 import 'camera_pairing_screen.dart';
 import 'local_camera_preview.dart';
 
 enum LocalCameraSetupResult { saved }
 
-class LocalCameraSetupScreen extends StatelessWidget {
+class LocalCameraSetupScreen extends StatefulWidget {
   const LocalCameraSetupScreen({
     super.key,
     required this.onSave,
     this.savedSource,
+    this.onAdvanced,
+    this.discovery,
   });
 
   final SaveLocalCamera onSave;
   final LocalCameraSource? savedSource;
+  final Future<void> Function(BuildContext context)? onAdvanced;
+  final CameraDiscoveryService? discovery;
 
-  Future<void> _open(BuildContext context, Widget child) async {
-    final saved = await Navigator.of(
-      context,
-    ).push<bool>(MaterialPageRoute<bool>(builder: (_) => child));
-    if (saved == true && context.mounted) {
-      Navigator.of(context).pop(LocalCameraSetupResult.saved);
+  @override
+  State<LocalCameraSetupScreen> createState() => _LocalCameraSetupScreenState();
+}
+
+class _LocalCameraSetupScreenState extends State<LocalCameraSetupScreen> {
+  late final _discovery = widget.discovery ?? CameraDiscoveryService();
+  late Future<List<DetectedCamera>> _results = _discover();
+  Set<String> _previousAddresses = const {};
+  bool _afterPairing = false;
+
+  Future<List<DetectedCamera>> _discover() async {
+    final afterPairing = _afterPairing;
+    final previous = _previousAddresses;
+    Future<List<DetectedCamera>> scan() async =>
+        (await _discovery.discoverCameras()).where(canTryLocalCamera).toList();
+    var local = await scan();
+    if (afterPairing &&
+        !local.any((device) => !previous.contains(device.ipAddress))) {
+      // Some cameras return from their initial restart after the first scan.
+      await Future<void>.delayed(const Duration(seconds: 2));
+      if (mounted) local = await scan();
     }
+    if (afterPairing) {
+      // Appearance after pairing is a hint; the user still sees and confirms
+      // the image before adding a device to their account.
+      return [
+        ...local.where((device) => !previous.contains(device.ipAddress)),
+        ...local.where((device) => previous.contains(device.ipAddress)),
+      ];
+    }
+    return local;
+  }
+
+  void _done() {
+    if (mounted) Navigator.of(context).pop(LocalCameraSetupResult.saved);
+  }
+
+  Future<void> _openCamera(DetectedCamera device) async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (page) => AutomaticLocalCameraConnection(
+          discovery: _discovery,
+          device: device,
+          onSave: widget.onSave,
+          onSaved: () => Navigator.of(page).pop(true),
+        ),
+      ),
+    );
+    if (saved == true) _done();
+  }
+
+  Future<void> _pair(List<DetectedCamera> known) async {
+    final outcome = await Navigator.of(context).push<CameraPairingResult>(
+      MaterialPageRoute<CameraPairingResult>(
+        builder: (_) => CameraPairingScreen(
+          startImmediately: true,
+          setupWithLabel: (_) => _ReolinkSetupScreen(onSave: widget.onSave),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (outcome == CameraPairingResult.saved) {
+      _done();
+    } else if (outcome == CameraPairingResult.findOnHomeNetwork) {
+      setState(() {
+        _previousAddresses = known.map((device) => device.ipAddress!).toSet();
+        _afterPairing = true;
+        _results = _discover();
+      });
+    }
+  }
+
+  Future<void> _manual() async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => _ManualLocalCameraScreen(onSave: widget.onSave),
+      ),
+    );
+    if (saved == true) _done();
   }
 
   @override
   Widget build(BuildContext context) {
-    final saved = savedSource;
-    if (saved != null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Przenieś kamerę')),
-        body: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Text(saved.name, style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 8),
-            Text('Zapisany podgląd: ${saved.uri.host}'),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: const Icon(Icons.wifi_find),
-              title: const Text('Wykryj ONVIF tej kamery'),
-              subtitle: const Text(
-                'Zachowaj obraz i umożliw przypisanie kamery do Bridge.',
-              ),
-              onTap: () => _open(
-                context,
-                _LocalOnvifScreen(onSave: onSave, savedSource: saved),
-              ),
-            ),
-            ListTile(
-              leading: const Icon(Icons.videocam_outlined),
-              title: const Text('Przenieś sam podgląd RTSP'),
-              subtitle: const Text('Obraz bez monitoringu przez Bridge.'),
-              onTap: () => _open(
-                context,
-                LocalCameraPreview(
-                  source: saved,
-                  refreshSource: true,
-                  onSave: (source, location) => onSave(
-                    LocalCameraRegistration.fromPreview(
-                      source: source,
-                      location: location,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+    if (widget.savedSource case final source?) {
+      return AutomaticLocalCameraConnection(
+        discovery: _discovery,
+        savedSource: source,
+        onSave: widget.onSave,
+        onSaved: _done,
       );
     }
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Skonfiguruj kamerę')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text('Nowa kamera', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.bluetooth),
-              title: const Text('Reolink przez Bluetooth'),
-              subtitle: const Text(
-                'E1 Pro / E330 w wersji z Bluetooth · pilotaż',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => _open(context, _ReolinkSetupScreen(onSave: onSave)),
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.wifi_protected_setup),
-              title: const Text('Hotspot kamery (ONVIF lub DVRIP)'),
-              subtitle: const Text(
-                'Połącz kamerę z domowym Wi-Fi i sprawdź obraz',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () async {
-                final discover = await Navigator.of(context).push<bool>(
-                  MaterialPageRoute<bool>(
-                    builder: (_) => const CameraPairingScreen(),
+      appBar: AppBar(title: const Text('Dodaj kamerę')),
+      body: SafeArea(
+        child: FutureBuilder<List<DetectedCamera>>(
+          future: _results,
+          builder: (context, snapshot) {
+            final searching =
+                snapshot.connectionState == ConnectionState.waiting;
+            final cameras = snapshot.data ?? const [];
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                if (searching) ...[
+                  const LinearProgressIndicator(),
+                  const SizedBox(height: 12),
+                  Text(
+                    _afterPairing
+                        ? 'Szukam kamery w domowym Wi‑Fi…'
+                        : 'Szukam kamer w Twojej sieci…',
                   ),
-                );
-                if (discover == true && context.mounted) {
-                  await _open(context, _LocalOnvifScreen(onSave: onSave));
-                }
-              },
-            ),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Kamera już w domowej sieci',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.wifi_find),
-              title: const Text('Wykryj kamerę ONVIF'),
-              subtitle: const Text('Znajdź kamerę połączoną z tą samą siecią'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => _open(context, _LocalOnvifScreen(onSave: onSave)),
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.link),
-              title: const Text('Wpisz adres RTSP'),
-              subtitle: const Text(
-                'Sprawdź obraz i dodaj kamerę do swojej listy',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () =>
-                  _open(context, _ManualLocalCameraScreen(onSave: onSave)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LocalOnvifScreen extends StatefulWidget {
-  const _LocalOnvifScreen({required this.onSave, this.savedSource});
-
-  final SaveLocalCamera onSave;
-  final LocalCameraSource? savedSource;
-
-  @override
-  State<_LocalOnvifScreen> createState() => _LocalOnvifScreenState();
-}
-
-class _LocalOnvifScreenState extends State<_LocalOnvifScreen> {
-  late Future<List<DetectedCamera>> _cameras = _discover();
-
-  Future<List<DetectedCamera>> _discover() async {
-    final savedHost = widget.savedSource?.uri.host;
-    final devices = await CameraDiscoveryService().discoverCameras();
-    return devices
-        .where((camera) {
-          final address = camera.ipAddress;
-          return address != null &&
-              (savedHost == null || address == savedHost) &&
-              parseLocalRtsp('rtsp://$address/') != null &&
-              camera.connectionType == CameraConnectionType.onvif;
-        })
-        .toList(growable: false);
-  }
-
-  Future<void> _open(DetectedCamera camera) async {
-    final saved = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (_) => _LocalOnvifConnection(
-          onSave: widget.onSave,
-          camera: camera,
-          savedSource: widget.savedSource,
-        ),
-      ),
-    );
-    if (saved == true && mounted) Navigator.of(context).pop(true);
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Kamery ONVIF w sieci')),
-    body: FutureBuilder<List<DetectedCamera>>(
-      future: _cameras,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final cameras = snapshot.data ?? [];
-        final saved = widget.savedSource;
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            if (cameras.isEmpty)
-              const Text(
-                'Nie znaleziono kamery ONVIF. Sprawdź Wi-Fi i włącz ONVIF w kamerze.',
-              ),
-            for (final camera in cameras)
-              ListTile(
-                leading: const Icon(Icons.videocam_outlined),
-                title: Text(camera.displayName),
-                subtitle: Text(camera.ipAddress!),
-                onTap: () => _open(camera),
-              ),
-            OutlinedButton(
-              onPressed: () => setState(() => _cameras = _discover()),
-              child: const Text('Szukaj ponownie'),
-            ),
-            if (saved != null)
-              TextButton(
-                onPressed: () => _open(
-                  DetectedCamera(
-                    deviceId: 'onvif-${saved.uri.host}',
-                    displayName: saved.name,
-                    brand: 'Nieznany producent',
-                    model: 'Nieznany model',
-                    ipAddress: saved.uri.host,
-                    connectionType: CameraConnectionType.onvif,
+                ] else if (cameras.isEmpty)
+                  Text(
+                    _afterPairing
+                        ? 'Kamera może jeszcze łączyć się z Wi‑Fi. Odczekaj chwilę i spróbuj ponownie.'
+                        : 'Nie znaleziono kamer. Sprawdź, czy kamera jest włączona.',
+                  )
+                else ...[
+                  const Text(
+                    'Wybierz swoją kamerę. SafeHood sprawdzi, jak się z nią połączyć.',
                   ),
+                  const SizedBox(height: 12),
+                  for (final camera in cameras)
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.videocam_outlined),
+                        title: Text(localCameraDisplayName(camera)),
+                        subtitle: Text(
+                          _afterPairing &&
+                                  !_previousAddresses.contains(camera.ipAddress)
+                              ? 'Nowa w sieci · ${camera.ipAddress}'
+                              : camera.ipAddress!,
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => _openCamera(camera),
+                      ),
+                    ),
+                ],
+                const SizedBox(height: 12),
+                if (!searching)
+                  OutlinedButton(
+                    onPressed: () => setState(() => _results = _discover()),
+                    child: const Text('Szukaj ponownie'),
+                  ),
+                FilledButton.tonalIcon(
+                  onPressed: searching ? null : () => _pair(cameras),
+                  icon: const Icon(Icons.wifi),
+                  label: const Text('Połącz nową kamerę z Wi‑Fi'),
                 ),
-                child: const Text('Podaj adres ONVIF tej kamery'),
-              ),
-          ],
-        );
-      },
-    ),
-  );
-}
-
-class _LocalOnvifConnection extends StatefulWidget {
-  const _LocalOnvifConnection({
-    required this.onSave,
-    required this.camera,
-    this.savedSource,
-  });
-
-  final SaveLocalCamera onSave;
-  final DetectedCamera camera;
-  final LocalCameraSource? savedSource;
-
-  @override
-  State<_LocalOnvifConnection> createState() => _LocalOnvifConnectionState();
-}
-
-class _LocalOnvifConnectionState extends State<_LocalOnvifConnection> {
-  final _user = TextEditingController();
-  final _password = TextEditingController();
-  late final _endpoint = TextEditingController(text: _defaultEndpoint());
-  bool _busy = false;
-  String? _problem;
-
-  String _defaultEndpoint() {
-    final camera = widget.camera;
-    final advertised = parseManualOnvifUri(camera.onvifServiceUrl ?? '');
-    if (advertised != null &&
-        advertised.scheme == 'http' &&
-        advertised.host == camera.ipAddress &&
-        advertised.userInfo.isEmpty) {
-      return advertised.toString();
-    }
-    final port = [
-      8899,
-      80,
-      8080,
-      8000,
-    ].firstWhere(camera.openPorts.contains, orElse: () => 80);
-    return 'http://${camera.ipAddress}:$port/onvif/device_service';
-  }
-
-  @override
-  void dispose() {
-    _user.dispose();
-    _password.dispose();
-    _endpoint.dispose();
-    super.dispose();
-  }
-
-  Future<void> _preview() async {
-    if (_busy) return;
-    final endpoint = parseManualOnvifUri(_endpoint.text);
-    if (endpoint == null ||
-        endpoint.scheme != 'http' ||
-        endpoint.host != widget.camera.ipAddress) {
-      setState(
-        () => _problem = 'Wpisz adres HTTP usługi ONVIF dla tej kamery.',
-      );
-      return;
-    }
-    FocusScope.of(context).unfocus();
-    setState(() {
-      _busy = true;
-      _problem = null;
-    });
-    try {
-      final user = _user.text.trim();
-      final password = _password.text;
-      final uri = await const LocalCameraPlayer()
-          .resolveOnvif(endpoint, user, password)
-          .timeout(const Duration(seconds: 24));
-      if (!mounted) return;
-      final saved = await Navigator.of(context).push<bool>(
-        MaterialPageRoute<bool>(
-          builder: (_) => LocalCameraPreview(
-            source:
-                widget.savedSource ??
-                LocalCameraSource(name: widget.camera.displayName, uri: uri),
-            onSave: (source, location) => widget.onSave(
-              LocalCameraRegistration.fromPreview(
-                source: source,
-                location: location,
-                detected: widget.camera,
-                onvifEndpoint: endpoint,
-                login: user.isEmpty ? null : CameraLogin(user, password),
-              ),
-            ),
-          ),
-        ),
-      );
-      if (saved == true && mounted) Navigator.of(context).pop(true);
-    } on PlatformException catch (error) {
-      if (mounted) {
-        setState(
-          () => _problem = switch (error.code) {
-            'cameraAuth' => 'Sprawdź lokalny login i hasło ONVIF kamery.',
-            'notLocalNetwork' => 'Połącz telefon z Wi-Fi kamery.',
-            _ =>
-              'Kamera nie podała adresu RTSP. Sprawdź ustawienia ONVIF lub wpisz adres RTSP ręcznie.',
+                const SizedBox(height: 8),
+                if (!searching)
+                  ExpansionTile(
+                    title: const Text('Opcje zaawansowane'),
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.link),
+                        title: const Text('Mam adres strumienia'),
+                        onTap: _manual,
+                      ),
+                      if (widget.onAdvanced case final open?)
+                        ListTile(
+                          leading: const Icon(Icons.hub_outlined),
+                          title: const Text(
+                            'Integracja producenta lub konfiguracja ręczna',
+                          ),
+                          onTap: () => open(context),
+                        ),
+                    ],
+                  ),
+              ],
+            );
           },
-        );
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _problem = 'Nie udało się znaleźć obrazu z tej kamery.');
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+        ),
+      ),
+    );
   }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(widget.camera.displayName)),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const Text(
-          'Jeśli kamera wymaga logowania, wpisz dane jej lokalnego konta ONVIF.',
-        ),
-        TextField(
-          controller: _user,
-          enabled: !_busy,
-          autocorrect: false,
-          decoration: const InputDecoration(labelText: 'Użytkownik ONVIF'),
-        ),
-        TextField(
-          controller: _password,
-          enabled: !_busy,
-          obscureText: true,
-          autocorrect: false,
-          enableSuggestions: false,
-          decoration: const InputDecoration(labelText: 'Hasło ONVIF'),
-        ),
-        const SizedBox(height: 8),
-        ExpansionTile(
-          title: const Text('Adres usługi ONVIF'),
-          initiallyExpanded:
-              widget.camera.onvifServiceUrl == null &&
-              widget.savedSource != null,
-          children: [
-            TextField(
-              controller: _endpoint,
-              enabled: !_busy,
-              autocorrect: false,
-              enableSuggestions: false,
-              decoration: const InputDecoration(labelText: 'Adres HTTP kamery'),
-            ),
-          ],
-        ),
-        if (_problem case final problem?) Text(problem),
-        if (_busy) const LinearProgressIndicator(),
-        const SizedBox(height: 12),
-        FilledButton(
-          onPressed: _busy ? null : _preview,
-          child: const Text('Sprawdź obraz'),
-        ),
-      ],
-    ),
-  );
 }
 
 class _ManualLocalCameraScreen extends StatefulWidget {
@@ -543,11 +349,10 @@ class _ReolinkSetupScreenState extends State<_ReolinkSetupScreen> {
     'scanFailed' =>
       'Android nie uruchomił wyszukiwania Bluetooth. Spróbuj za chwilę.',
     'notFoundBle' =>
-      'Nie znaleziono tego UID przez Bluetooth. Sprawdź etykietę i tryb parowania kamery.',
+      'Nie znaleziono kamery z tym kodem. Sprawdź etykietę i tryb konfiguracji kamery.',
     'ambiguous' =>
-      'Więcej niż jedno urządzenie zgłasza ten UID. Wyłącz pozostałe kamery i ponów próbę.',
-    'selectionExpired' =>
-      'Wybór kamery wygasł. Wróć do wyszukiwania przez Bluetooth.',
+      'Więcej niż jedna kamera zgłasza ten kod. Wyłącz pozostałe kamery i spróbuj ponownie.',
+    'selectionExpired' => 'Wybór kamery wygasł. Wyszukaj ją jeszcze raz.',
     'wifiRejected' =>
       'Kamera nie przyjęła ustawień Wi-Fi. Sprawdź nazwę sieci, hasło i pasmo 2,4 GHz.',
     'notLocalNetwork' => 'Połącz telefon z domowym Wi-Fi i spróbuj ponownie.',
@@ -563,15 +368,14 @@ class _ReolinkSetupScreenState extends State<_ReolinkSetupScreen> {
       'Kamera nie potwierdziła włączenia RTSP. Spróbuj ponownie z jej aktualnym hasłem.',
     'httpRestoreFailed' =>
       'Nie udało się przywrócić poprzedniego stanu HTTP w kamerze. Sprawdź ustawienia portów przed dokończeniem konfiguracji.',
-    'differentCamera' =>
-      'Identyfikator w domowej sieci nie zgadza się z UID z etykiety.',
+    'differentCamera' => 'Znalezione urządzenie nie pasuje do kodu z etykiety.',
     _ =>
       'Nie udało się połączyć z kamerą. Sprawdź, czy jest włączona i blisko telefonu.',
   };
 
   Future<void> _select() async {
     if (!isReolinkUid(_uid.text)) {
-      setState(() => _problem = 'Wpisz 16 znaków UID z etykiety kamery.');
+      setState(() => _problem = 'Wpisz 16-znakowy kod z etykiety kamery.');
       return;
     }
     await _run(() async {
@@ -641,12 +445,12 @@ class _ReolinkSetupScreenState extends State<_ReolinkSetupScreen> {
   @override
   Widget build(BuildContext context) {
     final action = switch (_step) {
-      _ReolinkStep.identify => ('Znajdź kamerę po UID', _select),
+      _ReolinkStep.identify => ('Znajdź kamerę', _select),
       _ReolinkStep.wifi => ('Połącz kamerę z Wi-Fi', _connectWifi),
       _ReolinkStep.live => ('Znajdź kamerę i pokaż obraz', _openLive),
     };
     return Scaffold(
-      appBar: AppBar(title: const Text('Konfiguracja Reolink')),
+      appBar: AppBar(title: const Text('Znajdź kamerę z kodu')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -668,7 +472,7 @@ class _ReolinkSetupScreenState extends State<_ReolinkSetupScreen> {
               textCapitalization: TextCapitalization.characters,
               autocorrect: false,
               onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(labelText: 'UID z etykiety'),
+              decoration: const InputDecoration(labelText: 'Kod z etykiety'),
             ),
             TextButton(
               onPressed: _busy || !isReolinkUid(_uid.text)
@@ -684,7 +488,7 @@ class _ReolinkSetupScreenState extends State<_ReolinkSetupScreen> {
           if (_step == _ReolinkStep.wifi) ...[
             const Text(
               'Kamera została znaleziona. Wpisz dokładną nazwę domowego Wi-Fi '
-              '(dla tego pilotażu użyj sieci 2,4 GHz).',
+              '(użyj sieci 2,4 GHz, jeśli kamera jej wymaga).',
             ),
             TextField(
               controller: _ssid,

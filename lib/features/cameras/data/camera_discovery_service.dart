@@ -9,6 +9,7 @@ import 'package:flutter_local_device_discovery/flutter_local_device_discovery.da
 import 'package:xml/xml.dart';
 
 import '../domain/camera.dart';
+import 'local_camera_store.dart';
 import 'onvif_soap_client.dart';
 
 enum CameraDiscoveryStage {
@@ -47,6 +48,7 @@ class DetectedCamera {
   final Set<String> discoverySources;
   final int confidence;
   final Set<int> openPorts;
+  final Set<int> rtspPorts;
 
   const DetectedCamera({
     required this.deviceId,
@@ -60,6 +62,7 @@ class DetectedCamera {
     this.discoverySources = const {},
     this.confidence = 0,
     this.openPorts = const {},
+    this.rtspPorts = const {},
   });
 
   DetectedCamera copyWith({
@@ -74,6 +77,7 @@ class DetectedCamera {
     Set<String>? discoverySources,
     int? confidence,
     Set<int>? openPorts,
+    Set<int>? rtspPorts,
   }) {
     return DetectedCamera(
       deviceId: deviceId ?? this.deviceId,
@@ -87,6 +91,7 @@ class DetectedCamera {
       discoverySources: discoverySources ?? this.discoverySources,
       confidence: confidence ?? this.confidence,
       openPorts: openPorts ?? this.openPorts,
+      rtspPorts: rtspPorts ?? this.rtspPorts,
     );
   }
 }
@@ -109,6 +114,14 @@ class CameraDiscoveryService {
       DirectSsdpDiscoveryStrategy(),
       ActiveLanCameraProbeStrategy(),
     ];
+  }
+
+  /// Probe only the address of a camera that was already saved on this phone.
+  Future<DetectedCamera?> findLocalCamera(String address) async {
+    final local = parseLocalRtsp('rtsp://$address/');
+    if (local == null || local.host != address || local.hasPort) return null;
+    final found = await ActiveLanCameraProbeStrategy()._scanHost(address);
+    return found == null ? null : VendorCameraRecognizer.enrich(found);
   }
 
   Future<List<DetectedCamera>> discoverCameras({
@@ -350,9 +363,10 @@ class StandardNetworkDiscoveryStrategy implements CameraDiscoveryStrategy {
         LocalDiscoveryProtocol.wsDiscovery,
       );
 
-      final rtsp = device.services.any(
+      final streamServices = device.services.where(
         (service) => service.serviceType.toLowerCase().contains('rtsp'),
       );
+      final rtsp = streamServices.isNotEmpty;
 
       final classifiedAsCamera = device.type == LocalDeviceType.camera;
 
@@ -404,6 +418,12 @@ class StandardNetworkDiscoveryStrategy implements CameraDiscoveryStrategy {
             if (rtsp) 'rtsp-service',
           },
           confidence: min(100, confidence),
+          rtspPorts: {
+            for (final service in streamServices)
+              if (service.port case final int port
+                  when port > 0 && port <= 65535)
+                port,
+          },
         ),
       );
     }
@@ -763,7 +783,7 @@ Map<String, String> _parseSsdpHeaders(String response) {
 class ActiveLanCameraProbeStrategy implements CameraDiscoveryStrategy {
   static const _rtspPorts = [554, 8554];
 
-  static const _webPorts = [80, 443, 8080, 8443, 8000, 8899, 9000];
+  static const _webPorts = [80, 443, 8080, 8443, 8000, 8899, 9000, 2020];
 
   @override
   String get name => 'ACTIVE_LAN_PROBE';
@@ -850,6 +870,7 @@ class ActiveLanCameraProbeStrategy implements CameraDiscoveryStrategy {
         discoverySources: const {'reachability', 'rtsp-handshake'},
         confidence: 95,
         openPorts: {port},
+        rtspPorts: {port},
       );
     }
     return fallback;
@@ -1114,6 +1135,7 @@ class CameraDiscoveryResultMerger {
       discoverySources: sources,
       confidence: min(confidence, 100),
       openPorts: ports,
+      rtspPorts: {...a.rtspPorts, ...b.rtspPorts},
     );
   }
 
