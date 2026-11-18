@@ -16,6 +16,8 @@ For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
 
+Kierunek produktu i kolejność prac są w [planie SafeHood](docs/safehood_roadmap.md).
+
 ## Start w VS Code
 
 Jeśli masz już lokalne zadanie `SafeHood - Firebase` w `.vscode/tasks.json`,

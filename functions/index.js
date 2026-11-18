@@ -496,6 +496,7 @@ async function getNearbyContext(uid) {
           profile.firstName ||
           "Użytkownik",
       distanceMeters,
+      notificationsEnabled: profile.notificationsEnabled !== false,
     });
   }
 
@@ -699,6 +700,10 @@ async function sendIncidentNotifications({
 
   for (const nearbyUser of
     nearbyUsers) {
+    if (nearbyUser.notificationsEnabled === false) {
+      continue;
+    }
+
     const tokens =
         await getUserFcmTokens(
             nearbyUser.id,
