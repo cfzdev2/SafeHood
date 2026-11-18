@@ -536,9 +536,11 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   }
 
   String _statusLabel(CameraRuntimeState state) {
-    if (state.isConnecting) {
+    if (_liveLoading || state.isConnecting) {
       return 'Łączenie...';
     }
+
+    if (_liveError != null) return 'Brak podglądu';
 
     if (!state.isOnline) {
       return 'Offline';
@@ -552,9 +554,11 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   }
 
   Color _statusColor(CameraRuntimeState state) {
-    if (state.isConnecting) {
+    if (_liveLoading || state.isConnecting) {
       return Colors.orange;
     }
+
+    if (_liveError != null) return Colors.red;
 
     if (!state.isOnline) {
       return Colors.red;

@@ -14,18 +14,22 @@ import '../domain/camera.dart';
 import 'add_camera_screen.dart';
 import 'camera_details_screen.dart';
 import 'local_camera_setup_screen.dart';
+import 'widgets/camera_availability_builder.dart';
 import 'widgets/camera_card.dart';
 
 typedef _LegacyCamera = ({LocalCameraStore store, SavedLocalCamera camera});
 
 class CamerasScreen extends StatefulWidget {
-  const CamerasScreen({super.key});
+  const CamerasScreen({super.key, this.isVisible = true});
+
+  final bool isVisible;
 
   @override
   State<CamerasScreen> createState() => _CamerasScreenState();
 }
 
-class _CamerasScreenState extends State<CamerasScreen> {
+class _CamerasScreenState extends State<CamerasScreen>
+    with WidgetsBindingObserver {
   late final CameraService _cameraService;
 
   late final BridgeService _bridgeService;
@@ -36,10 +40,14 @@ class _CamerasScreenState extends State<CamerasScreen> {
   Future<List<_LegacyCamera>>? _legacyCameras;
 
   Timer? _statusRefreshTimer;
+  late bool _foreground;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
 
     _cameraService = CameraService();
 
@@ -65,7 +73,17 @@ class _CamerasScreenState extends State<CamerasScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final foreground = state == AppLifecycleState.resumed;
+    if (foreground == _foreground) return;
+    setState(() {
+      _foreground = foreground;
+    });
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _statusRefreshTimer?.cancel();
 
     super.dispose();
@@ -224,6 +242,10 @@ class _CamerasScreenState extends State<CamerasScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final checkAvailability =
+        widget.isVisible &&
+        _foreground &&
+        (ModalRoute.isCurrentOf(context) ?? true);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Moje kamery'),
@@ -267,7 +289,7 @@ class _CamerasScreenState extends State<CamerasScreen> {
                     );
                   },
                 ),
-              Expanded(child: _buildCameraList(bridges)),
+              Expanded(child: _buildCameraList(bridges, checkAvailability)),
             ],
           );
         },
@@ -283,7 +305,7 @@ class _CamerasScreenState extends State<CamerasScreen> {
     );
   }
 
-  Widget _buildCameraList(List<BridgeStatus> bridges) {
+  Widget _buildCameraList(List<BridgeStatus> bridges, bool checkAvailability) {
     return StreamBuilder<List<Camera>>(
       stream: _camerasStream,
       builder: (context, snapshot) {
@@ -321,12 +343,18 @@ class _CamerasScreenState extends State<CamerasScreen> {
           itemBuilder: (context, index) {
             final camera = cameras[index];
 
-            return CameraCard(
+            return CameraAvailabilityBuilder(
+              key: ValueKey(camera.id),
               camera: camera,
-              status: _cameraStatus(camera, bridges),
-              onTap: () {
-                _openCamera(context, camera);
-              },
+              enabled: checkAvailability,
+              builder: (context, availability) => CameraCard(
+                camera: camera,
+                availability: availability,
+                status: _cameraStatus(camera, bridges, availability),
+                onTap: () {
+                  _openCamera(context, camera);
+                },
+              ),
             );
           },
         );
@@ -334,7 +362,11 @@ class _CamerasScreenState extends State<CamerasScreen> {
     );
   }
 
-  CameraCardStatus _cameraStatus(Camera camera, List<BridgeStatus> bridges) {
+  CameraCardStatus _cameraStatus(
+    Camera camera,
+    List<BridgeStatus> bridges,
+    CameraAvailability availability,
+  ) {
     if (!camera.motionDetectionEnabled) {
       return CameraCardStatus.monitoringDisabled;
     }
@@ -353,9 +385,11 @@ class _CamerasScreenState extends State<CamerasScreen> {
     }
 
     if (camera.monitoringMode == CameraMonitoringMode.app) {
-      return camera.isOnline
-          ? CameraCardStatus.monitoringActive
-          : CameraCardStatus.monitoringUnavailable;
+      return switch (availability) {
+        CameraAvailability.online => CameraCardStatus.monitoringActive,
+        CameraAvailability.checking => CameraCardStatus.monitoringConnecting,
+        _ => CameraCardStatus.monitoringUnavailable,
+      };
     }
 
     final bridgeId = camera.bridgeId;

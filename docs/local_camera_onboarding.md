@@ -28,6 +28,10 @@ Potwierdzony ONVIF jest rejestrowany z adresem usługi i przypisywany do
 aktywnego Bridge konta. AI, zdarzenia, nagrania i powiadomienia wymagają, żeby
 Bridge mógł sam połączyć się z kamerą w sieci. Ręczny RTSP umożliwia podgląd.
 
+Lista **Moje kamery** odświeża dostępność lokalnych kamer z telefonu, gdy
+jest widoczna. **Kamera offline** oznacza brak odpowiedzi pod zapisanym
+adresem. Status monitoringu opisuje oddzielnie połączenie z Bridge.
+
 Na Reolinku aplikacja sprawdza UID ponownie po lokalnym logowaniu. Przy
 otwieraniu zapisanej kamery odszukuje ją po UID nawet po zmianie IP.
 Operacja fabrycznej aktywacji wymaga podania oddzielnego hasła kamery.

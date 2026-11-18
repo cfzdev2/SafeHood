@@ -4,6 +4,8 @@ import 'camera_ai_zone.dart';
 
 enum CameraConnectionType { mock, rtsp, onvif, manufacturerCloud, unknown }
 
+enum CameraAvailability { checking, online, offline, unknown }
+
 enum CameraCloudProvider { safeArk, unknown }
 
 enum CameraMonitoringMode { app, bridge, cloud }
@@ -31,9 +33,8 @@ class Camera {
   final Set<int> openPorts;
   final Set<String> discoverySources;
 
-  // Dostępność urządzenia/Media/LIVE.
-  // Bridge Events nie powinien
-  // zmieniać tego pola.
+  // Ostatni zapisany wynik podglądu. Bieżąca dostępność lokalnej kamery
+  // i stan monitoringu Bridge są sprawdzane niezależnie.
   final bool isOnline;
   final DateTime? availabilityCheckedAt;
 
@@ -51,6 +52,10 @@ class Camera {
   final bool hasSdCard;
 
   final CameraConnectionType connectionType;
+
+  bool get usesLocalConnection =>
+      connectionType == CameraConnectionType.onvif ||
+      connectionType == CameraConnectionType.rtsp;
 
   // Dostawca chmury producenta.
   // Dla DEKCO L5P/DL5P będzie to SafeArk.

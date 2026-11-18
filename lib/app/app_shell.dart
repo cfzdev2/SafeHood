@@ -454,7 +454,7 @@ class _AppShellState extends State<AppShell> {
         animation: appState,
         builder: (context, _) {
           final pages = [
-            CamerasScreen(),
+            CamerasScreen(isVisible: selectedIndex == 0),
             IncidentsScreen(appState: appState),
             CommunityScreen(appState: appState),
             ProfileScreen(appState: appState),

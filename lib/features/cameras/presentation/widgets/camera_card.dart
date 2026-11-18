@@ -12,10 +12,17 @@ enum CameraCardStatus {
 
 class CameraCard extends StatelessWidget {
   final Camera camera;
+  final CameraAvailability availability;
   final CameraCardStatus? status;
   final VoidCallback? onTap;
 
-  const CameraCard({super.key, required this.camera, this.status, this.onTap});
+  const CameraCard({
+    super.key,
+    required this.camera,
+    required this.availability,
+    this.status,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -29,9 +36,15 @@ class CameraCard extends StatelessWidget {
 
     final monitoringColor = _statusColor(context, effectiveStatus);
 
-    final availabilityColor = camera.isOnline
-        ? Colors.green
-        : theme.colorScheme.error;
+    final (availabilityLabel, availabilityColor) = switch (availability) {
+      CameraAvailability.checking => ('Sprawdzanie kamery…', Colors.blue),
+      CameraAvailability.online => ('Kamera online', Colors.green),
+      CameraAvailability.offline => ('Kamera offline', theme.colorScheme.error),
+      CameraAvailability.unknown => (
+        'Brak statusu kamery',
+        theme.colorScheme.outline,
+      ),
+    };
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -83,9 +96,7 @@ class CameraCard extends StatelessWidget {
                       children: [
                         _buildStatusChip(
                           context,
-                          label: camera.isOnline
-                              ? 'Kamera online'
-                              : 'Kamera offline',
+                          label: availabilityLabel,
                           color: availabilityColor,
                         ),
                         _buildStatusChip(

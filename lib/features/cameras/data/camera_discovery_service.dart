@@ -11,6 +11,7 @@ import 'package:xml/xml.dart';
 import '../domain/camera.dart';
 import 'local_camera_store.dart';
 import 'onvif_soap_client.dart';
+import 'rtsp_probe.dart';
 
 enum CameraDiscoveryStage { preparing, standardNetwork, activeLan, finished }
 
@@ -901,38 +902,11 @@ class ActiveLanCameraProbeStrategy implements CameraDiscoveryStrategy {
     }
   }
 
-  Future<bool> _confirmRtsp(String ip, int port) async {
-    Socket? socket;
-
-    try {
-      socket = await Socket.connect(
-        ip,
-        port,
-        timeout: const Duration(milliseconds: 350),
-      );
-
-      socket.write(
-        'OPTIONS rtsp://$ip:$port/ RTSP/1.0\r\n'
-        'CSeq: 1\r\n'
-        'User-Agent: SafeHood\r\n'
-        '\r\n',
-      );
-
-      await socket.flush();
-
-      final data = await socket.first.timeout(
-        const Duration(milliseconds: 500),
-      );
-
-      final response = utf8.decode(data, allowMalformed: true);
-
-      return response.toUpperCase().contains('RTSP/1.0');
-    } catch (_) {
-      return false;
-    } finally {
-      socket?.destroy();
-    }
-  }
+  Future<bool> _confirmRtsp(String ip, int port) => probeRtsp(
+    Uri(scheme: 'rtsp', host: ip, port: port),
+    connectTimeout: const Duration(milliseconds: 350),
+    replyTimeout: const Duration(milliseconds: 500),
+  );
 
   Future<DetectedCamera?> _fingerprintWebDevice(String ip, int port) async {
     final secure = port == 443 || port == 8443;
