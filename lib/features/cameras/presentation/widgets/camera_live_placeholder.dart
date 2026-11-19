@@ -18,12 +18,12 @@ class CameraLivePlaceholder extends StatelessWidget {
           children: [
             CircularProgressIndicator(color: color),
             const SizedBox(height: 12),
-            Text(
-              session.phase == CameraLivePhase.reconnecting
-                  ? 'Wznawianie podglądu…'
-                  : 'Łączenie z kamerą…',
-              style: TextStyle(color: color),
-            ),
+            Text(switch (session.phase) {
+              CameraLivePhase.reconnecting => 'Wznawianie podglądu…',
+              CameraLivePhase.adjustingQuality =>
+                'Dopasowywanie jakości obrazu…',
+              _ => 'Łączenie z kamerą…',
+            }, style: TextStyle(color: color)),
           ],
         ),
       );

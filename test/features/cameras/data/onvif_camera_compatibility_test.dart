@@ -5,10 +5,12 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:safehood/features/cameras/data/camera_live_playback.dart';
 import 'package:safehood/features/cameras/data/local_camera_connection.dart';
+import 'package:safehood/features/cameras/data/onvif_camera_provider.dart';
 import 'package:safehood/features/cameras/data/onvif_media_resolver.dart';
 import 'package:safehood/features/cameras/data/onvif_soap_client.dart';
 import 'package:safehood/features/cameras/data/onvif_wifi_setup.dart';
 import 'package:safehood/features/cameras/domain/camera.dart';
+import 'package:safehood/features/cameras/domain/camera_provider.dart';
 import 'package:xml/xml.dart';
 
 const _camera = Camera(
@@ -51,6 +53,14 @@ Future<void> _reply(HttpRequest request, String body, {int code = 200}) async {
 
 XmlElement _operation(String text) =>
     onvifElements(XmlDocument.parse(text), 'Body').single.childElements.single;
+
+class _ConnectionStore extends Fake implements LocalCameraConnectionStore {
+  _ConnectionStore(this.connection);
+  final LocalCameraConnection connection;
+
+  @override
+  Future<LocalCameraConnection> read(String cameraId) async => connection;
+}
 
 void main() {
   test('retains the detected ONVIF address and tries common alternatives', () {
@@ -249,6 +259,76 @@ void main() {
     expect(result.single.uri.path, '/live');
   });
 
+  test(
+    'a saved ONVIF camera discovers a distinct smaller stream only on demand',
+    () async {
+      final requests = <String>[];
+      final attemptedProfiles = <String>[];
+      final endpoint = await _serve((request) async {
+        final operation = _operation(await utf8.decoder.bind(request).join());
+        final name = operation.name.local;
+        requests.add(name);
+        switch (name) {
+          case 'GetSystemDateAndTime':
+            await _reply(request, '<GetSystemDateAndTimeResponse/>');
+          case 'GetCapabilities':
+            await _reply(
+              request,
+              '<GetCapabilitiesResponse><Capabilities><Media>'
+              '<XAddr>/onvif/media_service</XAddr>'
+              '</Media></Capabilities></GetCapabilitiesResponse>',
+            );
+          case 'GetProfiles':
+            await _reply(
+              request,
+              '<GetProfilesResponse>'
+              '<Profiles token="main"><Encoding>H264</Encoding>'
+              '<Resolution><Width>1280</Width><Height>720</Height></Resolution></Profiles>'
+              '<Profiles token="alias"><Encoding>H264</Encoding>'
+              '<Resolution><Width>960</Width><Height>540</Height></Resolution></Profiles>'
+              '<Profiles token="small"><Encoding>H264</Encoding>'
+              '<Resolution><Width>640</Width><Height>360</Height></Resolution></Profiles>'
+              '<Profiles token="unknown"><Encoding>H264</Encoding></Profiles>'
+              '</GetProfilesResponse>',
+            );
+          case 'GetStreamUri':
+            final profile = onvifText(operation, 'ProfileToken')!;
+            attemptedProfiles.add(profile);
+            final path = profile == 'small' ? 'sub' : 'main';
+            await _reply(
+              request,
+              '<GetStreamUriResponse><Uri>rtsp://0.0.0.0/$path</Uri></GetStreamUriResponse>',
+            );
+          default:
+            await _reply(request, '<Fault/>', code: 400);
+        }
+      });
+      final original = Uri.parse('rtsp://test:secret@127.0.0.1:554/main');
+      final provider = OnvifCameraProvider(
+        camera: _camera.copyWith(
+          ipAddress: endpoint.host,
+          onvifServiceUrl: endpoint.toString(),
+        ),
+        connectionStore: _ConnectionStore(
+          LocalCameraConnection(rtspUri: original, rtspVerified: true),
+        ),
+      );
+      addTearDown(provider.dispose);
+      await provider.connect();
+      expect(requests, isEmpty);
+      expect(provider.liveStreamUri, original);
+
+      final profile = await provider.findLiveQualityProfile(
+        maxPixels: 1280 * 720 - 1,
+        excluding: original,
+      );
+      expect(attemptedProfiles, ['alias', 'small']);
+      expect(profile?.uri, Uri.parse('rtsp://127.0.0.1/sub'));
+      expect(profile?.pixels, 640 * 360);
+      expect(provider.liveStreamUri, original);
+    },
+  );
+
   test('Wi-Fi configuration touches only the proven wireless interface', () async {
     final operations = <XmlElement>[];
     final uri = await _serve((request) async {
@@ -371,4 +451,29 @@ void main() {
       everyElement(main),
     );
   });
+
+  test(
+    'quality switch tries both transports before falling back to the saved address',
+    () {
+      final saved = Uri.parse('rtsp://192.168.1.6/saved');
+      final secondary = Uri.parse('rtsp://192.168.1.6/sub');
+      final attempts = cameraPlaybackAttempts(
+        [saved, secondary],
+        android: true,
+        preferred: CameraPlaybackAttempt(saved, CameraRtspTransport.tcp),
+        qualityProfile: CameraLiveQualityProfile(secondary, 640 * 360),
+      );
+      expect(
+        attempts.map(
+          (attempt) => (attempt.uri, attempt.transport, attempt.qualityPixels),
+        ),
+        [
+          (secondary, CameraRtspTransport.tcp, 640 * 360),
+          (secondary, CameraRtspTransport.platformDefault, 640 * 360),
+          (saved, CameraRtspTransport.tcp, null),
+          (saved, CameraRtspTransport.platformDefault, null),
+        ],
+      );
+    },
+  );
 }

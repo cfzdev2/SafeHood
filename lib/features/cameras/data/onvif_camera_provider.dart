@@ -12,10 +12,12 @@ class OnvifCameraProvider
     implements
         CameraProvider,
         CameraLiveStreamAlternatives,
+        CameraLiveQualitySource,
         CameraDetectionSource,
         CameraDetectionMonitoringController {
   @override
   final Camera camera;
+  final LocalCameraConnectionStore _connectionStore;
 
   late CameraRuntimeState _state;
 
@@ -29,9 +31,36 @@ class OnvifCameraProvider
   Uri? _streamUri;
   OnvifDevice? _device;
   List<Uri> _alternatives = const [];
+  OnvifDevice? _qualityDevice;
+  List<OnvifStream> _resolvedProfiles = const [];
 
   @override
   List<Uri> get liveStreamAlternatives => _alternatives;
+
+  @override
+  Future<CameraLiveQualityProfile?> findLiveQualityProfile({
+    required int maxPixels,
+    Uri? excluding,
+  }) async {
+    final device = _qualityDevice;
+    if (device == null || _disposed) return null;
+    final skipped = excluding == null ? null : rtspStreamIdentity(excluding);
+    for (final stream in _resolvedProfiles) {
+      final pixels = stream.pixels;
+      if (pixels != null &&
+          pixels <= maxPixels &&
+          rtspStreamIdentity(stream.uri) != skipped) {
+        return CameraLiveQualityProfile(stream.uri, pixels);
+      }
+    }
+    final streams = await OnvifMediaResolver(
+      device,
+    ).resolve(maxPixels: maxPixels, excluding: excluding);
+    final stream = streams.firstOrNull;
+    return stream == null
+        ? null
+        : CameraLiveQualityProfile(stream.uri, stream.pixels!);
+  }
 
   Timer? _eventPollingTimer;
   Timer? _eventReconnectTimer;
@@ -58,7 +87,10 @@ class OnvifCameraProvider
   final StreamController<CameraDetection> _detectionController =
       StreamController<CameraDetection>.broadcast();
 
-  OnvifCameraProvider({required this.camera}) {
+  OnvifCameraProvider({
+    required this.camera,
+    this._connectionStore = const LocalCameraConnectionStore(),
+  }) {
     _state = CameraRuntimeState.fromCamera(
       camera,
     ).copyWith(isOnline: false, isConnecting: false, isLive: false);
@@ -112,7 +144,7 @@ class OnvifCameraProvider
     _startingDetectionMonitoring = true;
 
     try {
-      final settings = await const LocalCameraConnectionStore().read(camera.id);
+      final settings = await _connectionStore.read(camera.id);
       final device = _device ??= await openOnvifDevice(
         settings.cameraWithLocalEndpoint(camera),
         settings.login,
@@ -165,25 +197,38 @@ class OnvifCameraProvider
   Future<void> connect() async {
     _streamUri = null;
     _alternatives = const [];
+    _qualityDevice = null;
+    _resolvedProfiles = const [];
     _mediaServiceUrl = null;
     _profileToken = null;
     _emit(_state.copyWith(isConnecting: true, isOnline: false, isLive: false));
 
     try {
-      final settings = await const LocalCameraConnectionStore().read(camera.id);
+      final settings = await _connectionStore.read(camera.id);
       if (_disposed) return;
       final manualUri = settings.playbackUri;
+      final configuredCamera = settings.cameraWithLocalEndpoint(camera);
       if (manualUri != null) {
         _streamUri = manualUri;
-      } else {
-        final device = await openOnvifDevice(
-          settings.cameraWithLocalEndpoint(camera),
-          settings.login,
+        final endpoint = parseManualOnvifUri(
+          configuredCamera.onvifServiceUrl ?? '',
         );
+        // Keep the verified stream immediately usable. Query profiles only
+        // on demand, using the known ONVIF address of this camera.
+        if (endpoint != null && endpoint.host == manualUri.host) {
+          _qualityDevice = OnvifDevice(
+            endpoint,
+            OnvifSoapClient(endpoint.host, login: settings.login),
+          );
+        }
+      } else {
+        final device = await openOnvifDevice(configuredCamera, settings.login);
         if (_disposed) return;
         _device = device;
         final streams = await OnvifMediaResolver(device).resolve();
         if (_disposed) return;
+        _qualityDevice = device;
+        _resolvedProfiles = streams;
         final selected = streams.first;
         _streamUri = selected.uri;
         _profileToken = selected.profileToken;
@@ -218,6 +263,8 @@ class OnvifCameraProvider
     _profileToken = null;
     _streamUri = null;
     _alternatives = const [];
+    _qualityDevice = null;
+    _resolvedProfiles = const [];
     _device = null;
 
     _emit(_state.copyWith(isConnecting: false, isOnline: false, isLive: false));

@@ -168,6 +168,121 @@ void main() {
     session.dispose();
     await tester.pump();
   });
+
+  testWidgets(
+    'repeated buffering tries a lighter profile and remembers it only after playback',
+    (tester) async {
+      final provider = _AdaptiveProvider();
+      final store = _QualityStore();
+      final session = CameraLiveSession(
+        provider,
+        createPlayback: provider.createPlayback,
+        qualityStore: store,
+      );
+      await session.resume();
+      final original = provider.players.single;
+      original.advance();
+      await tester.pump(const Duration(seconds: 5));
+
+      original.buffer(true);
+      await tester.pump(const Duration(seconds: 2));
+      original.buffer(false);
+      original.buffer(true);
+      await tester.pump(const Duration(seconds: 4));
+      original.buffer(false);
+      expect(provider.requests, isEmpty);
+      expect(session.controller, same(original));
+
+      original.buffer(true);
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump();
+      expect(provider.requests, [(1280 * 720 - 1, original.attempt.uri)]);
+      final lighter = provider.players.last;
+      expect(lighter.attempt.uri, _lightProfile.uri);
+      expect(session.controller, same(lighter));
+      expect(original.disposed, isTrue);
+      expect(provider.connects, 1);
+
+      for (var i = 0; i < 3; ++i) {
+        lighter.advance();
+        await tester.pump(const Duration(seconds: 5));
+      }
+      expect(store.saved, isEmpty);
+      lighter.advance();
+      await tester.pump(const Duration(seconds: 5));
+      expect(store.saved, {provider.camera.id: 640 * 360});
+      session.dispose();
+      await tester.pump();
+
+      final reopenedProvider = _AdaptiveProvider();
+      final reopened = CameraLiveSession(
+        reopenedProvider,
+        createPlayback: reopenedProvider.createPlayback,
+        qualityStore: store,
+      );
+      await reopened.resume();
+      expect(reopenedProvider.requests, [(640 * 360, null)]);
+      expect(reopenedProvider.players.single.attempt.uri, _lightProfile.uri);
+
+      reopened.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets('when no lighter stream is found the active player stays open', (
+    tester,
+  ) async {
+    final provider = _AdaptiveProvider()..offered = null;
+    final store = _QualityStore();
+    final session = CameraLiveSession(
+      provider,
+      createPlayback: provider.createPlayback,
+      qualityStore: store,
+    );
+    await session.resume();
+    final original = provider.players.single;
+    original.advance();
+    await tester.pump(const Duration(seconds: 5));
+    for (var i = 0; i < 2; ++i) {
+      original.buffer(true);
+      await tester.pump(const Duration(seconds: 4));
+      original.buffer(false);
+    }
+
+    expect(provider.requests, hasLength(1));
+    expect(session.controller, same(original));
+    expect(original.disposed, isFalse);
+    expect(store.saved, isEmpty);
+
+    session.dispose();
+    await tester.pump();
+  });
+
+  testWidgets(
+    'a saved profile that cannot play falls back to the original URL',
+    (tester) async {
+      final provider = _AdaptiveProvider()..qualityOpens = false;
+      final store = _QualityStore()
+        ..saved[provider.camera.id] = _lightProfile.pixels;
+      final session = CameraLiveSession(
+        provider,
+        createPlayback: provider.createPlayback,
+        qualityStore: store,
+      );
+      await session.resume();
+      final original = provider.players.single;
+      expect(original.attempt.qualityPixels, isNull);
+      expect(provider.requests, [(640 * 360, null)]);
+
+      original.fail();
+      await tester.pump(const Duration(seconds: 2));
+      expect(provider.players, hasLength(2));
+      expect(provider.requests, hasLength(1));
+
+      session.dispose();
+      await tester.pump();
+    },
+  );
 }
 
 class _Provider extends Fake implements CameraProvider {
@@ -180,6 +295,7 @@ class _Provider extends Fake implements CameraProvider {
   Object? connectionError;
   Completer<void>? pendingStart;
   int connects = 0;
+  bool qualityOpens = true;
 
   @override
   final camera = const Camera(
@@ -224,16 +340,49 @@ class _Provider extends Fake implements CameraProvider {
   CameraLivePlayback createPlayback(
     CameraProvider provider, {
     CameraPlaybackAttempt? preferred,
+    CameraLiveQualityProfile? qualityProfile,
   }) {
     this.preferred.add(preferred);
-    return _Playback(this, choices);
+    return _Playback(this, choices, qualityProfile);
+  }
+}
+
+final _lightProfile = CameraLiveQualityProfile(
+  Uri.parse('rtsp://192.168.1.9/lite'),
+  640 * 360,
+);
+
+class _AdaptiveProvider extends _Provider implements CameraLiveQualitySource {
+  CameraLiveQualityProfile? offered = _lightProfile;
+  final requests = <(int, Uri?)>[];
+
+  @override
+  Future<CameraLiveQualityProfile?> findLiveQualityProfile({
+    required int maxPixels,
+    Uri? excluding,
+  }) async {
+    requests.add((maxPixels, excluding));
+    return offered;
+  }
+}
+
+class _QualityStore implements CameraLiveQualityStore {
+  final saved = <String, int>{};
+
+  @override
+  Future<int?> readLiveQuality(String cameraId) async => saved[cameraId];
+
+  @override
+  Future<void> writeLiveQuality(String cameraId, int pixels) async {
+    saved[cameraId] = pixels;
   }
 }
 
 class _Playback extends CameraLivePlayback {
-  _Playback(this.provider, this._remaining) : super(provider);
+  _Playback(this.provider, this._remaining, this._quality) : super(provider);
   final _Provider provider;
   int _remaining;
+  CameraLiveQualityProfile? _quality;
 
   @override
   bool get hasNext => _remaining > 0;
@@ -247,11 +396,22 @@ class _Playback extends CameraLivePlayback {
     required double volume,
   }) async {
     if (!isActive()) return null;
-    _remaining--;
-    final attempt = CameraPlaybackAttempt(
-      Uri.parse('rtsp://192.168.1.9/profile-$_remaining'),
-      CameraRtspTransport.tcp,
-    );
+    final quality = _quality;
+    _quality = null;
+    final CameraPlaybackAttempt attempt;
+    if (quality != null && provider.qualityOpens) {
+      attempt = CameraPlaybackAttempt(
+        quality.uri,
+        CameraRtspTransport.tcp,
+        qualityPixels: quality.pixels,
+      );
+    } else {
+      _remaining--;
+      attempt = CameraPlaybackAttempt(
+        Uri.parse('rtsp://192.168.1.9/profile-$_remaining'),
+        CameraRtspTransport.tcp,
+      );
+    }
     final player = _Player(attempt);
     await player.setVolume(volume);
     openedAttempt = attempt;
@@ -262,9 +422,11 @@ class _Playback extends CameraLivePlayback {
 
 class _Player extends VideoPlayerController {
   _Player(this.attempt) : super.networkUrl(attempt.uri) {
-    value = const VideoPlayerValue(
-      duration: Duration(minutes: 2),
-      size: Size(1280, 720),
+    value = VideoPlayerValue(
+      duration: const Duration(minutes: 2),
+      size: attempt.qualityPixels == null
+          ? const Size(1280, 720)
+          : const Size(640, 360),
       isInitialized: true,
       isPlaying: true,
     );
@@ -284,6 +446,10 @@ class _Player extends VideoPlayerController {
       isPlaying: false,
       errorDescription: 'Connection lost',
     );
+  }
+
+  void buffer(bool buffering) {
+    value = value.copyWith(isBuffering: buffering);
   }
 
   @override

@@ -55,3 +55,8 @@ Otwórz obraz z kamery `robot…` na pełnym ekranie. Odłącz na chwilę jej
 zasilanie. Gdy kamera wróci do domowego Wi-Fi, obraz powinien wrócić bez
 klikania „Połącz ponownie”. Powtórz próbę, ale przejdź do historii zdarzeń,
 gdy kamera jest odłączona: ponawianie ma się zatrzymać do powrotu do LIVE.
+
+Jeśli kamera udostępnia drugi profil ONVIF, wypróbuj podgląd przy słabszym
+Wi-Fi. Jedna przerwa nie powinna zmienić jakości. Przy powtarzających się
+zacięciach SafeHood może wybrać mniejszy obraz. Po ustabilizowaniu obrazu
+otwórz LIVE ponownie i sprawdź, czy aplikacja zaczyna od tej jakości.

@@ -9,46 +9,63 @@ import 'local_camera_connection.dart';
 enum CameraRtspTransport { platformDefault, tcp }
 
 class CameraPlaybackAttempt {
-  const CameraPlaybackAttempt(this.uri, this.transport);
+  const CameraPlaybackAttempt(this.uri, this.transport, {this.qualityPixels});
   final Uri uri;
   final CameraRtspTransport transport;
+  final int? qualityPixels;
 }
 
 List<CameraPlaybackAttempt> cameraPlaybackAttempts(
   Iterable<Uri> streams, {
   required bool android,
   CameraPlaybackAttempt? preferred,
+  CameraLiveQualityProfile? qualityProfile,
 }) {
-  final candidates = streams.toSet().take(2);
-  final attempts = [
-    for (final uri in candidates)
-      CameraPlaybackAttempt(
-        uri,
-        android && uri.scheme == 'rtsp'
-            ? CameraRtspTransport.tcp
-            : CameraRtspTransport.platformDefault,
-      ),
-    if (android)
-      for (final uri in candidates.where((uri) => uri.scheme == 'rtsp'))
-        CameraPlaybackAttempt(uri, CameraRtspTransport.platformDefault),
-  ];
-  if (preferred != null) {
-    final index = attempts.indexWhere(
-      (item) =>
-          item.uri == preferred.uri && item.transport == preferred.transport,
-    );
-    if (index > 0) {
-      final match = attempts.removeAt(index);
-      attempts.insert(0, match);
+  List<CameraPlaybackAttempt> group(Iterable<Uri> candidates, {int? pixels}) {
+    final attempts = [
+      for (final uri in candidates)
+        CameraPlaybackAttempt(
+          uri,
+          android && uri.scheme == 'rtsp'
+              ? CameraRtspTransport.tcp
+              : CameraRtspTransport.platformDefault,
+          qualityPixels: pixels,
+        ),
+      if (android)
+        for (final uri in candidates.where((uri) => uri.scheme == 'rtsp'))
+          CameraPlaybackAttempt(
+            uri,
+            CameraRtspTransport.platformDefault,
+            qualityPixels: pixels,
+          ),
+    ];
+    if (preferred != null) {
+      final index = attempts.indexWhere(
+        (item) =>
+            item.uri == preferred.uri && item.transport == preferred.transport,
+      );
+      if (index > 0) {
+        final match = attempts.removeAt(index);
+        attempts.insert(0, match);
+      }
     }
+    return attempts;
   }
-  return attempts;
+
+  return [
+    if (qualityProfile != null)
+      ...group([qualityProfile.uri], pixels: qualityProfile.pixels),
+    ...group(
+      streams.toSet().take(2).where((uri) => uri != qualityProfile?.uri),
+    ),
+  ];
 }
 
 class CameraLivePlayback {
   CameraLivePlayback(
     CameraProvider provider, {
     CameraPlaybackAttempt? preferred,
+    CameraLiveQualityProfile? qualityProfile,
   }) : _attempts = cameraPlaybackAttempts(
          [
            if (provider.liveStreamUri case final Uri uri) uri,
@@ -58,6 +75,7 @@ class CameraLivePlayback {
          ],
          android: !kIsWeb && defaultTargetPlatform == TargetPlatform.android,
          preferred: preferred,
+         qualityProfile: qualityProfile,
        );
 
   final List<CameraPlaybackAttempt> _attempts;
@@ -87,6 +105,14 @@ class CameraLivePlayback {
           throw const CameraConnectionIssue(
             'Strumień RTSP nie zawiera obrazu.',
           );
+        }
+        if (attempt.qualityPixels case final int pixels) {
+          final size = controller.value.size;
+          if (!size.isFinite || size.width * size.height > pixels) {
+            throw const CameraConnectionIssue(
+              'Kamera nie udostępniła wybranego rozmiaru obrazu.',
+            );
+          }
         }
         await controller.setVolume(volume).timeout(const Duration(seconds: 3));
         if (!isActive()) return null;

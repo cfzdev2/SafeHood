@@ -46,8 +46,13 @@ class LocalCameraConnection {
   }
 }
 
+abstract interface class CameraLiveQualityStore {
+  Future<int?> readLiveQuality(String cameraId);
+  Future<void> writeLiveQuality(String cameraId, int pixels);
+}
+
 /// Credentials and manually supplied RTSP URLs are never stored in Firestore.
-class LocalCameraConnectionStore {
+class LocalCameraConnectionStore implements CameraLiveQualityStore {
   const LocalCameraConnectionStore();
 
   static const _storage = FlutterSecureStorage(
@@ -59,6 +64,28 @@ class LocalCameraConnectionStore {
   static const _prefix = 'safehood.camera.connection.';
 
   String _key(String userId, String cameraId) => '$_prefix$userId.$cameraId';
+
+  String _qualityKey(String userId, String cameraId) =>
+      'safehood.camera.liveQuality.$userId.$cameraId';
+
+  @override
+  Future<int?> readLiveQuality(String cameraId) async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return null;
+    final raw = await _storage.read(key: _qualityKey(userId, cameraId));
+    final pixels = int.tryParse(raw ?? '');
+    return pixels != null && pixels > 0 ? pixels : null;
+  }
+
+  @override
+  Future<void> writeLiveQuality(String cameraId, int pixels) async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null || pixels <= 0) return;
+    await _storage.write(
+      key: _qualityKey(userId, cameraId),
+      value: pixels.toString(),
+    );
+  }
 
   Future<LocalCameraConnection> read(String cameraId) async {
     final userId = FirebaseAuth.instance.currentUser?.uid;
@@ -91,10 +118,10 @@ class LocalCameraConnectionStore {
     String userId,
     String cameraId,
     LocalCameraConnection connection,
-  ) {
+  ) async {
     final key = _key(userId, cameraId);
-    if (connection.isEmpty) return _storage.delete(key: key);
-    return _storage.write(
+    if (connection.isEmpty) return delete(userId, cameraId);
+    await _storage.write(
       key: key,
       value: jsonEncode({
         'username': connection.login?.username,
@@ -105,10 +132,21 @@ class LocalCameraConnectionStore {
         'rtspVerified': connection.rtspVerified,
       }),
     );
+    await _forgetLiveQuality(userId, cameraId);
   }
 
-  Future<void> delete(String userId, String cameraId) =>
-      _storage.delete(key: _key(userId, cameraId));
+  Future<void> delete(String userId, String cameraId) async {
+    await _storage.delete(key: _key(userId, cameraId));
+    await _forgetLiveQuality(userId, cameraId);
+  }
+
+  Future<void> _forgetLiveQuality(String userId, String cameraId) async {
+    try {
+      await _storage.delete(key: _qualityKey(userId, cameraId));
+    } catch (_) {
+      // The quality hint is optional; connection settings have been saved.
+    }
+  }
 }
 
 bool isCameraLanHost(String host) {
@@ -169,6 +207,11 @@ Uri applyCameraLogin(Uri uri, CameraLogin? login) {
   final password = Uri.encodeComponent(login.password);
   return uri.replace(userInfo: '$user:$password');
 }
+
+Uri rtspStreamIdentity(Uri uri) => uri.replace(
+  userInfo: '',
+  port: uri.scheme == 'rtsp' && !uri.hasPort ? 554 : uri.port,
+);
 
 class CameraConnectionIssue implements Exception {
   const CameraConnectionIssue(this.message, {this.retryable = true});

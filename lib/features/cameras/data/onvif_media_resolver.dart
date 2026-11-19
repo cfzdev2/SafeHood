@@ -26,11 +26,17 @@ class OnvifDevice {
 }
 
 class OnvifStream {
-  const OnvifStream(this.uri, this.profileToken, this.mediaEndpoint);
+  const OnvifStream(
+    this.uri,
+    this.profileToken,
+    this.mediaEndpoint, {
+    this.pixels,
+  });
 
   final Uri uri;
   final String profileToken;
   final Uri mediaEndpoint;
+  final int? pixels;
 }
 
 List<Uri> cameraOnvifEndpoints(Camera camera) {
@@ -151,13 +157,15 @@ class OnvifMediaResolver {
 
   final OnvifDevice device;
 
-  Future<List<OnvifStream>> resolve() async {
+  Future<List<OnvifStream>> resolve({int? maxPixels, Uri? excluding}) async {
     final uriSchemes = const {'http', 'https'};
     final endpoints = <(Uri, String)>{};
     final candidates = <OnvifStream>[];
     var authRequired = false;
     final watch = Stopwatch()..start();
-    const budget = Duration(seconds: 16);
+    final budget = Duration(seconds: maxPixels == null ? 16 : 5);
+    final maxStreams = maxPixels == null ? 2 : 1;
+    final skipped = excluding == null ? null : rtspStreamIdentity(excluding);
 
     Future<OnvifSoapResult?> tryCall(
       Future<OnvifSoapResult> Function(Duration) call,
@@ -181,6 +189,20 @@ class OnvifMediaResolver {
         schemes: uriSchemes,
       );
       if (uri != null) endpoints.add((uri, namespace));
+    }
+
+    if (maxPixels != null) {
+      // A saved RTSP address can have opened without first contacting ONVIF.
+      final clock = await tryCall(
+        (timeout) => device.soap.call(
+          device.endpoint,
+          onvifDeviceNamespace,
+          'GetSystemDateAndTime',
+          timeout: const Duration(seconds: 1),
+          authenticated: false,
+        ),
+      );
+      device.soap.updateCameraClock(clock?.response('GetSystemDateAndTime'));
     }
 
     final caps = await tryCall(
@@ -220,11 +242,21 @@ class OnvifMediaResolver {
           );
         }
 
-        final tokens = onvifElements(
-          profiles?.response('GetProfiles'),
-          'Profiles',
-        ).map(_OnvifProfile.tryParse).whereType<_OnvifProfile>().toList();
-        tokens.sort((a, b) => a.score.compareTo(b.score));
+        final tokens =
+            onvifElements(profiles?.response('GetProfiles'), 'Profiles')
+                .map(_OnvifProfile.tryParse)
+                .whereType<_OnvifProfile>()
+                .where(
+                  (item) =>
+                      maxPixels == null ||
+                      (item.pixels != null && item.pixels! <= maxPixels),
+                )
+                .toList();
+        tokens.sort((a, b) {
+          if (maxPixels == null) return a.score.compareTo(b.score);
+          final codec = a.codecPenalty.compareTo(b.codecPenalty);
+          return codec != 0 ? codec : b.pixels!.compareTo(a.pixels!);
+        });
 
         for (final profile in tokens.take(4)) {
           for (final preferTcp in [true, false]) {
@@ -250,13 +282,23 @@ class OnvifMediaResolver {
               if (reply?.requiresLogin == true) break;
               continue;
             }
+            if (rtspStreamIdentity(stream) == skipped) {
+              break;
+            }
             final withLogin = applyCameraLogin(stream, device.soap.login);
             if (!candidates.any((item) => item.uri == withLogin)) {
-              candidates.add(OnvifStream(withLogin, profile.token, endpoint));
+              candidates.add(
+                OnvifStream(
+                  withLogin,
+                  profile.token,
+                  endpoint,
+                  pixels: profile.pixels,
+                ),
+              );
             }
             break;
           }
-          if (candidates.length >= 2) return;
+          if (candidates.length >= maxStreams) return;
         }
         if (candidates.isNotEmpty) return;
       }
@@ -291,6 +333,7 @@ class OnvifMediaResolver {
 
     await resolveAvailable();
     if (candidates.isNotEmpty) return candidates;
+    if (maxPixels != null) return const [];
     if (authRequired) {
       throw CameraConnectionIssue(
         device.soap.login == null
@@ -306,17 +349,32 @@ class OnvifMediaResolver {
 }
 
 class _OnvifProfile {
-  const _OnvifProfile(this.token, this.score);
+  const _OnvifProfile(this.token, this.score, this.codecPenalty, this.pixels);
 
   final String token;
   final int score;
+  final int codecPenalty;
+  final int? pixels;
 
   static _OnvifProfile? tryParse(XmlElement element) {
     final token = element.getAttribute('token')?.trim();
     if (token == null || token.isEmpty) return null;
 
     final codec = onvifText(element, 'Encoding')?.toUpperCase();
-    final height = int.tryParse(onvifText(element, 'Height') ?? '');
+    final resolution = onvifElements(element, 'Resolution').firstOrNull;
+    final width = int.tryParse(onvifText(resolution, 'Width') ?? '');
+    final height = int.tryParse(
+      onvifText(resolution ?? element, 'Height') ?? '',
+    );
+    final pixels =
+        width != null &&
+            height != null &&
+            width > 0 &&
+            height > 0 &&
+            width <= 16384 &&
+            height <= 16384
+        ? width * height
+        : null;
     final codecPenalty = switch (codec) {
       'H264' || 'H.264' => 0,
       null => 10000,
@@ -326,6 +384,8 @@ class _OnvifProfile {
     return _OnvifProfile(
       token,
       codecPenalty + (height == null ? 800 : (height - 720).abs()),
+      codecPenalty,
+      pixels,
     );
   }
 }

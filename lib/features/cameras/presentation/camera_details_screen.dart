@@ -220,6 +220,9 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   }
 
   String _statusLabel(CameraRuntimeState state) {
+    if (_liveSession.phase == CameraLivePhase.adjustingQuality) {
+      return 'Dopasowanie obrazu…';
+    }
     if (_liveSession.phase == CameraLivePhase.reconnecting ||
         _liveSession.phase == CameraLivePhase.retryScheduled) {
       return 'Wznawianie…';

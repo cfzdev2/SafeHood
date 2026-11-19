@@ -12,6 +12,7 @@ enum CameraLivePhase {
   connecting,
   playing,
   reconnecting,
+  adjustingQuality,
   retryScheduled,
   unavailable,
 }
@@ -20,6 +21,7 @@ typedef CameraLivePlaybackFactory =
     CameraLivePlayback Function(
       CameraProvider provider, {
       CameraPlaybackAttempt? preferred,
+      CameraLiveQualityProfile? qualityProfile,
     });
 
 /// Owns the player and provider for one live camera view.
@@ -28,15 +30,19 @@ class CameraLiveSession extends ChangeNotifier {
     this._provider, {
     this.onAvailabilityChanged,
     this._createPlayback = CameraLivePlayback.new,
+    this._qualityStore = const LocalCameraConnectionStore(),
   });
 
   final CameraProvider _provider;
   final void Function(bool isOnline)? onAvailabilityChanged;
   final CameraLivePlaybackFactory _createPlayback;
+  final CameraLiveQualityStore _qualityStore;
 
   static const _retrySeconds = [2, 4, 8, 15, 30];
   static const _watchdogInterval = Duration(seconds: 5);
   static const _closeTimeout = Duration(seconds: 3);
+  static const _bufferingThreshold = Duration(seconds: 4);
+  static const _qualityDeadline = Duration(seconds: 6);
 
   CameraLivePhase _phase = CameraLivePhase.idle;
   CameraLivePhase get phase => _phase;
@@ -46,14 +52,28 @@ class CameraLiveSession extends ChangeNotifier {
   VideoPlayerController? get controller => _controller;
   bool get isConnecting =>
       phase == CameraLivePhase.connecting ||
-      phase == CameraLivePhase.reconnecting;
+      phase == CameraLivePhase.reconnecting ||
+      phase == CameraLivePhase.adjustingQuality;
 
   bool get _autoReconnect => _provider.camera.usesLocalConnection;
+  CameraLiveQualitySource? get _qualitySource =>
+      _autoReconnect && _provider is CameraLiveQualitySource
+      ? _provider as CameraLiveQualitySource
+      : null;
 
   CameraLivePlayback? _playback;
   CameraPlaybackAttempt? _preferred;
   Timer? _retryTimer;
   Timer? _watchdog;
+  Timer? _bufferingTimer;
+  VideoPlayerController? _qualityProbePlayer;
+  Uri? _recentStallStream;
+  final _probedStreams = <Uri>{};
+  int _recentStalls = 0;
+  bool _bufferingStallCounted = false;
+  bool _qualityLoaded = false;
+  int? _savedQualityPixels;
+  bool _skipSavedQuality = false;
   Future<void> _pending = Future<void>.value();
   Duration? _lastPosition;
   int _stalledChecks = 0;
@@ -71,6 +91,11 @@ class CameraLiveSession extends ChangeNotifier {
     if (_closed || _active) return Future<void>.value();
     _active = true;
     _retryIndex = 0;
+    _qualityLoaded = false;
+    _skipSavedQuality = false;
+    _probedStreams.clear();
+    _recentStallStream = null;
+    _recentStalls = 0;
     return _begin(reconnecting: false);
   }
 
@@ -110,6 +135,7 @@ class CameraLiveSession extends ChangeNotifier {
     final player = _controller;
     if (player == null) return;
     _userPaused = player.value.isPlaying;
+    _endBufferingEpisode();
     _lastPosition = player.value.position;
     _movingChecks = 0;
     _stalledChecks = 0;
@@ -129,31 +155,69 @@ class CameraLiveSession extends ChangeNotifier {
     }
   }
 
-  Future<void> _begin({required bool reconnecting, bool alternate = false}) {
+  Future<void> _begin({
+    required bool reconnecting,
+    bool alternate = false,
+    CameraLiveQualityProfile? qualityProfile,
+  }) {
     _cancelRetry();
     final generation = ++_generation;
     if (!alternate) _playback = null;
-    final attempt = _enqueue(() => _open(generation, alternate));
+    final attempt = _enqueue(
+      () => _open(generation, alternate, qualityProfile),
+    );
     _update(
-      reconnecting ? CameraLivePhase.reconnecting : CameraLivePhase.connecting,
+      qualityProfile != null
+          ? CameraLivePhase.adjustingQuality
+          : reconnecting
+          ? CameraLivePhase.reconnecting
+          : CameraLivePhase.connecting,
     );
     return attempt;
   }
 
-  Future<void> _open(int generation, bool alternate) async {
+  Future<void> _open(
+    int generation,
+    bool alternate,
+    CameraLiveQualityProfile? qualityProfile,
+  ) async {
     bool isCurrent() => _active && generation == _generation;
     if (!isCurrent()) return;
 
     VideoPlayerController? player;
     var startedProvider = false;
+    var usingSavedQuality = false;
     try {
       if (!alternate) {
-        await _provider.connect();
-        if (!isCurrent()) return;
-        _playback = _createPlayback(_provider, preferred: _preferred);
+        if (qualityProfile == null) {
+          await _provider.connect();
+          if (!isCurrent()) return;
+          if (_qualitySource != null && !_qualityLoaded) {
+            final saved = await _readQuality();
+            if (!isCurrent()) return;
+            _savedQualityPixels = saved;
+            _qualityLoaded = true;
+          }
+          if (_savedQualityPixels case final int pixels
+              when !_skipSavedQuality) {
+            qualityProfile = await _findQuality(pixels);
+            if (!isCurrent()) return;
+            usingSavedQuality = true;
+          }
+        }
+        _playback = _createPlayback(
+          _provider,
+          preferred: _preferred,
+          qualityProfile: qualityProfile,
+        );
       }
       player = await _playback!.openNext(isActive: isCurrent, volume: _volume);
       if (player == null || !isCurrent()) return;
+      if (usingSavedQuality &&
+          _playback?.openedAttempt?.qualityPixels == null) {
+        // Keep a working original stream if the saved choice no longer opens.
+        _skipSavedQuality = true;
+      }
 
       startedProvider = true;
       await _provider.startLive();
@@ -183,6 +247,22 @@ class CameraLiveSession extends ChangeNotifier {
     if (value == null || !_active || _userPaused) return;
     if (value.hasError || (_autoReconnect && value.isCompleted)) {
       _interrupted('Odtwarzacz przerwał podgląd.');
+      return;
+    }
+    if (!value.isBuffering) {
+      _endBufferingEpisode();
+      return;
+    }
+    _movingChecks = 0;
+    if (_hadProgress &&
+        _qualitySource != null &&
+        _bufferingTimer == null &&
+        !_bufferingStallCounted) {
+      _bufferingTimer = Timer(_bufferingThreshold, () {
+        _bufferingTimer = null;
+        if (_controller?.value.isBuffering != true || _userPaused) return;
+        _noticeStall(frozen: false);
+      });
     }
   }
 
@@ -200,23 +280,142 @@ class CameraLiveSession extends ChangeNotifier {
       _hadProgress = true;
       _preferred = _playback?.openedAttempt;
       // Don't reset the delay for connections that open and stall repeatedly.
-      if (++_movingChecks >= 2) _retryIndex = 0;
+      if (value.isBuffering) {
+        _handlePlayerChange();
+      } else {
+        if (++_movingChecks >= 2) _retryIndex = 0;
+        if (_movingChecks >= 12) _recentStalls = 0;
+        if (_movingChecks == 4) _rememberQuality(value);
+      }
       if (_autoReconnect) _reportAvailability(true);
     } else {
       _movingChecks = 0;
       if (++_stalledChecks >= 3) {
-        _interrupted('Strumień LIVE przestał przesyłać obraz.');
+        _noticeStall(frozen: true);
       }
     }
   }
 
-  void _interrupted(String message) {
+  void _noticeStall({required bool frozen}) {
+    final player = _controller;
+    if (player == null || identical(player, _qualityProbePlayer)) return;
+    final stream = _playback?.openedAttempt?.uri;
+    final pixels = _framePixels(player.value);
+    if (!_bufferingStallCounted &&
+        _hadProgress &&
+        _qualitySource != null &&
+        stream != null &&
+        pixels > 1) {
+      _bufferingStallCounted = player.value.isBuffering;
+      final identity = rtspStreamIdentity(stream);
+      if (identity != _recentStallStream) {
+        _recentStallStream = identity;
+        _recentStalls = 0;
+      }
+      if (++_recentStalls >= 2 && _probedStreams.add(identity)) {
+        _qualityProbePlayer = player;
+        unawaited(_tryLighterStream(player, pixels - 1, stream));
+        return;
+      }
+    }
+    if (frozen) _interrupted('Strumień LIVE przestał przesyłać obraz.');
+  }
+
+  Future<void> _tryLighterStream(
+    VideoPlayerController player,
+    int maxPixels,
+    Uri current,
+  ) async {
+    final profile = await _findQuality(maxPixels, excluding: current);
+    if (!identical(_qualityProbePlayer, player)) return;
+    _qualityProbePlayer = null;
+    if (!identical(_controller, player) || _userPaused) return;
+    if (profile != null) {
+      debugPrint('CAMERA LIVE: próba lżejszego obrazu po zacięciach.');
+      _interrupted('Dopasowywanie jakości obrazu.', qualityProfile: profile);
+    } else if (_stalledChecks >= 3) {
+      _interrupted('Strumień LIVE przestał przesyłać obraz.');
+    }
+  }
+
+  int _framePixels(VideoPlayerValue value) {
+    final size = value.size;
+    if (size.isEmpty || !size.isFinite) return 0;
+    return (size.width * size.height).round();
+  }
+
+  Future<int?> _readQuality() async {
+    try {
+      return await _qualityStore
+          .readLiveQuality(_provider.camera.id)
+          .timeout(const Duration(seconds: 2));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<CameraLiveQualityProfile?> _findQuality(
+    int maxPixels, {
+    Uri? excluding,
+  }) async {
+    try {
+      final profile = await _qualitySource
+          ?.findLiveQualityProfile(maxPixels: maxPixels, excluding: excluding)
+          .timeout(_qualityDeadline);
+      if (profile == null ||
+          profile.pixels <= 0 ||
+          profile.pixels > maxPixels ||
+          (excluding != null &&
+              rtspStreamIdentity(profile.uri) ==
+                  rtspStreamIdentity(excluding))) {
+        return null;
+      }
+      return profile;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _rememberQuality(VideoPlayerValue value) {
+    final target = _playback?.openedAttempt?.qualityPixels;
+    final actual = _framePixels(value);
+    if (target == null ||
+        target == _savedQualityPixels ||
+        actual <= 0 ||
+        actual > target) {
+      return;
+    }
+    _savedQualityPixels = target;
+    _skipSavedQuality = false;
+    unawaited(_writeQuality(target));
+  }
+
+  Future<void> _writeQuality(int pixels) async {
+    try {
+      await _qualityStore.writeLiveQuality(_provider.camera.id, pixels);
+    } catch (_) {
+      // Local preference writes cannot interrupt playback.
+    }
+  }
+
+  void _endBufferingEpisode() {
+    _bufferingTimer?.cancel();
+    _bufferingTimer = null;
+    _bufferingStallCounted = false;
+  }
+
+  void _interrupted(
+    String message, {
+    CameraLiveQualityProfile? qualityProfile,
+  }) {
     final alternate =
         _playback?.hasNext == true && (!_autoReconnect || !_hadProgress);
     final previous = _detachController();
     if (previous == null) return;
     unawaited(_enqueue(() => _release(previous)));
-    if (alternate) {
+    if (qualityProfile != null) {
+      unawaited(_begin(reconnecting: true, qualityProfile: qualityProfile));
+    } else if (alternate) {
       unawaited(_begin(reconnecting: true, alternate: true));
     } else {
       _playback = null;
@@ -263,6 +462,8 @@ class CameraLiveSession extends ChangeNotifier {
     previous?.removeListener(_handlePlayerChange);
     _watchdog?.cancel();
     _watchdog = null;
+    _endBufferingEpisode();
+    _qualityProbePlayer = null;
     _lastPosition = null;
     _stalledChecks = 0;
     _movingChecks = 0;

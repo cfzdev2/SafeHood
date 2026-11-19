@@ -150,6 +150,21 @@ abstract interface class CameraLiveStreamAlternatives {
   List<Uri> get liveStreamAlternatives;
 }
 
+class CameraLiveQualityProfile {
+  const CameraLiveQualityProfile(this.uri, this.pixels);
+
+  final Uri uri;
+  final int pixels;
+}
+
+/// Asks the same camera for an existing profile with a smaller frame size.
+abstract interface class CameraLiveQualitySource {
+  Future<CameraLiveQualityProfile?> findLiveQualityProfile({
+    required int maxPixels,
+    Uri? excluding,
+  });
+}
+
 abstract class CameraProvider {
   Camera get camera;
 
