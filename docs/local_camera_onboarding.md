@@ -61,6 +61,16 @@ FOCUS72-W / Hubble, iOS, parowanie kodem pokazywanym obiektywowi oraz inne
 firmware wymagają osobnych prób. Samo wykrycie ONVIF nie potwierdza, że
 ten model udostępnia ustawienia Wi-Fi.
 
+W przypadku FOCUS72-W wybierz **Opcje zaawansowane → Sprawdź obraz
+Motoroli**. Kamerę i telefon połącz z domowym Wi-Fi, zamknij Hubble, wpisz
+adres IP kamery i porusz dłonią przed obiektywem. Test sprawdza dwa adresy
+obrazu podane w [bazie Agent DVR](https://www.ispyconnect.com/camera/hubble)
+i potwierdza obraz na żywo dopiero przy dwóch różnych zdekodowanych
+klatkach. Jedno zdjęcie, żądanie logowania lub brak odpowiedzi to wyniki
+próby, a nie potwierdzenie obsługi. Test nie zapisuje kamery i nie wymaga
+zmiany konfiguracji. Instrukcja FOCUS72-W nadal opisuje konfigurację przez
+[Hubble](https://asset.conrad.com/media10/add/160267/c1/-/pl/001668958ML01/manual-1668958-motorola-focus-72-lan-wi-fi-ip-cctv-camera.pdf).
+
 ## Weryfikacja i odniesienia
 
 Uruchom `flutter analyze` i `flutter test`.

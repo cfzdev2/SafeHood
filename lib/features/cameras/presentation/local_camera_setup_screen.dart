@@ -10,6 +10,7 @@ import '../data/local_camera_registration.dart';
 import '../data/local_camera_store.dart';
 import 'automatic_local_camera_connection.dart';
 import 'camera_pairing_screen.dart';
+import 'focus72_direct_check_screen.dart';
 import 'local_camera_preview.dart';
 
 enum LocalCameraSetupResult { saved }
@@ -254,6 +255,16 @@ class _LocalCameraSetupScreenState extends State<LocalCameraSetupScreen> {
                     leading: const Icon(Icons.link),
                     title: const Text('Mam adres strumienia'),
                     onTap: _manual,
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.videocam_outlined),
+                    title: const Text('Sprawdź obraz Motoroli'),
+                    subtitle: const Text('FOCUS72-W'),
+                    onTap: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const Focus72DirectCheckScreen(),
+                      ),
+                    ),
                   ),
                   if (widget.onAdvanced case final open?)
                     ListTile(
