@@ -48,3 +48,10 @@ handler Bridge, zapisuje zdjęcie i ponawia to samo zgłoszenie.
 Sprawdza reguły dostępu i odbiorców, przechwytując wiadomości FCM.
 Dostarczenie push na telefon i wykrycie z rzeczywistego obrazu są
 osobnym testem. Do próby na urządzeniach używamy kont testowych.
+
+## Próba podglądu po przerwie
+
+Otwórz obraz z kamery `robot…` na pełnym ekranie. Odłącz na chwilę jej
+zasilanie. Gdy kamera wróci do domowego Wi-Fi, obraz powinien wrócić bez
+klikania „Połącz ponownie”. Powtórz próbę, ale przejdź do historii zdarzeń,
+gdy kamera jest odłączona: ponawianie ma się zatrzymać do powrotu do LIVE.

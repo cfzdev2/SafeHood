@@ -343,4 +343,32 @@ void main() {
     );
     expect(cameraPlaybackAttempts([a], android: false), hasLength(1));
   });
+
+  test('reconnect prefers the working transport only for a current stream', () {
+    final main = Uri.parse('rtsp://192.168.1.6/main');
+    final sub = Uri.parse('rtsp://192.168.1.6/sub');
+    final working = CameraPlaybackAttempt(
+      sub,
+      CameraRtspTransport.platformDefault,
+    );
+    final retry = cameraPlaybackAttempts(
+      [main, sub],
+      android: true,
+      preferred: working,
+    );
+    expect(retry.map((attempt) => (attempt.uri, attempt.transport)), [
+      (sub, CameraRtspTransport.platformDefault),
+      (main, CameraRtspTransport.tcp),
+      (sub, CameraRtspTransport.tcp),
+      (main, CameraRtspTransport.platformDefault),
+    ]);
+    expect(
+      cameraPlaybackAttempts(
+        [main],
+        android: true,
+        preferred: working,
+      ).map((attempt) => attempt.uri),
+      everyElement(main),
+    );
+  });
 }

@@ -52,6 +52,7 @@ class RtspCameraProvider extends CameraProvider {
       if (address == null) {
         throw const CameraConnectionIssue(
           'Dodaj adres RTSP w ustawieniach kamery. Adres jest zapisany tylko na tym telefonie.',
+          retryable: false,
         );
       }
       final uid = settings.reolinkUid;

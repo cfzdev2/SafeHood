@@ -63,7 +63,10 @@ List<Uri> cameraOnvifEndpoints(Camera camera) {
 Future<OnvifDevice> openOnvifDevice(Camera camera, CameraLogin? login) async {
   final endpoints = cameraOnvifEndpoints(camera);
   if (endpoints.isEmpty) {
-    throw const CameraConnectionIssue('Kamera nie ma lokalnego adresu ONVIF.');
+    throw const CameraConnectionIssue(
+      'Kamera nie ma lokalnego adresu ONVIF.',
+      retryable: false,
+    );
   }
 
   Future<(OnvifDevice, bool)?> check(Uri endpoint) async {
@@ -293,6 +296,7 @@ class OnvifMediaResolver {
         device.soap.login == null
             ? 'Kamera wymaga logowania. Dodaj konto ONVIF w ustawieniach kamery.'
             : 'Kamera odrzuciła logowanie. Sprawdź dane konta ONVIF.',
+        retryable: false,
       );
     }
     throw const CameraConnectionIssue(

@@ -4,9 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../cameras/data/camera_provider_factory.dart';
-import '../../cameras/data/camera_live_playback.dart';
+import '../../cameras/data/camera_live_session.dart';
 import '../../cameras/domain/camera.dart';
-import '../../cameras/domain/camera_provider.dart';
+import '../../cameras/presentation/widgets/camera_live_placeholder.dart';
 import 'package:flutter/services.dart';
 
 class CameraEventLiveScreen extends StatefulWidget {
@@ -18,133 +18,43 @@ class CameraEventLiveScreen extends StatefulWidget {
   State<CameraEventLiveScreen> createState() => _CameraEventLiveScreenState();
 }
 
-class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
-  late final CameraProvider _cameraProvider;
-
-  VideoPlayerController? _videoController;
-
-  bool _loading = true;
-  Object? _error;
+class _CameraEventLiveScreenState extends State<CameraEventLiveScreen>
+    with WidgetsBindingObserver {
+  late final CameraLiveSession _session;
 
   @override
   void initState() {
     super.initState();
-
-    _cameraProvider = CameraProviderFactory.create(widget.camera);
-
-    unawaited(_initializeLive());
+    _session = CameraLiveSession(CameraProviderFactory.create(widget.camera));
+    WidgetsBinding.instance.addObserver(this);
+    _syncLiveActivity(WidgetsBinding.instance.lifecycleState);
   }
 
-  Future<void> _initializeLive() async {
-    try {
-      debugPrint(
-        'LIVE: łączę z kamerą '
-        '${widget.camera.id}',
-      );
-
-      await _cameraProvider.connect();
-
-      if (!mounted) return;
-      final controller = await CameraLivePlayback(
-        _cameraProvider,
-      ).openNext(isActive: () => mounted, volume: 1);
-      if (controller == null) return;
-      if (!mounted) {
-        await controller.dispose();
-        return;
-      }
-      _videoController = controller;
-      await _cameraProvider.startLive();
-      if (!mounted) return;
-
-      setState(() {
-        _loading = false;
-      });
-    } catch (error, stackTrace) {
-      debugPrint('LIVE ERROR TYPE: ${error.runtimeType}');
-
-      debugPrintStack(label: 'LIVE STACKTRACE', stackTrace: stackTrace);
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _error = error;
-        _loading = false;
-      });
-    }
-  }
-
-  Future<void> _togglePlayback() async {
-    final controller = _videoController;
-
-    if (controller == null || !controller.value.isInitialized) {
-      return;
-    }
-
-    if (controller.value.isPlaying) {
-      await controller.pause();
+  void _syncLiveActivity(AppLifecycleState? state) {
+    if (state == null || state == AppLifecycleState.resumed) {
+      unawaited(_session.resume());
     } else {
-      await controller.play();
-    }
-
-    if (mounted) {
-      setState(() {});
+      unawaited(_session.suspend());
     }
   }
 
-  Future<void> _openFullscreen() async {
-    final controller = _videoController;
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _syncLiveActivity(state);
+  }
 
-    if (controller == null || !controller.value.isInitialized) {
-      return;
-    }
-
-    await Navigator.of(context).push(
+  Future<void> _openFullscreen() {
+    return Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) {
-          return CameraFullscreenLiveView(controller: controller);
-        },
+        builder: (_) => CameraFullscreenLiveView.live(session: _session),
       ),
     );
-
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  Future<void> _shutdown() async {
-    final controller = _videoController;
-
-    _videoController = null;
-
-    if (controller != null) {
-      try {
-        await controller.pause();
-      } catch (_) {}
-
-      try {
-        await controller.dispose();
-      } catch (_) {}
-    }
-
-    try {
-      await _cameraProvider.stopLive();
-    } catch (_) {}
-
-    try {
-      await _cameraProvider.disconnect();
-    } catch (_) {}
-
-    try {
-      await _cameraProvider.dispose();
-    } catch (_) {}
   }
 
   @override
   void dispose() {
-    unawaited(_shutdown());
-
+    WidgetsBinding.instance.removeObserver(this);
+    _session.dispose();
     super.dispose();
   }
 
@@ -152,51 +62,15 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text('${widget.camera.name} • LIVE')),
-      body: SafeArea(child: _buildBody(context)),
+      body: SafeArea(
+        child: ListenableBuilder(listenable: _session, builder: _buildBody),
+      ),
     );
   }
 
-  Widget _buildBody(BuildContext context) {
-    if (_loading) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Łączenie z kamerą...'),
-          ],
-        ),
-      );
-    }
-
-    if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.videocam_off_outlined, size: 64),
-              const SizedBox(height: 16),
-              const Text(
-                'Nie udało się '
-                'uruchomić LIVE.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Sprawdź połączenie z kamerą i spróbuj ponownie.',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final controller = _videoController!;
+  Widget _buildBody(BuildContext context, Widget? child) {
+    final controller = _session.controller;
+    if (controller == null) return CameraLivePlaceholder(session: _session);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -258,24 +132,17 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
                     icon: const Icon(Icons.fullscreen),
                   ),
                 ),
-                Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: _togglePlayback,
-                    child: Container(
-                      width: 64,
-                      height: 64,
-                      decoration: const BoxDecoration(
-                        color: Colors.black54,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        controller.value.isPlaying
-                            ? Icons.pause
-                            : Icons.play_arrow,
-                        color: Colors.white,
-                        size: 38,
-                      ),
+                ValueListenableBuilder<VideoPlayerValue>(
+                  valueListenable: controller,
+                  builder: (context, value, child) => IconButton(
+                    onPressed: _session.togglePlayback,
+                    style: IconButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.black54,
+                    ),
+                    iconSize: 38,
+                    icon: Icon(
+                      value.isPlaying ? Icons.pause : Icons.play_arrow,
                     ),
                   ),
                 ),
@@ -296,9 +163,18 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen> {
 }
 
 class CameraFullscreenLiveView extends StatefulWidget {
-  final VideoPlayerController controller;
+  final VideoPlayerController? _controller;
+  final CameraLiveSession? _session;
 
-  const CameraFullscreenLiveView({super.key, required this.controller});
+  const CameraFullscreenLiveView({
+    super.key,
+    required VideoPlayerController this._controller,
+  }) : _session = null;
+
+  const CameraFullscreenLiveView.live({
+    super.key,
+    required CameraLiveSession this._session,
+  }) : _controller = null;
 
   @override
   State<CameraFullscreenLiveView> createState() {
@@ -365,11 +241,11 @@ class _CameraFullscreenLiveViewState extends State<CameraFullscreenLiveView> {
     }
   }
 
-  Future<void> _togglePlayback() async {
-    if (widget.controller.value.isPlaying) {
-      await widget.controller.pause();
+  Future<void> _togglePlayback(VideoPlayerController controller) async {
+    if (controller.value.isPlaying) {
+      await controller.pause();
     } else {
-      await widget.controller.play();
+      await controller.play();
     }
   }
 
@@ -382,22 +258,37 @@ class _CameraFullscreenLiveViewState extends State<CameraFullscreenLiveView> {
 
   @override
   Widget build(BuildContext context) {
-    final aspectRatio = widget.controller.value.aspectRatio > 0
-        ? widget.controller.value.aspectRatio
-        : 16 / 9;
+    final session = widget._session;
+    if (session == null) return _buildScreen(widget._controller!);
+    return ListenableBuilder(
+      listenable: session,
+      builder: (_, _) => _buildScreen(session.controller),
+    );
+  }
 
+  Widget _buildScreen(VideoPlayerController? controller) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         alignment: Alignment.center,
         children: [
-          Center(
-            child: AspectRatio(
-              aspectRatio: aspectRatio,
-              child: VideoPlayer(widget.controller),
+          if (controller == null)
+            SafeArea(
+              child: CameraLivePlaceholder(
+                session: widget._session!,
+                color: Colors.white70,
+              ),
+            )
+          else
+            Center(
+              child: AspectRatio(
+                aspectRatio: controller.value.aspectRatio > 0
+                    ? controller.value.aspectRatio
+                    : 16 / 9,
+                child: VideoPlayer(controller),
+              ),
             ),
-          ),
           Positioned(
             top: 8,
             right: 8,
@@ -413,22 +304,27 @@ class _CameraFullscreenLiveViewState extends State<CameraFullscreenLiveView> {
               ),
             ),
           ),
-          Center(
-            child: ValueListenableBuilder<VideoPlayerValue>(
-              valueListenable: widget.controller,
-              builder: (context, value, child) {
-                return IconButton(
-                  onPressed: _togglePlayback,
-                  style: IconButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    backgroundColor: Colors.black54,
-                  ),
-                  iconSize: 42,
-                  icon: Icon(value.isPlaying ? Icons.pause : Icons.play_arrow),
-                );
-              },
+          if (controller != null)
+            Center(
+              child: ValueListenableBuilder<VideoPlayerValue>(
+                valueListenable: controller,
+                builder: (context, value, child) {
+                  return IconButton(
+                    onPressed:
+                        widget._session?.togglePlayback ??
+                        () => _togglePlayback(controller),
+                    style: IconButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.black54,
+                    ),
+                    iconSize: 42,
+                    icon: Icon(
+                      value.isPlaying ? Icons.pause : Icons.play_arrow,
+                    ),
+                  );
+                },
+              ),
             ),
-          ),
         ],
       ),
     );

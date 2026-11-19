@@ -17,9 +17,10 @@ class CameraPlaybackAttempt {
 List<CameraPlaybackAttempt> cameraPlaybackAttempts(
   Iterable<Uri> streams, {
   required bool android,
+  CameraPlaybackAttempt? preferred,
 }) {
   final candidates = streams.toSet().take(2);
-  return [
+  final attempts = [
     for (final uri in candidates)
       CameraPlaybackAttempt(
         uri,
@@ -31,19 +32,39 @@ List<CameraPlaybackAttempt> cameraPlaybackAttempts(
       for (final uri in candidates.where((uri) => uri.scheme == 'rtsp'))
         CameraPlaybackAttempt(uri, CameraRtspTransport.platformDefault),
   ];
+  if (preferred != null) {
+    final index = attempts.indexWhere(
+      (item) =>
+          item.uri == preferred.uri && item.transport == preferred.transport,
+    );
+    if (index > 0) {
+      final match = attempts.removeAt(index);
+      attempts.insert(0, match);
+    }
+  }
+  return attempts;
 }
 
 class CameraLivePlayback {
-  CameraLivePlayback(CameraProvider provider)
-    : _attempts = cameraPlaybackAttempts([
-        if (provider.liveStreamUri case final Uri uri) uri,
-        if (provider is CameraLiveStreamAlternatives)
-          ...(provider as CameraLiveStreamAlternatives).liveStreamAlternatives,
-      ], android: !kIsWeb && defaultTargetPlatform == TargetPlatform.android);
+  CameraLivePlayback(
+    CameraProvider provider, {
+    CameraPlaybackAttempt? preferred,
+  }) : _attempts = cameraPlaybackAttempts(
+         [
+           if (provider.liveStreamUri case final Uri uri) uri,
+           if (provider is CameraLiveStreamAlternatives)
+             ...(provider as CameraLiveStreamAlternatives)
+                 .liveStreamAlternatives,
+         ],
+         android: !kIsWeb && defaultTargetPlatform == TargetPlatform.android,
+         preferred: preferred,
+       );
 
   final List<CameraPlaybackAttempt> _attempts;
   int _next = 0;
+  CameraPlaybackAttempt? _openedAttempt;
   bool get hasNext => _next < _attempts.length;
+  CameraPlaybackAttempt? get openedAttempt => _openedAttempt;
 
   Future<VideoPlayerController?> openNext({
     required bool Function() isActive,
@@ -61,15 +82,21 @@ class CameraLivePlayback {
       try {
         await controller.initialize().timeout(const Duration(seconds: 9));
         if (!isActive()) return null;
-        if (attempt.uri.scheme == 'rtsp' && controller.value.size.isEmpty) {
+        if (controller.value.hasError ||
+            (attempt.uri.scheme == 'rtsp' && controller.value.size.isEmpty)) {
           throw const CameraConnectionIssue(
             'Strumień RTSP nie zawiera obrazu.',
           );
         }
-        await controller.setVolume(volume);
-        await controller.play();
+        await controller.setVolume(volume).timeout(const Duration(seconds: 3));
         if (!isActive()) return null;
+        await controller.play().timeout(const Duration(seconds: 3));
+        if (!isActive()) return null;
+        if (controller.value.hasError) {
+          throw const CameraConnectionIssue('Odtwarzacz odrzucił strumień.');
+        }
         keep = true;
+        _openedAttempt = attempt;
         return controller;
       } catch (error) {
         // Playback exceptions can contain a complete RTSP URL with login.
@@ -94,6 +121,7 @@ class CameraLivePlayback {
       _attempts.isEmpty
           ? 'Kamera nie udostępniła adresu obrazu.'
           : 'Nie udało się odtworzyć obrazu z kamery. Sprawdź profil H.264 lub wpisz inny adres RTSP.',
+      retryable: _attempts.isNotEmpty,
     );
   }
 }

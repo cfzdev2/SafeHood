@@ -171,8 +171,9 @@ Uri applyCameraLogin(Uri uri, CameraLogin? login) {
 }
 
 class CameraConnectionIssue implements Exception {
-  const CameraConnectionIssue(this.message);
+  const CameraConnectionIssue(this.message, {this.retryable = true});
   final String message;
+  final bool retryable;
 
   @override
   String toString() => message;

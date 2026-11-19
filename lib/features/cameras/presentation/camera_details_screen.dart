@@ -5,13 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../../incidents/data/incident_service.dart';
 import '../data/camera_provider_factory.dart';
-import '../data/camera_live_playback.dart';
-import '../data/local_camera_connection.dart';
+import '../data/camera_live_session.dart';
 import '../domain/camera.dart';
 import '../domain/camera_provider.dart';
 import '../../camera_events/presentation/camera_event_history_screen.dart';
 import 'camera_settings_screen.dart';
 import 'widgets/camera_controls_panel.dart';
+import 'widgets/camera_live_placeholder.dart';
 import 'camera_recordings_screen.dart';
 import 'camera_snapshot_preview_screen.dart';
 import '../data/camera_service.dart';
@@ -32,18 +32,9 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   late final Stream<CameraRuntimeState> _cameraStateStream;
   final CameraService _cameraService = CameraService();
 
-  VideoPlayerController? _videoController;
-  CameraLivePlayback? _livePlayback;
-
-  Timer? _liveWatchdogTimer;
-  bool _reconnectLiveOnResume = false;
+  late final CameraLiveSession _liveSession;
   bool _liveSuspendedForCoveredRoute = false;
-  int _liveSessionToken = 0;
-  Duration? _lastLivePosition;
-  int _liveStalledChecks = 0;
 
-  bool _liveLoading = true;
-  Object? _liveError;
   bool _audioEnabled = true;
   bool _snapshotLoading = false;
 
@@ -55,7 +46,12 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
 
     _cameraStateStream = _cameraProvider.watchState();
 
-    unawaited(_initializeLive());
+    _liveSession = CameraLiveSession(
+      _cameraProvider,
+      onAvailabilityChanged: (online) =>
+          unawaited(_persistCameraAvailability(online)),
+    )..addListener(_refreshLive);
+    _syncLiveActivity();
   }
 
   Future<void> _persistCameraAvailability(bool isOnline) async {
@@ -72,318 +68,44 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     }
   }
 
-  Future<void> _initializeLive({bool tryAlternate = false}) async {
-    if (_liveSuspendedForCoveredRoute || !mounted) {
-      return;
-    }
-
-    final sessionToken = ++_liveSessionToken;
-    VideoPlayerController? nextController;
-
-    try {
-      if (!tryAlternate) {
-        await _cameraProvider.connect();
-        if (!_isLiveSessionCurrent(sessionToken)) return;
-        _livePlayback = CameraLivePlayback(_cameraProvider);
-      }
-
-      nextController = await _livePlayback!.openNext(
-        isActive: () => _isLiveSessionCurrent(sessionToken),
-        volume: _audioEnabled ? 1 : 0,
-      );
-      if (nextController == null) return;
-      if (!_isLiveSessionCurrent(sessionToken)) {
-        await nextController.dispose();
-        return;
-      }
-
-      await _cameraProvider.startLive();
-
-      if (!_isLiveSessionCurrent(sessionToken)) {
-        await nextController.dispose();
-        return;
-      }
-
-      final previousController = _videoController;
-
-      previousController?.removeListener(_handleLiveControllerChanged);
-
-      _videoController = nextController;
-
-      nextController.addListener(_handleLiveControllerChanged);
-      _startLiveWatchdog();
-
-      setState(() {
-        _liveError = null;
-        _liveLoading = false;
-      });
-      unawaited(_persistCameraAvailability(true));
-      if (previousController != null) {
-        await previousController.dispose();
-      }
-    } catch (error) {
-      await nextController?.dispose();
-
-      if (!_isLiveSessionCurrent(sessionToken)) {
-        return;
-      }
-
-      _stopLiveWatchdog();
-      debugPrint(
-        'CAMERA LIVE ERROR '
-        '[${widget.camera.id}]: ${error.runtimeType}',
-      );
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _videoController = null;
-        _liveError = error;
-        _liveLoading = false;
-      });
-      unawaited(_persistCameraAvailability(false));
-    }
+  void _refreshLive() {
+    if (mounted) setState(() {});
   }
 
-  bool _isLiveSessionCurrent(int sessionToken) {
-    return mounted &&
-        !_liveSuspendedForCoveredRoute &&
-        sessionToken == _liveSessionToken;
-  }
-
-  void _handleLiveControllerChanged() {
-    final controller = _videoController;
-
-    if (controller == null || !mounted || _liveLoading || _liveError != null) {
-      return;
-    }
-
-    final value = controller.value;
-
-    if (!value.hasError) {
-      return;
-    }
-
-    debugPrint('CAMERA LIVE PLAYBACK ERROR [${widget.camera.id}]');
-    unawaited(_recoverLive('Odtwarzacz przerwał podgląd.'));
-  }
-
-  Future<void> _recoverLive(String message) async {
-    if (!mounted || _liveLoading || _liveError != null) return;
-    _stopLiveWatchdog();
-    final controller = _videoController;
-    final canRetry = _livePlayback?.hasNext == true;
-    final token = _liveSessionToken;
-    controller?.removeListener(_handleLiveControllerChanged);
-    setState(() {
-      _videoController = null;
-      _liveLoading = canRetry;
-      _liveError = canRetry ? null : CameraConnectionIssue(message);
-    });
-    try {
-      await controller?.dispose().timeout(const Duration(seconds: 3));
-    } catch (_) {
-      debugPrint('CAMERA LIVE: nie udało się zamknąć podglądu.');
-    }
-    if (!_isLiveSessionCurrent(token)) return;
-    try {
-      await _cameraProvider.stopLive();
-    } catch (_) {
-      // A failed remote stream may already have closed.
-    }
-    if (!_isLiveSessionCurrent(token)) return;
-    if (canRetry) {
-      await _initializeLive(tryAlternate: true);
+  void _syncLiveActivity([AppLifecycleState? lifecycle]) {
+    final state = lifecycle ?? WidgetsBinding.instance.lifecycleState;
+    final isForeground = state == null || state == AppLifecycleState.resumed;
+    if (isForeground && !_liveSuspendedForCoveredRoute) {
+      unawaited(_liveSession.resume());
     } else {
-      unawaited(_persistCameraAvailability(false));
+      unawaited(_liveSession.suspend());
     }
-  }
-
-  void _startLiveWatchdog() {
-    _liveWatchdogTimer?.cancel();
-
-    _lastLivePosition = _videoController?.value.position;
-    _liveStalledChecks = 0;
-
-    _liveWatchdogTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _checkLiveWatchdog(),
-    );
-  }
-
-  void _stopLiveWatchdog() {
-    _liveWatchdogTimer?.cancel();
-    _liveWatchdogTimer = null;
-    _lastLivePosition = null;
-    _liveStalledChecks = 0;
-  }
-
-  void _checkLiveWatchdog() {
-    final controller = _videoController;
-
-    if (!mounted ||
-        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed ||
-        _liveLoading ||
-        _liveError != null ||
-        controller == null ||
-        !controller.value.isInitialized) {
-      _lastLivePosition = controller?.value.position;
-      _liveStalledChecks = 0;
-      return;
-    }
-
-    if (controller.value.hasError) {
-      _handleLiveControllerChanged();
-      return;
-    }
-
-    final currentPosition = controller.value.position;
-    final previousPosition = _lastLivePosition;
-
-    _lastLivePosition = currentPosition;
-
-    if (previousPosition == null || currentPosition > previousPosition) {
-      _liveStalledChecks = 0;
-      return;
-    }
-
-    _liveStalledChecks += 1;
-
-    if (_liveStalledChecks < 3) {
-      return;
-    }
-
-    const message = 'Strumień LIVE przestał przesyłać obraz.';
-
-    debugPrint(
-      'CAMERA LIVE WATCHDOG '
-      '[${widget.camera.id}]: $message',
-    );
-
-    unawaited(_recoverLive(message));
-  }
-
-  Future<void> _retryLive() async {
-    if (_liveLoading || _liveSuspendedForCoveredRoute) {
-      return;
-    }
-
-    _stopLiveWatchdog();
-
-    final controller = _videoController;
-    _videoController = null;
-
-    setState(() {
-      _liveLoading = true;
-      _liveError = null;
-    });
-
-    if (controller != null) {
-      controller.removeListener(_handleLiveControllerChanged);
-
-      try {
-        await controller.dispose();
-      } catch (error) {
-        debugPrint('CAMERA LIVE DISPOSE ERROR: ${error.runtimeType}');
-      }
-    }
-
-    try {
-      await _cameraProvider.stopLive();
-    } catch (error) {
-      debugPrint('CAMERA LIVE STOP ERROR: ${error.runtimeType}');
-    }
-
-    if (!mounted) {
-      return;
-    }
-
-    await _initializeLive();
-  }
-
-  Future<void> _suspendLiveForCoveredRoute() async {
-    if (_liveSuspendedForCoveredRoute) {
-      return;
-    }
-
-    _liveSuspendedForCoveredRoute = true;
-    _liveSessionToken += 1;
-    _stopLiveWatchdog();
-
-    final controller = _videoController;
-    _videoController = null;
-
-    if (mounted) {
-      setState(() {
-        _liveLoading = true;
-        _liveError = null;
-      });
-    }
-
-    if (controller != null) {
-      controller.removeListener(_handleLiveControllerChanged);
-
-      try {
-        await controller.dispose();
-      } catch (error) {
-        debugPrint(
-          'CAMERA LIVE ROUTE DISPOSE ERROR: '
-          '${error.runtimeType}',
-        );
-      }
-    }
-
-    try {
-      await _cameraProvider.stopLive();
-    } catch (error) {
-      debugPrint(
-        'CAMERA LIVE ROUTE STOP ERROR: '
-        '${error.runtimeType}',
-      );
-    }
-  }
-
-  Future<void> _resumeLiveAfterCoveredRoute() async {
-    if (!mounted || _liveSuspendedForCoveredRoute) {
-      return;
-    }
-
-    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
-      _reconnectLiveOnResume = true;
-      return;
-    }
-
-    await _initializeLive();
   }
 
   Future<T?> _pushWithoutBackgroundLive<T>(
     Route<T> route, {
     bool Function(T? result)? shouldResume,
   }) async {
-    await _suspendLiveForCoveredRoute();
+    if (_liveSuspendedForCoveredRoute) return null;
+    _liveSuspendedForCoveredRoute = true;
+    await _liveSession.suspend();
 
-    if (!mounted) {
-      return null;
-    }
+    if (!mounted) return null;
 
     T? result;
-
     try {
       result = await Navigator.of(context).push<T>(route);
       return result;
     } finally {
-      _liveSuspendedForCoveredRoute = false;
-
       if (mounted && (shouldResume?.call(result) ?? true)) {
-        await _resumeLiveAfterCoveredRoute();
+        _liveSuspendedForCoveredRoute = false;
+        _syncLiveActivity();
       }
     }
   }
 
   Future<void> _toggleAudio() async {
-    final controller = _videoController;
+    final controller = _liveSession.controller;
 
     if (controller == null || !controller.value.isInitialized) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -401,7 +123,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     final nextValue = !_audioEnabled;
 
     try {
-      await controller.setVolume(nextValue ? 1 : 0);
+      await _liveSession.setVolume(nextValue ? 1 : 0);
 
       if (!mounted) {
         return;
@@ -486,61 +208,24 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden) {
-      final controller = _videoController;
-
-      _stopLiveWatchdog();
-
-      if (controller != null &&
-          controller.value.isInitialized &&
-          _liveError == null) {
-        _reconnectLiveOnResume = true;
-        unawaited(controller.pause());
-      } else {
-        _reconnectLiveOnResume = false;
-      }
-
-      return;
-    }
-
-    if (state == AppLifecycleState.resumed && _reconnectLiveOnResume) {
-      _reconnectLiveOnResume = false;
-      unawaited(_retryLive());
-    }
+    _syncLiveActivity(state);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _reconnectLiveOnResume = false;
-    _liveSuspendedForCoveredRoute = true;
-    _liveSessionToken += 1;
-    _stopLiveWatchdog();
-    final controller = _videoController;
-    _videoController = null;
-
-    if (controller != null) {
-      controller.removeListener(_handleLiveControllerChanged);
-
-      unawaited(controller.dispose());
-    }
-    unawaited(_cameraProvider.stopLive());
-
-    unawaited(_cameraProvider.disconnect());
-
-    unawaited(_cameraProvider.dispose());
-
+    _liveSession.removeListener(_refreshLive);
+    _liveSession.dispose();
     super.dispose();
   }
 
   String _statusLabel(CameraRuntimeState state) {
-    if (_liveLoading || state.isConnecting) {
-      return 'Łączenie...';
+    if (_liveSession.phase == CameraLivePhase.reconnecting ||
+        _liveSession.phase == CameraLivePhase.retryScheduled) {
+      return 'Wznawianie…';
     }
-
-    if (_liveError != null) return 'Brak podglądu';
+    if (_liveSession.isConnecting || state.isConnecting) return 'Łączenie…';
+    if (_liveSession.error != null) return 'Brak podglądu';
 
     if (!state.isOnline) {
       return 'Offline';
@@ -554,11 +239,12 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   }
 
   Color _statusColor(CameraRuntimeState state) {
-    if (_liveLoading || state.isConnecting) {
+    if (_liveSession.isConnecting ||
+        _liveSession.phase == CameraLivePhase.retryScheduled ||
+        state.isConnecting) {
       return Colors.orange;
     }
-
-    if (_liveError != null) return Colors.red;
+    if (_liveSession.error != null) return Colors.red;
 
     if (!state.isOnline) {
       return Colors.red;
@@ -650,7 +336,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   }
 
   Future<void> _openLiveFullscreen() async {
-    final controller = _videoController;
+    final controller = _liveSession.controller;
 
     if (controller == null || !controller.value.isInitialized) {
       return;
@@ -658,76 +344,17 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
 
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) {
-          return CameraFullscreenLiveView(controller: controller);
-        },
+        builder: (_) => CameraFullscreenLiveView.live(session: _liveSession),
       ),
     );
-
-    if (mounted) {
-      setState(() {});
-    }
   }
 
   Widget _buildLivePreview() {
-    if (_liveLoading) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(color: Colors.white70),
-            SizedBox(height: 12),
-            Text(
-              'Łączenie z kamerą...',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ],
-        ),
-      );
-    }
-
-    final liveError = _liveError;
-    if (liveError != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.videocam_off_outlined,
-                size: 56,
-                color: Colors.white70,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                liveError is CameraConnectionIssue
-                    ? liveError.message
-                    : 'Nie udało się połączyć ze strumieniem LIVE.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70),
-              ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _retryLive,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Połącz ponownie'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final controller = _videoController;
-
-    if (controller == null || !controller.value.isInitialized) {
-      return const Center(
-        child: Icon(
-          Icons.videocam_off_outlined,
-          size: 56,
-          color: Colors.white70,
-        ),
+    final controller = _liveSession.controller;
+    if (controller == null) {
+      return CameraLivePlaceholder(
+        session: _liveSession,
+        color: Colors.white70,
       );
     }
 
