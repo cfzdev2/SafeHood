@@ -5,8 +5,10 @@ import 'package:video_player/video_player.dart';
 
 import '../../cameras/data/camera_provider_factory.dart';
 import '../../cameras/data/camera_live_session.dart';
+import '../../cameras/data/live_motion_monitor.dart';
 import '../../cameras/domain/camera.dart';
 import '../../cameras/presentation/widgets/camera_live_placeholder.dart';
+import '../../cameras/presentation/widgets/live_motion_status_tile.dart';
 import 'package:flutter/services.dart';
 
 class CameraEventLiveScreen extends StatefulWidget {
@@ -21,11 +23,13 @@ class CameraEventLiveScreen extends StatefulWidget {
 class _CameraEventLiveScreenState extends State<CameraEventLiveScreen>
     with WidgetsBindingObserver {
   late final CameraLiveSession _session;
+  LiveMotionMonitor? _motion;
 
   @override
   void initState() {
     super.initState();
     _session = CameraLiveSession(CameraProviderFactory.create(widget.camera));
+    _motion = LiveMotionMonitor.attach(widget.camera, _session);
     WidgetsBinding.instance.addObserver(this);
     _syncLiveActivity(WidgetsBinding.instance.lifecycleState);
   }
@@ -54,6 +58,7 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _motion?.dispose();
     _session.dispose();
     super.dispose();
   }
@@ -157,6 +162,7 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen>
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodySmall,
         ),
+        if (_motion case final motion?) LiveMotionStatusTile(monitor: motion),
       ],
     );
   }

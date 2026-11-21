@@ -18,11 +18,16 @@ import io.flutter.plugins.videoplayer.platformview.PlatformVideoViewFactory;
 import io.flutter.plugins.videoplayer.platformview.PlatformViewVideoPlayer;
 import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import io.flutter.view.TextureRegistry;
+import java.util.HashMap;
+import java.util.Map;
 
 /** Android platform implementation of the VideoPlayerPlugin. */
 public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
   private static final String TAG = "VideoPlayerPlugin";
   private final LongSparseArray<VideoPlayer> videoPlayers = new LongSparseArray<>();
+  private final Map<String, TextureVideoPlayer> framePlayers = new HashMap<>();
+  private final LongSparseArray<String> frameSessions = new LongSparseArray<>();
+  @Nullable private VideoFrameSampler frameSampler;
   private FlutterState flutterState;
   private final VideoPlayerOptions sharedOptions = new VideoPlayerOptions();
   private long nextPlayerIdentifier = 1;
@@ -41,6 +46,13 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             injector.flutterLoader()::getLookupKeyForAsset,
             binding.getTextureRegistry());
     flutterState.startListening(this, binding.getBinaryMessenger());
+    frameSampler =
+        new VideoFrameSampler(
+            binding.getBinaryMessenger(),
+            session -> {
+              TextureVideoPlayer player = framePlayers.get(session);
+              return player == null ? null : player.getPlayingSurface();
+            });
 
     binding
         .getPlatformViewRegistry()
@@ -55,11 +67,17 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
       Log.wtf(TAG, "Detached from the engine before registering to it.");
     }
     flutterState.stopListening(binding.getBinaryMessenger());
+    if (frameSampler != null) {
+      frameSampler.close();
+      frameSampler = null;
+    }
     flutterState = null;
     onDestroy();
   }
 
   private void disposeAllPlayers() {
+    framePlayers.clear();
+    frameSessions.clear();
     for (int i = 0; i < videoPlayers.size(); i++) {
       videoPlayers.valueAt(i).dispose();
     }
@@ -112,7 +130,7 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     VideoPlayerOptions playerOptions = new VideoPlayerOptions(sharedOptions);
     playerOptions.backBufferDurationMs = options.getBackBufferDurationMs();
 
-    VideoPlayer videoPlayer =
+    TextureVideoPlayer videoPlayer =
         TextureVideoPlayer.create(
             flutterState.applicationContext,
             VideoPlayerEventCallbacks.bindTo(flutterState.binaryMessenger, streamInstance),
@@ -121,6 +139,11 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             playerOptions);
 
     registerPlayerInstance(videoPlayer, id);
+    String frameSession = options.getHttpHeaders().get("X-SafeHood-Frame-Session");
+    if (videoAsset instanceof RtspVideoAsset && frameSession != null) {
+      framePlayers.put(frameSession, videoPlayer);
+      frameSessions.put(id, frameSession);
+    }
     return new TexturePlayerIds(id, handle.id());
   }
 
@@ -184,6 +207,8 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
   @Override
   public void dispose(long playerId) {
     VideoPlayer player = getPlayer(playerId);
+    framePlayers.remove(frameSessions.get(playerId));
+    frameSessions.remove(playerId);
     player.dispose();
     videoPlayers.remove(playerId);
   }

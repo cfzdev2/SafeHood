@@ -51,6 +51,7 @@ const {
   decodeJpegBase64,
   maximumSnapshotBytes,
   normalizeDocumentId,
+  savePhoneMotionSnapshot,
 } = require(
     "./camera_event_snapshot",
 );
@@ -2463,6 +2464,12 @@ async function ingestCameraEventInternal(
           input.source,
       );
 
+  const phoneMotion = source === "phone-motion";
+  if (phoneMotion && (input.phoneMotion !== true || type !== "motion")) {
+    throw new HttpsError(
+        "invalid-argument", "Nieprawidłowe wykrycie ruchu z telefonu.");
+  }
+
   const confidence =
       normalizeConfidence(
           input.confidence,
@@ -2605,6 +2612,15 @@ async function ingestCameraEventInternal(
             throw new HttpsError(
                 "failed-precondition",
                 "Kamera jest usuwana.",
+            );
+          }
+          if (phoneMotion && (
+            cameraData.liveMotionEnabled !== true ||
+            !["onvif", "rtsp"].includes(cameraData.connectionType)
+          )) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Wykrywanie ruchu podczas podglądu jest wyłączone.",
             );
           }
           const cameraName =
@@ -3007,6 +3023,23 @@ async function ingestCameraEventInternal(
           });
         },
     );
+  if (phoneMotion && input.phoneSnapshot) {
+    try {
+      await savePhoneMotionSnapshot({
+        bucket: getStorage().bucket(),
+        eventRef: eventsCollection.doc(result.eventId),
+        ownerId,
+        cameraId,
+        eventId: result.eventId,
+        jpeg: input.phoneSnapshot,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      // The motion event and owner alert still work if storage is unavailable.
+      console.warn("PHONE MOTION SNAPSHOT:", error.code || "storage-error");
+    }
+  }
+
   if (result.notificationRequired && !result.duplicate) {
     try {
       await sendCameraEventNotification({
@@ -4971,6 +5004,23 @@ exports.ingestCameraEvent = onCall(
       const data =
           request.data || {};
 
+      const phoneMotion = normalizeCameraEventSource(data.source) ===
+        "phone-motion";
+      let phoneSnapshot = null;
+      if (phoneMotion) {
+        try {
+          normalizeDocumentId(data.cameraId, "cameraId");
+          if (data.phoneSnapshot != null) {
+            phoneSnapshot = decodeJpegBase64(data.phoneSnapshot, {
+              maximumBytes: 256 * 1024,
+            });
+          }
+        } catch (_) {
+          throw new HttpsError(
+              "invalid-argument", "Nieprawidłowe dane wykrycia z telefonu.");
+        }
+      }
+
       const cameraId =
           typeof data.cameraId === "string" ?
             data.cameraId.trim() :
@@ -4989,11 +5039,13 @@ exports.ingestCameraEvent = onCall(
             cameraId,
             type: data.type,
             source: data.source,
+            phoneMotion,
+            phoneSnapshot,
             confidence: data.confidence,
             snapshotUrl:
-                data.snapshotUrl,
+                phoneMotion ? null : data.snapshotUrl,
             clipUrl:
-                data.clipUrl,
+                phoneMotion ? null : data.clipUrl,
             occurredAt:
                 data.occurredAt,
           });

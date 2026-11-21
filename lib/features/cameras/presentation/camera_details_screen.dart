@@ -6,12 +6,14 @@ import 'package:video_player/video_player.dart';
 import '../../incidents/data/incident_service.dart';
 import '../data/camera_provider_factory.dart';
 import '../data/camera_live_session.dart';
+import '../data/live_motion_monitor.dart';
 import '../domain/camera.dart';
 import '../domain/camera_provider.dart';
 import '../../camera_events/presentation/camera_event_history_screen.dart';
 import 'camera_settings_screen.dart';
 import 'widgets/camera_controls_panel.dart';
 import 'widgets/camera_live_placeholder.dart';
+import 'widgets/live_motion_status_tile.dart';
 import 'camera_recordings_screen.dart';
 import 'camera_snapshot_preview_screen.dart';
 import '../data/camera_service.dart';
@@ -33,6 +35,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   final CameraService _cameraService = CameraService();
 
   late final CameraLiveSession _liveSession;
+  LiveMotionMonitor? _liveMotion;
   bool _liveSuspendedForCoveredRoute = false;
 
   bool _audioEnabled = true;
@@ -51,6 +54,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
       onAvailabilityChanged: (online) =>
           unawaited(_persistCameraAvailability(online)),
     )..addListener(_refreshLive);
+    _liveMotion = LiveMotionMonitor.attach(widget.camera, _liveSession);
     _syncLiveActivity();
   }
 
@@ -215,6 +219,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _liveSession.removeListener(_refreshLive);
+    _liveMotion?.dispose();
     _liveSession.dispose();
     super.dispose();
   }
@@ -520,6 +525,8 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
                 audioEnabled: _audioEnabled,
                 onToggleAudio: _toggleAudio,
               ),
+              if (_liveMotion case final motion?)
+                LiveMotionStatusTile(monitor: motion),
 
               const SizedBox(height: 24),
 

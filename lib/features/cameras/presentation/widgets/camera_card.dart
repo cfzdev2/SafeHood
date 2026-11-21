@@ -104,6 +104,12 @@ class CameraCard extends StatelessWidget {
                           label: _statusLabel(effectiveStatus),
                           color: monitoringColor,
                         ),
+                        if (camera.liveMotionEnabled)
+                          _buildStatusChip(
+                            context,
+                            label: 'Ruch podczas podglądu',
+                            color: Colors.blue,
+                          ),
                       ],
                     ),
                   ],

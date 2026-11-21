@@ -224,6 +224,7 @@ service cloud.firestore {
           'name',
           'locationName',
           'motionDetectionEnabled',
+          'liveMotionEnabled',
           'notificationSettings',
           'isOnline',
           'availabilityCheckedAt',
@@ -265,6 +266,14 @@ service cloud.firestore {
           ])
           || request.resource.data.motionDetectionEnabled
              is bool
+        )
+
+        && (
+          !changedKeys.hasAny(['liveMotionEnabled'])
+          || (
+            request.resource.data.liveMotionEnabled is bool
+            && resource.data.connectionType in ['onvif', 'rtsp']
+          )
         )
 
         && (

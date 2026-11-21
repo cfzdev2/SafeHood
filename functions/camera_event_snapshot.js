@@ -179,6 +179,46 @@ function buildSnapshotPath(
   );
 }
 
+/**
+ * Attaches the first available JPEG to this private event.
+ * @param {Object} input Storage and event references.
+ * @return {Promise<void>}
+ */
+async function savePhoneMotionSnapshot({
+  bucket, eventRef, ownerId, cameraId, eventId, jpeg, timestamp,
+}) {
+  const snapshotPath = buildSnapshotPath(ownerId, eventId);
+  const event = (await eventRef.get()).data();
+  if (!event || event.ownerId !== ownerId || event.cameraId !== cameraId ||
+      event.snapshotPath) return;
+
+  const file = bucket.file(snapshotPath);
+  try {
+    await file.save(jpeg, {
+      resumable: false,
+      validation: "crc32c",
+      preconditionOpts: {ifGenerationMatch: 0},
+      metadata: {
+        contentType: "image/jpeg",
+        cacheControl: "private, max-age=3600",
+        metadata: {ownerId, cameraId, eventId, source: "phone-motion"},
+      },
+    });
+  } catch (error) {
+    if (Number(error.code) !== 412) throw error;
+    const [existing] = await file.getMetadata();
+    const metadata = existing.metadata || {};
+    if (existing.contentType !== "image/jpeg" ||
+        metadata.ownerId !== ownerId || metadata.cameraId !== cameraId ||
+        metadata.eventId !== eventId) throw error;
+  }
+  await eventRef.update({
+    snapshotPath,
+    snapshotUpdatedAt: timestamp,
+    updatedAt: timestamp,
+  });
+}
+
 module.exports = {
   CameraEventSnapshotError,
   buildSnapshotPath,
@@ -186,4 +226,5 @@ module.exports = {
   isJpeg,
   maximumSnapshotBytes,
   normalizeDocumentId,
+  savePhoneMotionSnapshot,
 };

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../data/camera_service.dart';
+import '../data/live_motion_monitor.dart';
 import '../data/local_camera_connection.dart';
 import 'camera_wifi_setup_screen.dart';
 import 'local_camera_connection_dialog.dart';
@@ -36,6 +37,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
   final UserProfileService _profileService = UserProfileService();
 
   late bool _monitoringEnabled;
+  late bool _liveMotionEnabled;
+  bool _savingLiveMotion = false;
   late bool _aiEnabled;
   late bool _aiPersonEnabled;
   late bool _aiVehicleEnabled;
@@ -64,6 +67,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     super.initState();
 
     _monitoringEnabled = widget.camera.motionDetectionEnabled;
+    _liveMotionEnabled = widget.camera.liveMotionEnabled;
     _aiEnabled = widget.camera.aiEnabled;
     _aiPersonEnabled = widget.camera.aiPersonEnabled;
     _aiVehicleEnabled = widget.camera.aiVehicleEnabled;
@@ -94,6 +98,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           _cameraName = currentCamera.name;
           _locationName = currentCamera.locationName;
           _monitoringEnabled = currentCamera.motionDetectionEnabled;
+          _liveMotionEnabled = currentCamera.liveMotionEnabled;
           _aiEnabled = currentCamera.aiEnabled;
           _aiPersonEnabled = currentCamera.aiPersonEnabled;
           _aiVehicleEnabled = currentCamera.aiVehicleEnabled;
@@ -253,6 +258,23 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           _savingDetails = false;
         });
       }
+    }
+  }
+
+  Future<void> _setLiveMotionEnabled(bool enabled) async {
+    setState(() => _savingLiveMotion = true);
+    try {
+      await _cameraService.setLiveMotionEnabled(widget.camera.id, enabled);
+      if (mounted) setState(() => _liveMotionEnabled = enabled);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nie udało się zapisać ustawienia ruchu.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _savingLiveMotion = false);
     }
   }
 
@@ -574,11 +596,16 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     final user = FirebaseAuth.instance.currentUser;
     final bridgeId = widget.camera.bridgeId;
     final rtspOnly = widget.camera.connectionType == CameraConnectionType.rtsp;
+    final phoneMotionAvailable = supportsLiveMotion(widget.camera);
+    final offersNotifications = !rtspOnly || _liveMotionEnabled;
     final notificationsBusy =
         _loadingNotifications || _savingNotifications || _deleting;
 
     final notificationTypesEnabled =
-        _notificationSettings.enabled && !notificationsBusy && !rtspOnly;
+        _notificationSettings.enabled &&
+        !notificationsBusy &&
+        offersNotifications;
+    final otherDetectionAlerts = notificationTypesEnabled && !rtspOnly;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Ustawienia kamery')),
@@ -680,29 +707,51 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           Card(
             child: Column(
               children: [
-                SwitchListTile.adaptive(
-                  secondary: const Icon(Icons.sensors_outlined),
-                  title: const Text('Monitoring przez SafeHood'),
-                  subtitle: Text(
-                    rtspOnly
-                        ? 'Połączenie RTSP służy do podglądu. Monitoring przez '
-                              'Bridge wymaga kamery ONVIF.'
-                        : _monitoringEnabled
-                        ? 'SafeHood odbiera i zapisuje '
-                              'zdarzenia z kamery.'
-                        : 'Zdarzenia z kamery nie są '
-                              'odbierane ani zapisywane.',
+                if (!rtspOnly || !phoneMotionAvailable)
+                  SwitchListTile.adaptive(
+                    secondary: const Icon(Icons.sensors_outlined),
+                    title: Text(
+                      widget.camera.monitoringMode ==
+                              CameraMonitoringMode.bridge
+                          ? 'Monitoring przez Bridge'
+                          : 'Monitoring przez SafeHood',
+                    ),
+                    subtitle: Text(
+                      rtspOnly
+                          ? 'Połączenie RTSP służy do podglądu. Monitoring przez '
+                                'Bridge wymaga kamery ONVIF.'
+                          : _monitoringEnabled
+                          ? 'SafeHood odbiera i zapisuje '
+                                'zdarzenia z kamery.'
+                          : 'Zdarzenia z kamery nie są '
+                                'odbierane ani zapisywane.',
+                    ),
+                    value: _monitoringEnabled && !rtspOnly,
+                    onChanged:
+                        rtspOnly ||
+                            _loadingMonitoring ||
+                            _savingMonitoring ||
+                            _deleting
+                        ? null
+                        : _setMonitoringEnabled,
                   ),
-                  value: _monitoringEnabled && !rtspOnly,
-                  onChanged:
-                      rtspOnly ||
-                          _loadingMonitoring ||
-                          _savingMonitoring ||
-                          _deleting
-                      ? null
-                      : _setMonitoringEnabled,
-                ),
-                if (_loadingMonitoring || _savingMonitoring)
+                if (phoneMotionAvailable)
+                  SwitchListTile.adaptive(
+                    secondary: const Icon(Icons.directions_run),
+                    title: const Text('Ruch podczas podglądu'),
+                    subtitle: const Text(
+                      'Android wykrywa ruch przy otwartym obrazie na żywo. '
+                      'Zdjęcia są zapisywane w Twojej prywatnej historii.',
+                    ),
+                    value: _liveMotionEnabled,
+                    onChanged:
+                        _loadingMonitoring || _savingLiveMotion || _deleting
+                        ? null
+                        : _setLiveMotionEnabled,
+                  ),
+                if (_loadingMonitoring ||
+                    _savingMonitoring ||
+                    _savingLiveMotion)
                   const LinearProgressIndicator(),
               ],
             ),
@@ -873,15 +922,15 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                   secondary: const Icon(Icons.notifications_outlined),
                   title: const Text('Powiadomienia z kamery'),
                   subtitle: Text(
-                    rtspOnly
-                        ? 'To połączenie nie dostarcza zdarzeń do powiadomień.'
+                    !offersNotifications
+                        ? 'Włącz wykrywanie ruchu podczas podglądu, aby otrzymywać alerty.'
                         : _notificationSettings.enabled
                         ? 'SafeHood wyśle wybrane alerty.'
                         : 'Zdarzenia będą zapisywane, '
                               'ale bez powiadomień.',
                   ),
-                  value: _notificationSettings.enabled && !rtspOnly,
-                  onChanged: notificationsBusy || rtspOnly
+                  value: _notificationSettings.enabled && offersNotifications,
+                  onChanged: notificationsBusy || !offersNotifications
                       ? null
                       : (enabled) {
                           unawaited(
@@ -913,7 +962,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                   secondary: const Icon(Icons.person_outline),
                   title: const Text('Wykrycie osoby'),
                   value: _notificationSettings.personEnabled,
-                  onChanged: notificationTypesEnabled
+                  onChanged: otherDetectionAlerts
                       ? (enabled) {
                           unawaited(
                             _setNotificationSettings(
@@ -930,7 +979,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                   secondary: const Icon(Icons.directions_car_outlined),
                   title: const Text('Wykrycie pojazdu'),
                   value: _notificationSettings.vehicleEnabled,
-                  onChanged: notificationTypesEnabled
+                  onChanged: otherDetectionAlerts
                       ? (enabled) {
                           unawaited(
                             _setNotificationSettings(
@@ -947,7 +996,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                   secondary: const Icon(Icons.volume_up_outlined),
                   title: const Text('Wykrycie dźwięku'),
                   value: _notificationSettings.soundEnabled,
-                  onChanged: notificationTypesEnabled
+                  onChanged: otherDetectionAlerts
                       ? (enabled) {
                           unawaited(
                             _setNotificationSettings(

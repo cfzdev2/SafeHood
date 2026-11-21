@@ -60,3 +60,20 @@ Jeśli kamera udostępnia drugi profil ONVIF, wypróbuj podgląd przy słabszym
 Wi-Fi. Jedna przerwa nie powinna zmienić jakości. Przy powtarzających się
 zacięciach SafeHood może wybrać mniejszy obraz. Po ustabilizowaniu obrazu
 otwórz LIVE ponownie i sprawdź, czy aplikacja zaczyna od tej jakości.
+
+## Próba wykrywania ruchu na telefonie
+
+Zaktualizuj aplikację na Androidzie przez ponowne uruchomienie `flutter run`
+oraz uruchom ponownie dotychczasowe emulatory Firebase z tymi samymi danymi.
+W **Moje kamery → robot… → Ustawienia** włącz **Ruch podczas podglądu**.
+W sekcji **Powiadomienia** włącz alerty i **Wykrycie ruchu**. Otwórz LIVE,
+poczekaj na informację o aktywnym wykrywaniu i przejdź w kadrze. Sprawdź
+własny alert oraz zdarzenie ze zdjęciem w historii. Funkcja korzysta z
+odtwarzanego obrazu i działa również na pełnym ekranie. Po wyjściu z LIVE
+lub przejściu aplikacji w tło telefon przestaje analizować obraz.
+
+Do tej próby kamera nie musi być dostępna z komputera Bridge. Telefon
+potrzebuje połączenia z kamerą i z backendem SafeHood. Wykrycia dotyczą
+ruchu w obrazie; klasyfikacja osób i pojazdów to kolejny etap.
+
+Test backendu: `npm --prefix functions run test:phone-motion`.

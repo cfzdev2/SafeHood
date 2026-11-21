@@ -5,12 +5,18 @@ Source-only copy of Flutter's `video_player_android` 2.12.0 from the
 Original archive SHA-256:
 `e229676f8fade3e0124482495aaa2b548872cc4018b6268adfca4868be16aa74`.
 
-The local changes are limited to `VideoPlayerPlugin.java`, `VideoAsset.java`,
-and `RtspVideoAsset.java`. For RTSP URLs they translate the in-process
+For RTSP URLs the local changes translate the in-process
 `X-SafeHood-Rtsp-Transport: tcp` playback option into Media3's
 `setForceUseRtpTcp(true)`. It is not a network header. Without this option
 the player keeps upstream's UDP-first behavior. HTTP/HLS and event recordings
 are unaffected. No developer package cache is modified.
+
+The `safehood/camera_frame` method channel samples the surface of an existing
+RTSP texture player for foreground motion detection. It uses Android
+`PixelCopy` on a worker thread and does not copy the screen or start another
+video connection. Stopping playback or disposing the player makes sampling
+unavailable. The channel returns a small luma frame, or a bounded JPEG when
+requested for a detected event.
 
 When upgrading, replace the vendored source with the new upstream version and
 carry forward this option until upstream offers an equivalent API. Retain

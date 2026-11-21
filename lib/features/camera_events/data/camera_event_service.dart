@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -224,6 +227,7 @@ class CameraEventService {
     String? snapshotUrl,
     String? clipUrl,
     DateTime? occurredAt,
+    Uint8List? phoneSnapshot,
   }) async {
     _requireUid();
 
@@ -245,6 +249,7 @@ class CameraEventService {
       'cameraId': normalizedCameraId,
       'type': normalizedType,
       'source': source.trim().isEmpty ? 'unknown' : source.trim(),
+      if (phoneSnapshot != null) 'phoneSnapshot': base64Encode(phoneSnapshot),
       'confidence': ?confidence,
       if (snapshotUrl != null && snapshotUrl.trim().isNotEmpty)
         'snapshotUrl': snapshotUrl.trim(),

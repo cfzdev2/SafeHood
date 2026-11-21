@@ -41,6 +41,7 @@ class Camera {
   // Określa, czy SafeHood ma
   // monitorować zdarzenia kamery.
   final bool motionDetectionEnabled;
+  final bool liveMotionEnabled;
   final bool aiEnabled;
   final bool aiPersonEnabled;
   final bool aiVehicleEnabled;
@@ -85,6 +86,7 @@ class Camera {
     required this.isOnline,
     this.availabilityCheckedAt,
     required this.motionDetectionEnabled,
+    this.liveMotionEnabled = false,
     this.aiEnabled = false,
     this.aiPersonEnabled = true,
     this.aiVehicleEnabled = true,
@@ -120,6 +122,7 @@ class Camera {
     bool? isOnline,
     DateTime? availabilityCheckedAt,
     bool? motionDetectionEnabled,
+    bool? liveMotionEnabled,
     bool? aiEnabled,
     bool? aiPersonEnabled,
     bool? aiVehicleEnabled,
@@ -151,6 +154,7 @@ class Camera {
           availabilityCheckedAt ?? this.availabilityCheckedAt,
       motionDetectionEnabled:
           motionDetectionEnabled ?? this.motionDetectionEnabled,
+      liveMotionEnabled: liveMotionEnabled ?? this.liveMotionEnabled,
       aiEnabled: aiEnabled ?? this.aiEnabled,
       aiPersonEnabled: aiPersonEnabled ?? this.aiPersonEnabled,
       aiVehicleEnabled: aiVehicleEnabled ?? this.aiVehicleEnabled,
@@ -183,6 +187,7 @@ class Camera {
       'isOnline': isOnline,
       'availabilityCheckedAt': availabilityCheckedAt,
       'motionDetectionEnabled': motionDetectionEnabled,
+      'liveMotionEnabled': liveMotionEnabled,
       'aiEnabled': aiEnabled,
       'aiPersonEnabled': aiPersonEnabled,
       'aiVehicleEnabled': aiVehicleEnabled,
@@ -218,6 +223,7 @@ class Camera {
       availabilityCheckedAt: (map['availabilityCheckedAt'] as Timestamp?)
           ?.toDate(),
       motionDetectionEnabled: map['motionDetectionEnabled'] as bool? ?? true,
+      liveMotionEnabled: map['liveMotionEnabled'] == true,
       aiEnabled: map['aiEnabled'] == true,
       aiPersonEnabled: map['aiPersonEnabled'] is bool
           ? map['aiPersonEnabled'] as bool

@@ -8,6 +8,7 @@ import android.content.Context;
 import android.view.Surface;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.OptIn;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
 import androidx.media3.common.MediaItem;
@@ -129,6 +130,15 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
   public void onSurfaceCleanup() {
     exoPlayer.setVideoSurface(null);
     needsSurface = true;
+  }
+
+  /** Returns the current video surface, never the phone display. */
+  @Nullable
+  @OptIn(markerClass = UnstableApi.class)
+  public Surface getPlayingSurface() {
+    return needsSurface || !exoPlayer.isPlaying() || surfaceProducer == null
+        ? null
+        : surfaceProducer.getSurface();
   }
 
   public void dispose() {

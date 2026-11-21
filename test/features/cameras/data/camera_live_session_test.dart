@@ -1,16 +1,100 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:safehood/features/camera_events/presentation/camera_event_live_screen.dart';
 import 'package:safehood/features/cameras/data/camera_live_playback.dart';
 import 'package:safehood/features/cameras/data/camera_live_session.dart';
+import 'package:safehood/features/cameras/data/live_motion_detector.dart';
+import 'package:safehood/features/cameras/data/live_motion_monitor.dart';
 import 'package:safehood/features/cameras/data/local_camera_connection.dart';
 import 'package:safehood/features/cameras/domain/camera.dart';
 import 'package:safehood/features/cameras/domain/camera_provider.dart';
 import 'package:video_player/video_player.dart';
 
 void main() {
+  testWidgets('phone motion samples only while enabled and reports one event', (
+    tester,
+  ) async {
+    final provider = _Provider();
+    final session = CameraLiveSession(
+      provider,
+      createPlayback: provider.createPlayback,
+    );
+    final toggle = StreamController<bool>.broadcast();
+    var samples = 0;
+    final pictures = <Uint8List?>[];
+    final snapshot = Uint8List.fromList([0xff, 0xd8, 0xff, 0xd9]);
+    final monitor = LiveMotionMonitor(
+      session: session,
+      enabled: toggle.stream,
+      sample: (_) async => _motionFrame(++samples > 1),
+      snapshot: (_) async => snapshot,
+      save: (_, jpeg) async => pictures.add(jpeg),
+    );
+    await session.resume();
+    await tester.pump(const Duration(seconds: 1));
+    expect(samples, 0);
+
+    toggle.add(true);
+    await tester.pump();
+    for (var i = 0; i < 3; i++) {
+      await tester.pump(const Duration(milliseconds: 800));
+    }
+    expect(pictures, [snapshot]);
+    expect(monitor.value, LiveMotionStatus.saved);
+
+    toggle.add(false);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(samples, 3);
+    expect(monitor.value, LiveMotionStatus.off);
+    monitor.dispose();
+    session.dispose();
+    unawaited(toggle.close());
+    await tester.pump();
+  });
+
+  testWidgets('a frame in flight is discarded when playback is suspended', (
+    tester,
+  ) async {
+    final provider = _Provider();
+    final session = CameraLiveSession(
+      provider,
+      createPlayback: provider.createPlayback,
+    );
+    final pendingSnapshot = Completer<Uint8List?>();
+    final toggle = StreamController<bool>.broadcast();
+    var samples = 0;
+    var reports = 0;
+    final monitor = LiveMotionMonitor(
+      session: session,
+      enabled: toggle.stream,
+      sample: (_) async => _motionFrame(++samples > 1),
+      snapshot: (_) => pendingSnapshot.future,
+      save: (_, _) async {
+        reports++;
+      },
+    );
+    await session.resume();
+    toggle.add(true);
+    await tester.pump();
+    for (var i = 0; i < 3; i++) {
+      await tester.pump(const Duration(milliseconds: 800));
+    }
+    expect(monitor.value, LiveMotionStatus.saving);
+    await session.suspend();
+    pendingSnapshot.complete(Uint8List(4));
+    await tester.pump(const Duration(seconds: 3));
+    expect(reports, 0);
+    expect(samples, 3);
+    monitor.dispose();
+    session.dispose();
+    unawaited(toggle.close());
+    await tester.pump();
+  });
+
   testWidgets('reopens fullscreen after the Wi-Fi camera returns', (
     tester,
   ) async {
@@ -284,6 +368,10 @@ void main() {
     },
   );
 }
+
+Uint8List _motionFrame(bool moving) => Uint8List.fromList(
+  List.generate(LiveMotionDetector.pixels, (i) => moving && i < 400 ? 140 : 60),
+);
 
 class _Provider extends Fake implements CameraProvider {
   _Provider({this.choices = 1});

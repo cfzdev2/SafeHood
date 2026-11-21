@@ -66,7 +66,11 @@ class CameraLivePlayback {
     CameraProvider provider, {
     CameraPlaybackAttempt? preferred,
     CameraLiveQualityProfile? qualityProfile,
-  }) : _attempts = cameraPlaybackAttempts(
+  }) : _canSample =
+           !kIsWeb &&
+           defaultTargetPlatform == TargetPlatform.android &&
+           provider.camera.usesLocalConnection,
+       _attempts = cameraPlaybackAttempts(
          [
            if (provider.liveStreamUri case final Uri uri) uri,
            if (provider is CameraLiveStreamAlternatives)
@@ -79,6 +83,11 @@ class CameraLivePlayback {
        );
 
   final List<CameraPlaybackAttempt> _attempts;
+  final bool _canSample;
+  static int _nextFrameSession = 0;
+  static final _frameSessions = Expando<String>();
+  static String? frameSessionFor(VideoPlayerController player) =>
+      _frameSessions[player];
   int _next = 0;
   CameraPlaybackAttempt? _openedAttempt;
   bool get hasNext => _next < _attempts.length;
@@ -90,12 +99,18 @@ class CameraLivePlayback {
   }) async {
     while (hasNext && isActive()) {
       final attempt = _attempts[_next++];
+      final frameSession = _canSample && attempt.uri.scheme == 'rtsp'
+          ? (++_nextFrameSession).toString()
+          : null;
       final controller = VideoPlayerController.networkUrl(
         attempt.uri,
-        httpHeaders: attempt.transport == CameraRtspTransport.tcp
-            ? const {'X-SafeHood-Rtsp-Transport': 'tcp'}
-            : const {},
+        httpHeaders: {
+          if (attempt.transport == CameraRtspTransport.tcp)
+            'X-SafeHood-Rtsp-Transport': 'tcp',
+          'X-SafeHood-Frame-Session': ?frameSession,
+        },
       );
+      if (frameSession != null) _frameSessions[controller] = frameSession;
       var keep = false;
       try {
         await controller.initialize().timeout(const Duration(seconds: 9));

@@ -53,6 +53,18 @@ class CameraService {
     return Camera.fromMap(document.id, data);
   }
 
+  Stream<bool> watchLiveMotionEnabled(String cameraId) => _camerasCollection
+      .doc(cameraId)
+      .snapshots()
+      .map((document) => document.data()?['liveMotionEnabled'] == true)
+      .distinct();
+
+  Future<void> setLiveMotionEnabled(String cameraId, bool enabled) =>
+      _camerasCollection.doc(cameraId).update({
+        'liveMotionEnabled': enabled,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
   Future<void> addCamera(
     Camera camera, {
     LocalCameraConnection connection = const LocalCameraConnection(),
