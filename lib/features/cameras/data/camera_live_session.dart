@@ -40,6 +40,7 @@ class CameraLiveSession extends ChangeNotifier {
 
   static const _retrySeconds = [2, 4, 8, 15, 30];
   static const _watchdogInterval = Duration(seconds: 5);
+  static const _positionDeadline = Duration(seconds: 1);
   static const _closeTimeout = Duration(seconds: 3);
   static const _bufferingThreshold = Duration(seconds: 4);
   static const _qualityDeadline = Duration(seconds: 6);
@@ -56,6 +57,11 @@ class CameraLiveSession extends ChangeNotifier {
       phase == CameraLivePhase.adjustingQuality;
 
   bool get _autoReconnect => _provider.camera.usesLocalConnection;
+  bool get _isRtsp => _playback?.openedAttempt?.uri.scheme == 'rtsp';
+
+  bool _hasEnded(VideoPlayerValue value) =>
+      _autoReconnect && !_isRtsp && value.isCompleted;
+
   CameraLiveQualitySource? get _qualitySource =>
       _autoReconnect && _provider is CameraLiveQualitySource
       ? _provider as CameraLiveQualitySource
@@ -136,14 +142,13 @@ class CameraLiveSession extends ChangeNotifier {
     if (player == null) return;
     _userPaused = player.value.isPlaying;
     _endBufferingEpisode();
-    _lastPosition = player.value.position;
+    if (!_isRtsp) _lastPosition = player.value.position;
     _movingChecks = 0;
     _stalledChecks = 0;
     try {
       if (_userPaused) {
         await player.pause();
-      } else if (player.value.hasError ||
-          (_autoReconnect && player.value.isCompleted)) {
+      } else if (player.value.hasError || _hasEnded(player.value)) {
         _handlePlayerChange();
       } else {
         await player.play();
@@ -226,8 +231,11 @@ class CameraLiveSession extends ChangeNotifier {
       _controller = player;
       player = null;
       _controller!.addListener(_handlePlayerChange);
-      _lastPosition = _controller!.value.position;
-      _watchdog = Timer.periodic(_watchdogInterval, (_) => _checkProgress());
+      _lastPosition = _isRtsp ? Duration.zero : _controller!.value.position;
+      _watchdog = Timer.periodic(
+        _watchdogInterval,
+        (_) => unawaited(_checkProgress()),
+      );
       _update(CameraLivePhase.playing);
       // RTSP setup can succeed before the first frame arrives.
       if (!_autoReconnect && isCurrent()) _reportAvailability(true);
@@ -245,7 +253,7 @@ class CameraLiveSession extends ChangeNotifier {
   void _handlePlayerChange() {
     final value = _controller?.value;
     if (value == null || !_active || _userPaused) return;
-    if (value.hasError || (_autoReconnect && value.isCompleted)) {
+    if (value.hasError || _hasEnded(value)) {
       _interrupted('Odtwarzacz przerwał podgląd.');
       return;
     }
@@ -266,16 +274,32 @@ class CameraLiveSession extends ChangeNotifier {
     }
   }
 
-  void _checkProgress() {
-    final value = _controller?.value;
-    if (value == null || !_active || _userPaused) return;
-    if (value.hasError || (_autoReconnect && value.isCompleted)) {
+  Future<void> _checkProgress() async {
+    final player = _controller;
+    if (player == null || !_active || _userPaused) return;
+
+    // video_player clamps its UI position to the stream's reported duration
+    // and sets isCompleted when they match. Neither represents the state of
+    // an open-ended RTSP feed. Read the underlying playback clock instead.
+    final position = _isRtsp
+        ? await _readRtspPosition(player)
+        : player.value.position;
+    if (!identical(player, _controller) || !_active || _userPaused) return;
+
+    final value = player.value;
+    if (value.hasError || _hasEnded(value)) {
       _handlePlayerChange();
       return;
     }
 
-    if (value.isInitialized && value.position != _lastPosition) {
-      _lastPosition = value.position;
+    if (position == null && value.isPlaying && !value.isBuffering) {
+      // One unavailable clock reading is not evidence that video froze.
+      _stalledChecks = 0;
+      return;
+    }
+
+    if (value.isInitialized && position != null && position != _lastPosition) {
+      _lastPosition = position;
       _stalledChecks = 0;
       _hadProgress = true;
       _preferred = _playback?.openedAttempt;
@@ -293,6 +317,15 @@ class CameraLiveSession extends ChangeNotifier {
       if (++_stalledChecks >= 3) {
         _noticeStall(frozen: true);
       }
+    }
+  }
+
+  Future<Duration?> _readRtspPosition(VideoPlayerController player) async {
+    try {
+      final position = await player.position.timeout(_positionDeadline);
+      return position != null && !position.isNegative ? position : null;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -412,6 +445,7 @@ class CameraLiveSession extends ChangeNotifier {
         _playback?.hasNext == true && (!_autoReconnect || !_hadProgress);
     final previous = _detachController();
     if (previous == null) return;
+    debugPrint('CAMERA LIVE [${_provider.camera.id}]: $message');
     unawaited(_enqueue(() => _release(previous)));
     if (qualityProfile != null) {
       unawaited(_begin(reconnecting: true, qualityProfile: qualityProfile));

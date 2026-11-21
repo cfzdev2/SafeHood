@@ -196,6 +196,42 @@ void main() {
     expect(provider.players.every((player) => player.disposed), isTrue);
   });
 
+  testWidgets('RTSP with a clamped position stays open until playback stops', (
+    tester,
+  ) async {
+    final provider = _Provider();
+    final availability = <bool>[];
+    final session = CameraLiveSession(
+      provider,
+      createPlayback: provider.createPlayback,
+      onAvailabilityChanged: availability.add,
+    );
+    await session.resume();
+    final cameraPlayer = provider.players.single;
+    const reportedDuration = Duration(milliseconds: 1);
+    for (var i = 1; i <= 5; i++) {
+      cameraPlayer.rawPosition = Duration(seconds: i * 5);
+      cameraPlayer.value = cameraPlayer.value.copyWith(
+        duration: reportedDuration,
+        position: reportedDuration,
+        isCompleted: true,
+      );
+      await tester.pump(const Duration(seconds: 5));
+      expect(session.controller, same(cameraPlayer));
+    }
+    expect(availability, [true]);
+    expect(cameraPlayer.disposed, isFalse);
+    expect(provider.connects, 1);
+
+    await tester.pump(const Duration(seconds: 15));
+    await tester.pump();
+    expect(session.phase, CameraLivePhase.retryScheduled);
+    expect(availability, [true, false]);
+    expect(cameraPlayer.disposed, isTrue);
+    session.dispose();
+    await tester.pump();
+  });
+
   testWidgets('returning during start waits for the stale player to close', (
     tester,
   ) async {
@@ -522,6 +558,10 @@ class _Player extends VideoPlayerController {
 
   final CameraPlaybackAttempt attempt;
   bool disposed = false;
+  Duration? rawPosition;
+
+  @override
+  Future<Duration?> get position async => rawPosition ?? value.position;
 
   void advance() {
     value = value.copyWith(
