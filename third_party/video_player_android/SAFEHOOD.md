@@ -18,6 +18,11 @@ video connection. Stopping playback or disposing the player makes sampling
 unavailable. The channel returns a small luma frame, or a bounded JPEG when
 requested for a detected event.
 
+The same channel exposes decoder counters for the active RTSP player. The app
+uses them to recognize an ongoing stream that renders too few frames or drops
+many frames and can try a lighter profile. Reading these counters does not
+copy the video surface.
+
 When upgrading, replace the vendored source with the new upstream version and
 carry forward this option until upstream offers an equivalent API. Retain
 LICENSE and AUTHORS. This copy excludes the upstream example and tests.

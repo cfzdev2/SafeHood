@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:video_player/video_player.dart';
@@ -31,12 +32,15 @@ class CameraLiveSession extends ChangeNotifier {
     this.onAvailabilityChanged,
     this._createPlayback = CameraLivePlayback.new,
     this._qualityStore = const LocalCameraConnectionStore(),
+    this._readFrameStats = CameraLivePlayback.readFrameStats,
   });
 
   final CameraProvider _provider;
   final void Function(bool isOnline)? onAvailabilityChanged;
   final CameraLivePlaybackFactory _createPlayback;
   final CameraLiveQualityStore _qualityStore;
+  final Future<CameraLiveFrameStats?> Function(VideoPlayerController)
+  _readFrameStats;
 
   static const _retrySeconds = [2, 4, 8, 15, 30];
   static const _watchdogInterval = Duration(seconds: 5);
@@ -82,6 +86,8 @@ class CameraLiveSession extends ChangeNotifier {
   bool _skipSavedQuality = false;
   Future<void> _pending = Future<void>.value();
   Duration? _lastPosition;
+  CameraLiveFrameStats? _lastFrameStats;
+  bool _reportedSlowFrames = false;
   int _stalledChecks = 0;
   int _movingChecks = 0;
   int _retryIndex = 0;
@@ -142,6 +148,7 @@ class CameraLiveSession extends ChangeNotifier {
     if (player == null) return;
     _userPaused = player.value.isPlaying;
     _endBufferingEpisode();
+    _resetFrameStats();
     if (!_isRtsp) _lastPosition = player.value.position;
     _movingChecks = 0;
     _stalledChecks = 0;
@@ -262,6 +269,7 @@ class CameraLiveSession extends ChangeNotifier {
       return;
     }
     _movingChecks = 0;
+    _resetFrameStats();
     if (_hadProgress &&
         _qualitySource != null &&
         _bufferingTimer == null &&
@@ -281,9 +289,9 @@ class CameraLiveSession extends ChangeNotifier {
     // video_player clamps its UI position to the stream's reported duration
     // and sets isCompleted when they match. Neither represents the state of
     // an open-ended RTSP feed. Read the underlying playback clock instead.
-    final position = _isRtsp
-        ? await _readRtspPosition(player)
-        : player.value.position;
+    final (position, frameStats) = _isRtsp
+        ? await (_readRtspPosition(player), _readLiveFrameStats(player)).wait
+        : (player.value.position, null);
     if (!identical(player, _controller) || !_active || _userPaused) return;
 
     final value = player.value;
@@ -295,6 +303,7 @@ class CameraLiveSession extends ChangeNotifier {
     if (position == null && value.isPlaying && !value.isBuffering) {
       // One unavailable clock reading is not evidence that video froze.
       _stalledChecks = 0;
+      _resetFrameStats();
       return;
     }
 
@@ -306,6 +315,9 @@ class CameraLiveSession extends ChangeNotifier {
       // Don't reset the delay for connections that open and stall repeatedly.
       if (value.isBuffering) {
         _handlePlayerChange();
+      } else if (_renderingSlowly(frameStats)) {
+        _movingChecks = 0;
+        _noticeStall(frozen: false);
       } else {
         if (++_movingChecks >= 2) _retryIndex = 0;
         if (_movingChecks >= 12) _recentStalls = 0;
@@ -314,6 +326,7 @@ class CameraLiveSession extends ChangeNotifier {
       if (_autoReconnect) _reportAvailability(true);
     } else {
       _movingChecks = 0;
+      _resetFrameStats();
       if (++_stalledChecks >= 3) {
         _noticeStall(frozen: true);
       }
@@ -327,6 +340,51 @@ class CameraLiveSession extends ChangeNotifier {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<CameraLiveFrameStats?> _readLiveFrameStats(
+    VideoPlayerController player,
+  ) async {
+    if (!_autoReconnect ||
+        !player.value.isPlaying ||
+        player.value.isBuffering) {
+      return null;
+    }
+    try {
+      return await _readFrameStats(player).timeout(_positionDeadline);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _resetFrameStats() {
+    _lastFrameStats = null;
+    _reportedSlowFrames = false;
+  }
+
+  bool _renderingSlowly(CameraLiveFrameStats? stats) {
+    final previous = _lastFrameStats;
+    _lastFrameStats = stats;
+    if (stats == null || previous == null) return false;
+    final elapsed = stats.atMillis - previous.atMillis;
+    final rendered = stats.rendered - previous.rendered;
+    final dropped = stats.dropped - previous.dropped;
+    // Ignore a decoder reset or an interval interrupted by a lifecycle change.
+    if (elapsed < 3000 || elapsed > 10000 || rendered < 0 || dropped < 0) {
+      return false;
+    }
+
+    final fps = rendered * 1000 / elapsed;
+    final minimumFps = math.min(5.0, (stats.expectedFps ?? 10.0) * 0.6);
+    final slow = fps < minimumFps || (dropped >= 10 && dropped * 2 > rendered);
+    if (slow && !_reportedSlowFrames) {
+      debugPrint(
+        'CAMERA LIVE [${_provider.camera.id}]: obraz ${fps.toStringAsFixed(1)} '
+        'kl./s, pominięto $dropped klatek w ciągu ${elapsed / 1000} s.',
+      );
+    }
+    _reportedSlowFrames = slow;
+    return slow;
   }
 
   void _noticeStall({required bool frozen}) {
@@ -499,6 +557,7 @@ class CameraLiveSession extends ChangeNotifier {
     _endBufferingEpisode();
     _qualityProbePlayer = null;
     _lastPosition = null;
+    _resetFrameStats();
     _stalledChecks = 0;
     _movingChecks = 0;
     _hadProgress = false;

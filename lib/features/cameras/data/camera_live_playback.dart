@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import '../domain/camera_provider.dart';
@@ -13,6 +14,20 @@ class CameraPlaybackAttempt {
   final Uri uri;
   final CameraRtspTransport transport;
   final int? qualityPixels;
+}
+
+class CameraLiveFrameStats {
+  const CameraLiveFrameStats({
+    required this.atMillis,
+    required this.rendered,
+    required this.dropped,
+    this.expectedFps,
+  });
+
+  final int atMillis;
+  final int rendered;
+  final int dropped;
+  final double? expectedFps;
 }
 
 List<CameraPlaybackAttempt> cameraPlaybackAttempts(
@@ -84,10 +99,38 @@ class CameraLivePlayback {
 
   final List<CameraPlaybackAttempt> _attempts;
   final bool _canSample;
+  static const _frameChannel = MethodChannel('safehood/camera_frame');
   static int _nextFrameSession = 0;
   static final _frameSessions = Expando<String>();
   static String? frameSessionFor(VideoPlayerController player) =>
       _frameSessions[player];
+
+  static Future<CameraLiveFrameStats?> readFrameStats(
+    VideoPlayerController player,
+  ) async {
+    final session = frameSessionFor(player);
+    if (session == null) return null;
+    final stats = await _frameChannel.invokeMapMethod<String, num>(
+      'frameStats',
+      {'session': session},
+    );
+    if (stats == null ||
+        stats['atMillis'] is! int ||
+        stats['rendered'] is! int ||
+        stats['dropped'] is! int) {
+      return null;
+    }
+    final expectedFps = stats['expectedFps']?.toDouble();
+    return CameraLiveFrameStats(
+      atMillis: stats['atMillis'] as int,
+      rendered: stats['rendered'] as int,
+      dropped: stats['dropped'] as int,
+      expectedFps: expectedFps != null && expectedFps > 0 && expectedFps <= 240
+          ? expectedFps
+          : null,
+    );
+  }
+
   int _next = 0;
   CameraPlaybackAttempt? _openedAttempt;
   bool get hasNext => _next < _attempts.length;

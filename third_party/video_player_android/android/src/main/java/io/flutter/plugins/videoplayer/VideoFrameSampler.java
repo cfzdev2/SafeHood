@@ -11,6 +11,7 @@ import androidx.annotation.RequiresApi;
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
+import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import java.io.ByteArrayOutputStream;
 
 /** Samples only an existing RTSP player's video surface. Owned by one Flutter engine. */
@@ -20,17 +21,17 @@ final class VideoFrameSampler {
   private static final int SAMPLE_HEIGHT = 36;
   private static final int SNAPSHOT_SIZE_LIMIT = 256 * 1024;
   private final MethodChannel channel;
-  private final SurfaceLookup lookup;
+  private final PlayerLookup lookup;
   private final Handler main = new Handler(Looper.getMainLooper());
   private HandlerThread thread;
   private boolean copying;
   private boolean closed;
 
-  interface SurfaceLookup {
-    Surface get(String session);
+  interface PlayerLookup {
+    TextureVideoPlayer get(String session);
   }
 
-  VideoFrameSampler(BinaryMessenger messenger, SurfaceLookup lookup) {
+  VideoFrameSampler(BinaryMessenger messenger, PlayerLookup lookup) {
     this.lookup = lookup;
     channel = new MethodChannel(messenger, CHANNEL);
     channel.setMethodCallHandler(this::handle);
@@ -38,16 +39,26 @@ final class VideoFrameSampler {
 
   private void handle(MethodCall call, MethodChannel.Result result) {
     boolean jpeg = "snapshot".equals(call.method);
-    if (!jpeg && !"sample".equals(call.method)) {
+    boolean stats = "frameStats".equals(call.method);
+    if (!jpeg && !stats && !"sample".equals(call.method)) {
       result.notImplemented();
       return;
     }
     String session = call.argument("session");
-    if (closed || copying || session == null || Build.VERSION.SDK_INT < 24) {
+    TextureVideoPlayer player = closed || session == null ? null : lookup.get(session);
+    if (player == null) {
       result.success(null);
       return;
     }
-    Surface surface = lookup.get(session);
+    if (stats) {
+      result.success(player.getPlayingFrameStats());
+      return;
+    }
+    if (copying || Build.VERSION.SDK_INT < 24) {
+      result.success(null);
+      return;
+    }
+    Surface surface = player.getPlayingSurface();
     if (surface == null || !surface.isValid()) {
       result.success(null);
       return;

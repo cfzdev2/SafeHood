@@ -5,14 +5,17 @@
 package io.flutter.plugins.videoplayer.texture;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.view.Surface;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
+import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.DecoderCounters;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import io.flutter.plugins.videoplayer.ExoPlayerEventListener;
@@ -21,6 +24,8 @@ import io.flutter.plugins.videoplayer.VideoPlayer;
 import io.flutter.plugins.videoplayer.VideoPlayerCallbacks;
 import io.flutter.plugins.videoplayer.VideoPlayerOptions;
 import io.flutter.view.TextureRegistry.SurfaceProducer;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * A subclass of {@link VideoPlayer} that adds functionality related to texture view as a way of
@@ -139,6 +144,29 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
     return needsSurface || !exoPlayer.isPlaying() || surfaceProducer == null
         ? null
         : surfaceProducer.getSurface();
+  }
+
+  /** Reads the decoder counters for this player without copying a video frame. */
+  @Nullable
+  @OptIn(markerClass = UnstableApi.class)
+  public Map<String, Object> getPlayingFrameStats() {
+    if (needsSurface || !exoPlayer.isPlaying()) {
+      return null;
+    }
+    DecoderCounters counters = exoPlayer.getVideoDecoderCounters();
+    if (counters == null) {
+      return null;
+    }
+    counters.ensureUpdated();
+    Map<String, Object> stats = new HashMap<>();
+    stats.put("atMillis", SystemClock.elapsedRealtime());
+    stats.put("rendered", counters.renderedOutputBufferCount);
+    stats.put("dropped", counters.droppedBufferCount);
+    Format format = exoPlayer.getVideoFormat();
+    if (format != null && format.frameRate > 0 && Float.isFinite(format.frameRate)) {
+      stats.put("expectedFps", (double) format.frameRate);
+    }
+    return stats;
   }
 
   public void dispose() {

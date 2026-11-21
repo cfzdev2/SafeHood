@@ -379,6 +379,65 @@ void main() {
   });
 
   testWidgets(
+    'few displayed frames can trigger a lighter stream with no freeze',
+    (tester) async {
+      final provider = _AdaptiveProvider();
+      final store = _QualityStore();
+      var time = 0;
+      var rendered = 0;
+      var dropped = 0;
+      final session = CameraLiveSession(
+        provider,
+        createPlayback: provider.createPlayback,
+        qualityStore: store,
+        readFrameStats: (_) async => CameraLiveFrameStats(
+          atMillis: time,
+          rendered: rendered,
+          dropped: dropped,
+          expectedFps: 15,
+        ),
+      );
+      await session.resume();
+      final original = provider.players.single;
+
+      Future<void> check(_Player player, int frames, {int skipped = 0}) async {
+        time += 5000;
+        rendered += frames;
+        dropped += skipped;
+        player.advance();
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pump();
+      }
+
+      await check(original, 75);
+      await check(original, 10);
+      expect(session.controller, same(original));
+      expect(provider.requests, isEmpty);
+
+      await check(original, 30, skipped: 25);
+      expect(provider.requests, [(1280 * 720 - 1, original.attempt.uri)]);
+      final lighter = provider.players.last;
+      expect(session.controller, same(lighter));
+      expect(lighter.attempt.uri, _lightProfile.uri);
+      expect(original.disposed, isTrue);
+
+      rendered = 0;
+      dropped = 0;
+      for (var i = 0; i < 5; i++) {
+        await check(lighter, 10);
+      }
+      expect(store.saved, isEmpty);
+      expect(session.controller, same(lighter));
+      for (var i = 0; i < 4; i++) {
+        await check(lighter, 75);
+      }
+      expect(store.saved, {provider.camera.id: _lightProfile.pixels});
+      session.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
     'a saved profile that cannot play falls back to the original URL',
     (tester) async {
       final provider = _AdaptiveProvider()..qualityOpens = false;
