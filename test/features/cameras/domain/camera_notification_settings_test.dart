@@ -59,6 +59,24 @@ void main() {
       expect(settings.cooldownSeconds, 0);
     });
 
+    test('stare ustawienia i osobny wybór alertu o ruchu', () {
+      const muted = CameraNotificationSettings(enabled: false);
+      expect(muted.sendsMotionAlert, isFalse);
+      expect(muted.toMap(), isNot(contains('motionAlert')));
+      final motionOnly = muted.copyWith(motionAlertOverride: true);
+      expect(motionOnly.sendsMotionAlert, isTrue);
+      expect(motionOnly.enabled, isFalse);
+      final roundTrip = CameraNotificationSettings.fromMap(motionOnly.toMap());
+      expect(roundTrip.sendsMotionAlert, isTrue);
+      expect(roundTrip.enabled, isFalse);
+      expect(
+        roundTrip
+            .copyWith(enabled: true, motionAlertOverride: false)
+            .sendsMotionAlert,
+        isFalse,
+      );
+    });
+
     test('copyWith zmienia tylko wybrane ustawienia', () {
       const original = CameraNotificationSettings(
         motionEnabled: false,

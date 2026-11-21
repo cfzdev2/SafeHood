@@ -57,6 +57,7 @@ class _AppShellState extends State<AppShell> {
         .where(
           (camera) =>
               camera.connectionType == CameraConnectionType.onvif &&
+              camera.motionDetectionEnabled &&
               camera.monitoringMode == CameraMonitoringMode.app,
         )
         .toList();

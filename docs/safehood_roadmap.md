@@ -65,8 +65,9 @@ otwórz LIVE ponownie i sprawdź, czy aplikacja zaczyna od tej jakości.
 
 Zaktualizuj aplikację na Androidzie przez ponowne uruchomienie `flutter run`
 oraz uruchom ponownie dotychczasowe emulatory Firebase z tymi samymi danymi.
-W **Moje kamery → robot… → Ustawienia** włącz **Ruch podczas podglądu**.
-W sekcji **Powiadomienia** włącz alerty i **Wykrycie ruchu**. Otwórz LIVE,
+W **Moje kamery → robot… → Ustawienia → Wykrywanie ruchu** wybierz
+**Historia i alert**. Do zapisu bez powiadomień służy **Tylko historia**.
+Otwórz LIVE,
 poczekaj na informację o aktywnym wykrywaniu i przejdź w kadrze. Sprawdź
 własny alert oraz zdarzenie ze zdjęciem w historii. Funkcja korzysta z
 odtwarzanego obrazu i działa również na pełnym ekranie. Po wyjściu z LIVE

@@ -183,6 +183,7 @@ service cloud.firestore {
         && settings.keys().hasOnly([
           'enabled',
           'motion',
+          'motionAlert',
           'person',
           'vehicle',
           'sound',
@@ -200,6 +201,10 @@ service cloud.firestore {
         && settings.person is bool
         && settings.vehicle is bool
         && settings.sound is bool
+        && (
+          !settings.keys().hasAny(['motionAlert'])
+          || settings.motionAlert is bool
+        )
         && (
           !settings.keys().hasAny(['cooldownSeconds'])
           || (

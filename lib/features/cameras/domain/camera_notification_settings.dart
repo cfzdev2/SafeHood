@@ -3,6 +3,7 @@ class CameraNotificationSettings {
 
   final bool enabled;
   final bool motionEnabled;
+  final bool? motionAlertOverride;
   final bool personEnabled;
   final bool vehicleEnabled;
   final bool soundEnabled;
@@ -11,15 +12,20 @@ class CameraNotificationSettings {
   const CameraNotificationSettings({
     this.enabled = true,
     this.motionEnabled = true,
+    this.motionAlertOverride,
     this.personEnabled = true,
     this.vehicleEnabled = true,
     this.soundEnabled = true,
     this.cooldownSeconds = 0,
   });
 
+  bool get sendsMotionAlert =>
+      motionAlertOverride ?? (enabled && motionEnabled);
+
   CameraNotificationSettings copyWith({
     bool? enabled,
     bool? motionEnabled,
+    bool? motionAlertOverride,
     bool? personEnabled,
     bool? vehicleEnabled,
     bool? soundEnabled,
@@ -28,6 +34,7 @@ class CameraNotificationSettings {
     return CameraNotificationSettings(
       enabled: enabled ?? this.enabled,
       motionEnabled: motionEnabled ?? this.motionEnabled,
+      motionAlertOverride: motionAlertOverride ?? this.motionAlertOverride,
       personEnabled: personEnabled ?? this.personEnabled,
       vehicleEnabled: vehicleEnabled ?? this.vehicleEnabled,
       soundEnabled: soundEnabled ?? this.soundEnabled,
@@ -39,6 +46,7 @@ class CameraNotificationSettings {
     return {
       'enabled': enabled,
       'motion': motionEnabled,
+      'motionAlert': ?motionAlertOverride,
       'person': personEnabled,
       'vehicle': vehicleEnabled,
       'sound': soundEnabled,
@@ -66,6 +74,9 @@ class CameraNotificationSettings {
     return CameraNotificationSettings(
       enabled: readBool('enabled'),
       motionEnabled: readBool('motion'),
+      motionAlertOverride: value['motionAlert'] is bool
+          ? value['motionAlert'] as bool
+          : null,
       personEnabled: readBool('person'),
       vehicleEnabled: readBool('vehicle'),
       soundEnabled: readBool('sound'),

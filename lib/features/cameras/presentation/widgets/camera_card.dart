@@ -4,6 +4,7 @@ import '../../domain/camera.dart';
 
 enum CameraCardStatus {
   monitoringActive,
+  monitoringDuringLive,
   monitoringDisabled,
   monitoringConnecting,
   bridgeOffline,
@@ -104,12 +105,6 @@ class CameraCard extends StatelessWidget {
                           label: _statusLabel(effectiveStatus),
                           color: monitoringColor,
                         ),
-                        if (camera.liveMotionEnabled)
-                          _buildStatusChip(
-                            context,
-                            label: 'Ruch podczas podglądu',
-                            color: Colors.blue,
-                          ),
                       ],
                     ),
                   ],
@@ -165,6 +160,9 @@ class CameraCard extends StatelessWidget {
       case CameraCardStatus.monitoringActive:
         return 'Monitoring aktywny';
 
+      case CameraCardStatus.monitoringDuringLive:
+        return 'Wykrywanie podczas podglądu';
+
       case CameraCardStatus.monitoringDisabled:
         return 'Monitoring wyłączony';
 
@@ -188,6 +186,7 @@ class CameraCard extends StatelessWidget {
         return Colors.orange;
 
       case CameraCardStatus.monitoringConnecting:
+      case CameraCardStatus.monitoringDuringLive:
         return Colors.blue;
 
       case CameraCardStatus.bridgeOffline:

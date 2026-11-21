@@ -4,16 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../data/camera_service.dart';
-import '../data/live_motion_monitor.dart';
 import '../data/local_camera_connection.dart';
 import 'camera_wifi_setup_screen.dart';
 import 'local_camera_connection_dialog.dart';
 import '../domain/camera.dart';
 import '../domain/camera_ai_zone.dart';
+import '../domain/camera_motion_preference.dart';
 import '../domain/camera_notification_settings.dart';
 import 'camera_ai_zones_screen.dart';
 import '../../profile/data/user_profile_service.dart';
 import '../../profile/domain/app_user.dart';
+import 'widgets/camera_motion_setting.dart';
 
 class CameraSettingsScreen extends StatefulWidget {
   final Camera camera;
@@ -38,7 +39,6 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
 
   late bool _monitoringEnabled;
   late bool _liveMotionEnabled;
-  bool _savingLiveMotion = false;
   late bool _aiEnabled;
   late bool _aiPersonEnabled;
   late bool _aiVehicleEnabled;
@@ -261,11 +261,31 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     }
   }
 
-  Future<void> _setLiveMotionEnabled(bool enabled) async {
-    setState(() => _savingLiveMotion = true);
+  CameraMotionPreference get _motionPreference =>
+      CameraMotionPreference.fromSettings(
+        widget.camera.copyWith(
+          motionDetectionEnabled: _monitoringEnabled,
+          liveMotionEnabled: _liveMotionEnabled,
+        ),
+        _notificationSettings,
+      );
+
+  Future<void> _setMotionPreference(CameraMotionPreference preference) async {
+    if (_savingMonitoring || _savingNotifications || _deleting) return;
+    setState(() => _savingMonitoring = true);
     try {
-      await _cameraService.setLiveMotionEnabled(widget.camera.id, enabled);
-      if (mounted) setState(() => _liveMotionEnabled = enabled);
+      final notifications = await _cameraService.setMotionPreference(
+        cameraId: widget.camera.id,
+        preference: preference,
+      );
+      if (!mounted) return;
+      setState(() {
+        _monitoringEnabled =
+            widget.camera.connectionType == CameraConnectionType.onvif &&
+            preference.detects;
+        _liveMotionEnabled = preference.detects;
+        _notificationSettings = notifications;
+      });
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -274,7 +294,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         ),
       );
     } finally {
-      if (mounted) setState(() => _savingLiveMotion = false);
+      if (mounted) setState(() => _savingMonitoring = false);
     }
   }
 
@@ -416,7 +436,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
   Future<void> _setNotificationSettings(
     CameraNotificationSettings settings,
   ) async {
-    if (_savingNotifications || _deleting) {
+    if (_savingNotifications || _savingMonitoring || _deleting) {
       return;
     }
 
@@ -428,10 +448,12 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     });
 
     try {
-      await _cameraService.setNotificationSettings(
+      final saved = await _cameraService.setNotificationSettings(
         cameraId: widget.camera.id,
         settings: settings,
+        keepMotionAlert: widget.camera.usesLocalConnection,
       );
+      if (mounted) setState(() => _notificationSettings = saved);
     } catch (error) {
       if (!mounted) {
         return;
@@ -591,21 +613,53 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     }
   }
 
+  Widget _alertCooldown({required bool enabled}) {
+    return ListTile(
+      enabled: enabled,
+      leading: const Icon(Icons.timer_outlined),
+      title: const Text('Odstęp między alertami'),
+      trailing: DropdownButton<int>(
+        value: _notificationSettings.cooldownSeconds,
+        items: _notificationCooldownLabels.entries
+            .map(
+              (entry) => DropdownMenuItem<int>(
+                value: entry.key,
+                child: Text(entry.value),
+              ),
+            )
+            .toList(growable: false),
+        onChanged: enabled
+            ? (seconds) {
+                if (seconds == null) return;
+                unawaited(
+                  _setNotificationSettings(
+                    _notificationSettings.copyWith(cooldownSeconds: seconds),
+                  ),
+                );
+              }
+            : null,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
     final bridgeId = widget.camera.bridgeId;
     final rtspOnly = widget.camera.connectionType == CameraConnectionType.rtsp;
-    final phoneMotionAvailable = supportsLiveMotion(widget.camera);
-    final offersNotifications = !rtspOnly || _liveMotionEnabled;
+    final local = widget.camera.usesLocalConnection;
     final notificationsBusy =
-        _loadingNotifications || _savingNotifications || _deleting;
+        _loadingNotifications ||
+        _savingNotifications ||
+        _savingMonitoring ||
+        _deleting;
 
     final notificationTypesEnabled =
-        _notificationSettings.enabled &&
+        _notificationSettings.enabled && !notificationsBusy;
+    final canSetCooldown =
         !notificationsBusy &&
-        offersNotifications;
-    final otherDetectionAlerts = notificationTypesEnabled && !rtspOnly;
+        ((!rtspOnly && _notificationSettings.enabled) ||
+            (local && _motionPreference.sendsAlert));
 
     return Scaffold(
       appBar: AppBar(title: const Text('Ustawienia kamery')),
@@ -698,7 +752,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           ],
           const SizedBox(height: 24),
           Text(
-            'Monitoring',
+            'Wykrywanie',
             style: Theme.of(
               context,
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
@@ -707,51 +761,38 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
           Card(
             child: Column(
               children: [
-                if (!rtspOnly || !phoneMotionAvailable)
+                if (local) ...[
+                  CameraMotionSetting(
+                    preference: _motionPreference,
+                    onChanged: _loadingMonitoring || notificationsBusy
+                        ? null
+                        : _setMotionPreference,
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Na Androidzie wykrywanie działa także podczas otwartego podglądu.',
+                      ),
+                    ),
+                  ),
+                ] else
                   SwitchListTile.adaptive(
                     secondary: const Icon(Icons.sensors_outlined),
-                    title: Text(
-                      widget.camera.monitoringMode ==
-                              CameraMonitoringMode.bridge
-                          ? 'Monitoring przez Bridge'
-                          : 'Monitoring przez SafeHood',
-                    ),
+                    title: const Text('Monitoring kamery'),
                     subtitle: Text(
-                      rtspOnly
-                          ? 'Połączenie RTSP służy do podglądu. Monitoring przez '
-                                'Bridge wymaga kamery ONVIF.'
-                          : _monitoringEnabled
-                          ? 'SafeHood odbiera i zapisuje '
-                                'zdarzenia z kamery.'
-                          : 'Zdarzenia z kamery nie są '
-                                'odbierane ani zapisywane.',
+                      _monitoringEnabled
+                          ? 'SafeHood odbiera i zapisuje zdarzenia z kamery.'
+                          : 'Zdarzenia z kamery nie są odbierane.',
                     ),
-                    value: _monitoringEnabled && !rtspOnly,
+                    value: _monitoringEnabled,
                     onChanged:
-                        rtspOnly ||
-                            _loadingMonitoring ||
-                            _savingMonitoring ||
-                            _deleting
+                        _loadingMonitoring || _savingMonitoring || _deleting
                         ? null
                         : _setMonitoringEnabled,
                   ),
-                if (phoneMotionAvailable)
-                  SwitchListTile.adaptive(
-                    secondary: const Icon(Icons.directions_run),
-                    title: const Text('Ruch podczas podglądu'),
-                    subtitle: const Text(
-                      'Android wykrywa ruch przy otwartym obrazie na żywo. '
-                      'Zdjęcia są zapisywane w Twojej prywatnej historii.',
-                    ),
-                    value: _liveMotionEnabled,
-                    onChanged:
-                        _loadingMonitoring || _savingLiveMotion || _deleting
-                        ? null
-                        : _setLiveMotionEnabled,
-                  ),
-                if (_loadingMonitoring ||
-                    _savingMonitoring ||
-                    _savingLiveMotion)
+                if (_loadingMonitoring || _savingMonitoring)
                   const LinearProgressIndicator(),
               ],
             ),
@@ -907,148 +948,120 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
               },
             ),
           ],
-          const SizedBox(height: 24),
-          Text(
-            'Powiadomienia',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          Card(
-            child: Column(
-              children: [
-                SwitchListTile.adaptive(
-                  secondary: const Icon(Icons.notifications_outlined),
-                  title: const Text('Powiadomienia z kamery'),
-                  subtitle: Text(
-                    !offersNotifications
-                        ? 'Włącz wykrywanie ruchu podczas podglądu, aby otrzymywać alerty.'
-                        : _notificationSettings.enabled
-                        ? 'SafeHood wyśle wybrane alerty.'
-                        : 'Zdarzenia będą zapisywane, '
-                              'ale bez powiadomień.',
-                  ),
-                  value: _notificationSettings.enabled && offersNotifications,
-                  onChanged: notificationsBusy || !offersNotifications
-                      ? null
-                      : (enabled) {
-                          unawaited(
-                            _setNotificationSettings(
-                              _notificationSettings.copyWith(enabled: enabled),
-                            ),
-                          );
-                        },
-                ),
-                const Divider(height: 1),
-                SwitchListTile.adaptive(
-                  secondary: const Icon(Icons.sensors),
-                  title: const Text('Wykrycie ruchu'),
-                  value: _notificationSettings.motionEnabled,
-                  onChanged: notificationTypesEnabled
-                      ? (enabled) {
-                          unawaited(
-                            _setNotificationSettings(
-                              _notificationSettings.copyWith(
-                                motionEnabled: enabled,
-                              ),
-                            ),
-                          );
-                        }
-                      : null,
-                ),
-                const Divider(height: 1),
-                SwitchListTile.adaptive(
-                  secondary: const Icon(Icons.person_outline),
-                  title: const Text('Wykrycie osoby'),
-                  value: _notificationSettings.personEnabled,
-                  onChanged: otherDetectionAlerts
-                      ? (enabled) {
-                          unawaited(
-                            _setNotificationSettings(
-                              _notificationSettings.copyWith(
-                                personEnabled: enabled,
-                              ),
-                            ),
-                          );
-                        }
-                      : null,
-                ),
-                const Divider(height: 1),
-                SwitchListTile.adaptive(
-                  secondary: const Icon(Icons.directions_car_outlined),
-                  title: const Text('Wykrycie pojazdu'),
-                  value: _notificationSettings.vehicleEnabled,
-                  onChanged: otherDetectionAlerts
-                      ? (enabled) {
-                          unawaited(
-                            _setNotificationSettings(
-                              _notificationSettings.copyWith(
-                                vehicleEnabled: enabled,
-                              ),
-                            ),
-                          );
-                        }
-                      : null,
-                ),
-                const Divider(height: 1),
-                SwitchListTile.adaptive(
-                  secondary: const Icon(Icons.volume_up_outlined),
-                  title: const Text('Wykrycie dźwięku'),
-                  value: _notificationSettings.soundEnabled,
-                  onChanged: otherDetectionAlerts
-                      ? (enabled) {
-                          unawaited(
-                            _setNotificationSettings(
-                              _notificationSettings.copyWith(
-                                soundEnabled: enabled,
-                              ),
-                            ),
-                          );
-                        }
-                      : null,
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  enabled: notificationTypesEnabled,
-                  leading: const Icon(Icons.timer_outlined),
-                  title: const Text('Odstęp między alertami'),
-                  subtitle: const Text(
-                    'Osobne limity dla obrazu, dźwięku i sabotażu. '
-                    'Zdarzenia nadal są zapisywane.',
-                  ),
-                  trailing: DropdownButton<int>(
-                    value: _notificationSettings.cooldownSeconds,
-                    items: _notificationCooldownLabels.entries
-                        .map(
-                          (entry) => DropdownMenuItem<int>(
-                            value: entry.key,
-                            child: Text(entry.value),
-                          ),
-                        )
-                        .toList(growable: false),
-                    onChanged: notificationTypesEnabled
-                        ? (seconds) {
-                            if (seconds == null) {
-                              return;
-                            }
-
+          if (!rtspOnly) ...[
+            const SizedBox(height: 24),
+            Text(
+              local ? 'Pozostałe powiadomienia' : 'Powiadomienia',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Column(
+                children: [
+                  SwitchListTile.adaptive(
+                    secondary: const Icon(Icons.notifications_outlined),
+                    title: Text(
+                      local
+                          ? 'Alerty o innych zdarzeniach'
+                          : 'Powiadomienia z kamery',
+                    ),
+                    value: _notificationSettings.enabled,
+                    onChanged: notificationsBusy
+                        ? null
+                        : (enabled) {
                             unawaited(
                               _setNotificationSettings(
                                 _notificationSettings.copyWith(
-                                  cooldownSeconds: seconds,
+                                  enabled: enabled,
+                                ),
+                              ),
+                            );
+                          },
+                  ),
+                  if (!local) ...[
+                    const Divider(height: 1),
+                    SwitchListTile.adaptive(
+                      secondary: const Icon(Icons.sensors),
+                      title: const Text('Alert o ruchu'),
+                      value: _notificationSettings.motionEnabled,
+                      onChanged: notificationTypesEnabled
+                          ? (enabled) {
+                              unawaited(
+                                _setNotificationSettings(
+                                  _notificationSettings.copyWith(
+                                    motionEnabled: enabled,
+                                  ),
+                                ),
+                              );
+                            }
+                          : null,
+                    ),
+                  ],
+                  const Divider(height: 1),
+                  SwitchListTile.adaptive(
+                    secondary: const Icon(Icons.person_outline),
+                    title: const Text('Wykrycie osoby'),
+                    value: _notificationSettings.personEnabled,
+                    onChanged: notificationTypesEnabled
+                        ? (enabled) {
+                            unawaited(
+                              _setNotificationSettings(
+                                _notificationSettings.copyWith(
+                                  personEnabled: enabled,
                                 ),
                               ),
                             );
                           }
                         : null,
                   ),
-                ),
-                if (_loadingNotifications || _savingNotifications)
-                  const LinearProgressIndicator(),
-              ],
+                  const Divider(height: 1),
+                  SwitchListTile.adaptive(
+                    secondary: const Icon(Icons.directions_car_outlined),
+                    title: const Text('Wykrycie pojazdu'),
+                    value: _notificationSettings.vehicleEnabled,
+                    onChanged: notificationTypesEnabled
+                        ? (enabled) {
+                            unawaited(
+                              _setNotificationSettings(
+                                _notificationSettings.copyWith(
+                                  vehicleEnabled: enabled,
+                                ),
+                              ),
+                            );
+                          }
+                        : null,
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile.adaptive(
+                    secondary: const Icon(Icons.volume_up_outlined),
+                    title: const Text('Wykrycie dźwięku'),
+                    value: _notificationSettings.soundEnabled,
+                    onChanged: notificationTypesEnabled
+                        ? (enabled) {
+                            unawaited(
+                              _setNotificationSettings(
+                                _notificationSettings.copyWith(
+                                  soundEnabled: enabled,
+                                ),
+                              ),
+                            );
+                          }
+                        : null,
+                  ),
+                  const Divider(height: 1),
+                  _alertCooldown(enabled: canSetCooldown),
+                  if (_loadingNotifications || _savingNotifications)
+                    const LinearProgressIndicator(),
+                ],
+              ),
             ),
-          ),
+          ] else if (_motionPreference.sendsAlert)
+            ExpansionTile(
+              title: const Text('Opcje alertu'),
+              children: [_alertCooldown(enabled: canSetCooldown)],
+            ),
           const SizedBox(height: 24),
           Text(
             'Strefa niebezpieczna',

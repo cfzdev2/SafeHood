@@ -65,7 +65,7 @@ test("phone motion is opt-in and keeps the event private", {
     name: "Robot",
     connectionType: "onvif",
     motionDetectionEnabled: false,
-    notificationSettings: {enabled: true, motion: true},
+    notificationSettings: {enabled: false, motion: true},
   };
   const batch = db.batch();
   batch.set(db.doc(`users/${ownerId}`), {firstName: "Owner"});
@@ -81,7 +81,7 @@ test("phone motion is opt-in and keeps the event private", {
     ...commonCamera,
     connectionType: "rtsp",
     liveMotionEnabled: true,
-    notificationSettings: {enabled: true, motion: false},
+    notificationSettings: {enabled: true, motion: true, motionAlert: false},
   });
   await batch.commit();
 
@@ -106,8 +106,19 @@ test("phone motion is opt-in and keeps the event private", {
   await assertFails(updateDoc(camera, {
     liveMotionEnabled: "true", updatedAt: serverTimestamp(),
   }));
+  const alertOnlyForMotion = {
+    enabled: false, motion: true, person: true, vehicle: true, sound: true,
+    motionAlert: true,
+  };
+  await assertFails(updateDoc(camera, {
+    notificationSettings: {...alertOnlyForMotion, motionAlert: "true"},
+    updatedAt: serverTimestamp(),
+  }));
   await assertSucceeds(updateDoc(camera, {
-    liveMotionEnabled: true, updatedAt: serverTimestamp(),
+    liveMotionEnabled: true,
+    motionDetectionEnabled: true,
+    notificationSettings: alertOnlyForMotion,
+    updatedAt: serverTimestamp(),
   }));
   await assert.rejects(send(eventData, neighborId), {code: "not-found"});
   await assert.rejects(send({...eventData, type: "person"}), {
@@ -148,5 +159,20 @@ test("phone motion is opt-in and keeps the event private", {
     ...eventData, cameraId: "muted", phoneSnapshot: null,
   });
   assert.equal(muted.type, "motion");
+  await send({
+    ...eventData, source: "onvif", type: "sound", phoneSnapshot: null,
+  });
   assert.equal(pushes.length, 1);
+
+  await assertSucceeds(updateDoc(camera, {
+    liveMotionEnabled: false,
+    motionDetectionEnabled: false,
+    notificationSettings: {...alertOnlyForMotion, motionAlert: false},
+    updatedAt: serverTimestamp(),
+  }));
+  await assert.rejects(send(), {code: "failed-precondition"});
+  await assert.rejects(
+      send({...eventData, source: "onvif", phoneSnapshot: null}),
+      {code: "failed-precondition"},
+  );
 });

@@ -7,6 +7,7 @@ import 'local_camera_connection.dart';
 
 import '../domain/camera.dart';
 import '../domain/camera_ai_zone.dart';
+import '../domain/camera_motion_preference.dart';
 import '../domain/camera_notification_settings.dart';
 
 class CameraService {
@@ -59,11 +60,33 @@ class CameraService {
       .map((document) => document.data()?['liveMotionEnabled'] == true)
       .distinct();
 
-  Future<void> setLiveMotionEnabled(String cameraId, bool enabled) =>
-      _camerasCollection.doc(cameraId).update({
-        'liveMotionEnabled': enabled,
+  Future<CameraNotificationSettings> setMotionPreference({
+    required String cameraId,
+    required CameraMotionPreference preference,
+  }) async {
+    final reference = _camerasCollection.doc(cameraId);
+    return _firestore.runTransaction((transaction) async {
+      final data = (await transaction.get(reference)).data();
+      if (data == null) throw StateError('Kamera nie istnieje.');
+      final camera = Camera.fromMap(cameraId, data);
+      if (!camera.usesLocalConnection) {
+        throw StateError('Kamera nie korzysta z lokalnego wykrywania.');
+      }
+
+      final notifications = CameraNotificationSettings.fromMap(
+        data['notificationSettings'],
+      ).copyWith(motionAlertOverride: preference.sendsAlert);
+      transaction.update(reference, {
+        'motionDetectionEnabled':
+            camera.connectionType == CameraConnectionType.onvif &&
+            preference.detects,
+        'liveMotionEnabled': preference.detects,
+        'notificationSettings': notifications.toMap(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      return notifications;
+    });
+  }
 
   Future<void> addCamera(
     Camera camera, {
@@ -249,13 +272,34 @@ class CameraService {
     return CameraNotificationSettings.fromMap(data?['notificationSettings']);
   }
 
-  Future<void> setNotificationSettings({
+  Future<CameraNotificationSettings> setNotificationSettings({
     required String cameraId,
     required CameraNotificationSettings settings,
-  }) {
-    return _camerasCollection.doc(cameraId).update({
-      'notificationSettings': settings.toMap(),
-      'updatedAt': FieldValue.serverTimestamp(),
+    bool keepMotionAlert = false,
+  }) async {
+    final reference = _camerasCollection.doc(cameraId);
+    if (!keepMotionAlert) {
+      await reference.update({
+        'notificationSettings': settings.toMap(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return settings;
+    }
+
+    return _firestore.runTransaction((transaction) async {
+      final data = (await transaction.get(reference)).data();
+      if (data == null) throw StateError('Kamera nie istnieje.');
+      final current = CameraNotificationSettings.fromMap(
+        data['notificationSettings'],
+      );
+      final updated = settings.copyWith(
+        motionAlertOverride: current.sendsMotionAlert,
+      );
+      transaction.update(reference, {
+        'notificationSettings': updated.toMap(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return updated;
     });
   }
 

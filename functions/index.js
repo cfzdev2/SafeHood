@@ -2121,6 +2121,10 @@ function isCameraEventNotificationEnabled(
     return true;
   }
 
+  if (eventType === "motion" && typeof settings.motionAlert === "boolean") {
+    return settings.motionAlert;
+  }
+
   if (settings.enabled === false) {
     return false;
   }
@@ -2621,6 +2625,12 @@ async function ingestCameraEventInternal(
             throw new HttpsError(
                 "failed-precondition",
                 "Wykrywanie ruchu podczas podglądu jest wyłączone.",
+            );
+          }
+          if (input.fromCameraApp && source === "onvif" && type === "motion" &&
+              cameraData.motionDetectionEnabled === false) {
+            throw new HttpsError(
+                "failed-precondition", "Wykrywanie ruchu jest wyłączone.",
             );
           }
           const cameraName =
@@ -5039,6 +5049,7 @@ exports.ingestCameraEvent = onCall(
             cameraId,
             type: data.type,
             source: data.source,
+            fromCameraApp: true,
             phoneMotion,
             phoneSnapshot,
             confidence: data.confidence,
