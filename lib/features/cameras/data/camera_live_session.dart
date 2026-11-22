@@ -45,6 +45,8 @@ class CameraLiveSession extends ChangeNotifier {
   static const _retrySeconds = [2, 4, 8, 15, 30];
   static const _watchdogInterval = Duration(seconds: 5);
   static const _positionDeadline = Duration(seconds: 1);
+  static const _slowChecksBeforeRefresh = 3;
+  static const _stableChecksBeforeReset = 12;
   static const _closeTimeout = Duration(seconds: 3);
   static const _bufferingThreshold = Duration(seconds: 4);
   static const _qualityDeadline = Duration(seconds: 6);
@@ -59,6 +61,12 @@ class CameraLiveSession extends ChangeNotifier {
       phase == CameraLivePhase.connecting ||
       phase == CameraLivePhase.reconnecting ||
       phase == CameraLivePhase.adjustingQuality;
+
+  bool get canRefresh =>
+      _active &&
+      _autoReconnect &&
+      phase == CameraLivePhase.playing &&
+      _controller != null;
 
   bool get _autoReconnect => _provider.camera.usesLocalConnection;
   bool get _isRtsp => _playback?.openedAttempt?.uri.scheme == 'rtsp';
@@ -88,6 +96,8 @@ class CameraLiveSession extends ChangeNotifier {
   Duration? _lastPosition;
   CameraLiveFrameStats? _lastFrameStats;
   bool _reportedSlowFrames = false;
+  int _slowFrameChecks = 0;
+  bool _refreshedSlowStream = false;
   int _stalledChecks = 0;
   int _movingChecks = 0;
   int _retryIndex = 0;
@@ -108,6 +118,7 @@ class CameraLiveSession extends ChangeNotifier {
     _probedStreams.clear();
     _recentStallStream = null;
     _recentStalls = 0;
+    _refreshedSlowStream = false;
     return _begin(reconnecting: false);
   }
 
@@ -134,6 +145,13 @@ class CameraLiveSession extends ChangeNotifier {
     }
     _retryIndex = 0;
     return _begin(reconnecting: true);
+  }
+
+  void refresh() {
+    if (!canRefresh) return;
+    _refreshedSlowStream = true;
+    _retryIndex = 0;
+    _interrupted('Ręczne odświeżenie podglądu.', reopen: true);
   }
 
   Future<void> setVolume(double volume) async {
@@ -317,13 +335,21 @@ class CameraLiveSession extends ChangeNotifier {
         _handlePlayerChange();
       } else if (_renderingSlowly(frameStats)) {
         _movingChecks = 0;
+        _slowFrameChecks++;
         _noticeStall(frozen: false);
+        _refreshIfStillSlow();
       } else {
+        _slowFrameChecks = 0;
         if (++_movingChecks >= 2) _retryIndex = 0;
-        if (_movingChecks >= 12) _recentStalls = 0;
+        if (_movingChecks >= _stableChecksBeforeReset) {
+          _recentStalls = 0;
+          _refreshedSlowStream = false;
+        }
         if (_movingChecks == 4) _rememberQuality(value);
       }
-      if (_autoReconnect) _reportAvailability(true);
+      if (_autoReconnect && identical(player, _controller)) {
+        _reportAvailability(true);
+      }
     } else {
       _movingChecks = 0;
       _resetFrameStats();
@@ -360,6 +386,24 @@ class CameraLiveSession extends ChangeNotifier {
   void _resetFrameStats() {
     _lastFrameStats = null;
     _reportedSlowFrames = false;
+    _slowFrameChecks = 0;
+  }
+
+  void _refreshIfStillSlow() {
+    if (!canRefresh ||
+        _userPaused ||
+        _qualityProbePlayer != null ||
+        _slowFrameChecks < _slowChecksBeforeRefresh ||
+        _refreshedSlowStream) {
+      return;
+    }
+    // Rebuild the decoder once. A persistently slow camera must not loop
+    // between playback and reconnecting; allow another try after stable video.
+    _refreshedSlowStream = true;
+    _interrupted(
+      'Odtwarzanie nadal się zacina. Odświeżam podgląd.',
+      reopen: true,
+    );
   }
 
   bool _renderingSlowly(CameraLiveFrameStats? stats) {
@@ -426,6 +470,8 @@ class CameraLiveSession extends ChangeNotifier {
       _interrupted('Dopasowywanie jakości obrazu.', qualityProfile: profile);
     } else if (_stalledChecks >= 3) {
       _interrupted('Strumień LIVE przestał przesyłać obraz.');
+    } else {
+      _refreshIfStillSlow();
     }
   }
 
@@ -498,7 +544,9 @@ class CameraLiveSession extends ChangeNotifier {
   void _interrupted(
     String message, {
     CameraLiveQualityProfile? qualityProfile,
+    bool reopen = false,
   }) {
+    final opened = _playback?.openedAttempt;
     final alternate =
         _playback?.hasNext == true && (!_autoReconnect || !_hadProgress);
     final previous = _detachController();
@@ -507,6 +555,9 @@ class CameraLiveSession extends ChangeNotifier {
     unawaited(_enqueue(() => _release(previous)));
     if (qualityProfile != null) {
       unawaited(_begin(reconnecting: true, qualityProfile: qualityProfile));
+    } else if (reopen) {
+      _preferred = opened ?? _preferred;
+      unawaited(_begin(reconnecting: true));
     } else if (alternate) {
       unawaited(_begin(reconnecting: true, alternate: true));
     } else {

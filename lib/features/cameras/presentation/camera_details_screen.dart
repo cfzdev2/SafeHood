@@ -13,6 +13,7 @@ import '../../camera_events/presentation/camera_event_history_screen.dart';
 import 'camera_settings_screen.dart';
 import 'widgets/camera_controls_panel.dart';
 import 'widgets/camera_live_placeholder.dart';
+import 'widgets/camera_live_refresh_button.dart';
 import 'widgets/live_motion_status_tile.dart';
 import 'camera_recordings_screen.dart';
 import 'camera_snapshot_preview_screen.dart';
@@ -382,14 +383,20 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
           Positioned(
             top: 8,
             right: 8,
-            child: IconButton(
-              onPressed: _openLiveFullscreen,
-              tooltip: 'Pełny ekran',
-              style: IconButton.styleFrom(
-                foregroundColor: Colors.white,
-                backgroundColor: Colors.black54,
-              ),
-              icon: const Icon(Icons.fullscreen),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CameraLiveRefreshButton(session: _liveSession),
+                IconButton(
+                  onPressed: _openLiveFullscreen,
+                  tooltip: 'Pełny ekran',
+                  style: IconButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    backgroundColor: Colors.black54,
+                  ),
+                  icon: const Icon(Icons.fullscreen),
+                ),
+              ],
             ),
           ),
         ],

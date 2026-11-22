@@ -196,6 +196,39 @@ void main() {
     expect(provider.players.every((player) => player.disposed), isTrue);
   });
 
+  testWidgets('fullscreen refresh reopens the current live preview in place', (
+    tester,
+  ) async {
+    final provider = _Provider();
+    final session = CameraLiveSession(
+      provider,
+      createPlayback: provider.createPlayback,
+    );
+    await session.resume();
+    await session.setVolume(0);
+    await tester.pumpWidget(
+      MaterialApp(home: CameraFullscreenLiveView.live(session: session)),
+    );
+    final original = provider.players.single;
+    await tester.tap(find.byTooltip('Odśwież podgląd'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(original.disposed, isTrue);
+    expect(provider.preferred.last, same(original.attempt));
+    expect(provider.connects, 2);
+    final replacement = provider.players.last;
+    expect(replacement.value.volume, 0);
+    expect(
+      tester.widget<VideoPlayer>(find.byType(VideoPlayer)).controller,
+      same(replacement),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    session.dispose();
+    await tester.pump();
+  });
+
   testWidgets('RTSP with a clamped position stays open until playback stops', (
     tester,
   ) async {
@@ -423,7 +456,7 @@ void main() {
 
       rendered = 0;
       dropped = 0;
-      for (var i = 0; i < 5; i++) {
+      for (var i = 0; i < 3; i++) {
         await check(lighter, 10);
       }
       expect(store.saved, isEmpty);
@@ -436,6 +469,68 @@ void main() {
       await tester.pump();
     },
   );
+
+  testWidgets('ongoing frame loss refreshes once without a lighter stream', (
+    tester,
+  ) async {
+    final provider = _AdaptiveProvider()..offered = null;
+    var time = 0;
+    var rendered = 0;
+    final session = CameraLiveSession(
+      provider,
+      createPlayback: provider.createPlayback,
+      qualityStore: _QualityStore(),
+      readFrameStats: (_) async => CameraLiveFrameStats(
+        atMillis: time,
+        rendered: rendered,
+        dropped: 0,
+        expectedFps: 15,
+      ),
+    );
+    await session.resume();
+    final original = provider.players.single;
+
+    Future<void> check(_Player player, int frames) async {
+      time += 5000;
+      rendered += frames;
+      player.advance();
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+    }
+
+    await check(original, 75);
+    await check(original, 75);
+    await check(original, 10);
+    await check(original, 10);
+    expect(session.controller, same(original));
+    expect(provider.requests, [(1280 * 720 - 1, original.attempt.uri)]);
+
+    await check(original, 10);
+    expect(original.disposed, isTrue);
+    expect(provider.connects, 2);
+    final replacement = provider.players.last;
+    expect(session.controller, same(replacement));
+
+    // The restart budget is not replenished by a still-broken stream.
+    rendered = 0;
+    for (var i = 0; i < 7; i++) {
+      await check(replacement, 10);
+    }
+    expect(session.controller, same(replacement));
+    expect(provider.connects, 2);
+
+    // A later bad episode can recover after a minute of good playback.
+    for (var i = 0; i < 12; i++) {
+      await check(replacement, 75);
+    }
+    for (var i = 0; i < 3; i++) {
+      await check(replacement, 10);
+    }
+    expect(replacement.disposed, isTrue);
+    expect(provider.connects, 3);
+    session.dispose();
+    await tester.pump();
+  });
 
   testWidgets(
     'a saved profile that cannot play falls back to the original URL',

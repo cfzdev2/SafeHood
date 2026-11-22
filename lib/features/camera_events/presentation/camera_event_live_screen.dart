@@ -8,6 +8,7 @@ import '../../cameras/data/camera_live_session.dart';
 import '../../cameras/data/live_motion_monitor.dart';
 import '../../cameras/domain/camera.dart';
 import '../../cameras/presentation/widgets/camera_live_placeholder.dart';
+import '../../cameras/presentation/widgets/camera_live_refresh_button.dart';
 import '../../cameras/presentation/widgets/live_motion_status_tile.dart';
 import 'package:flutter/services.dart';
 
@@ -127,14 +128,20 @@ class _CameraEventLiveScreenState extends State<CameraEventLiveScreen>
                 Positioned(
                   top: 8,
                   right: 8,
-                  child: IconButton(
-                    onPressed: _openFullscreen,
-                    tooltip: 'Pełny ekran',
-                    style: IconButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      backgroundColor: Colors.black54,
-                    ),
-                    icon: const Icon(Icons.fullscreen),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CameraLiveRefreshButton(session: _session),
+                      IconButton(
+                        onPressed: _openFullscreen,
+                        tooltip: 'Pełny ekran',
+                        style: IconButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          backgroundColor: Colors.black54,
+                        ),
+                        icon: const Icon(Icons.fullscreen),
+                      ),
+                    ],
                   ),
                 ),
                 ValueListenableBuilder<VideoPlayerValue>(
@@ -299,14 +306,21 @@ class _CameraFullscreenLiveViewState extends State<CameraFullscreenLiveView> {
             top: 8,
             right: 8,
             child: SafeArea(
-              child: IconButton(
-                onPressed: _closeFullscreen,
-                tooltip: 'Wyjdź z pełnego ekranu',
-                style: IconButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  backgroundColor: Colors.black54,
-                ),
-                icon: const Icon(Icons.fullscreen_exit),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (widget._session case final session?)
+                    CameraLiveRefreshButton(session: session),
+                  IconButton(
+                    onPressed: _closeFullscreen,
+                    tooltip: 'Wyjdź z pełnego ekranu',
+                    style: IconButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.black54,
+                    ),
+                    icon: const Icon(Icons.fullscreen_exit),
+                  ),
+                ],
               ),
             ),
           ),
