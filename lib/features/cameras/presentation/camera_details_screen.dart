@@ -34,6 +34,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
   late final CameraProvider _cameraProvider;
   late final Stream<CameraRuntimeState> _cameraStateStream;
   final CameraService _cameraService = CameraService();
+  final ScrollController _scrollController = ScrollController();
 
   late final CameraLiveSession _liveSession;
   LiveMotionMonitor? _liveMotion;
@@ -222,6 +223,7 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     _liveSession.removeListener(_refreshLive);
     _liveMotion?.dispose();
     _liveSession.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -445,6 +447,28 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
     );
   }
 
+  Widget _buildScrollableBody(
+    BuildContext context, {
+    required List<Widget> children,
+  }) {
+    return SafeArea(
+      top: false,
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+        child: Scrollbar(
+          controller: _scrollController,
+          thumbVisibility: true,
+          interactive: true,
+          child: ListView(
+            controller: _scrollController,
+            padding: const EdgeInsets.all(16),
+            children: children,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final capabilities = _cameraProvider.capabilities;
@@ -457,9 +481,18 @@ class _CameraDetailsScreenState extends State<CameraDetailsScreen>
             snapshot.data ?? CameraRuntimeState.fromCamera(widget.camera);
 
         return Scaffold(
-          appBar: AppBar(title: Text(widget.camera.name)),
-          body: ListView(
-            padding: const EdgeInsets.all(16),
+          appBar: AppBar(
+            title: Text(widget.camera.name),
+            actions: [
+              IconButton(
+                onPressed: _openCameraSettings,
+                tooltip: 'Ustawienia kamery',
+                icon: const Icon(Icons.settings_outlined),
+              ),
+            ],
+          ),
+          body: _buildScrollableBody(
+            context,
             children: [
               AspectRatio(
                 aspectRatio: 16 / 9,
