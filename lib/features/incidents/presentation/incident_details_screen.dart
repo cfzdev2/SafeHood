@@ -2,6 +2,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../camera_events/presentation/camera_event_live_screen.dart';
+import '../../cameras/data/camera_service.dart';
 import '../data/incident_service.dart';
 import '../domain/incident.dart';
 import 'incident_chat_screen.dart';
@@ -30,6 +32,7 @@ class _IncidentDetailsScreenState
 
   bool _loadingContact = false;
   bool _savingResponse = false;
+  bool _openingLive = false;
 
   Incident get incident =>
       widget.incident;
@@ -190,6 +193,38 @@ class _IncidentDetailsScreenState
           _savingResponse = false;
         });
       }
+    }
+  }
+
+  Future<void> _openCameraLive() async {
+    bool canOpen() => incident.canOpenCameraLive(_currentUid, DateTime.now());
+    if (_openingLive || !canOpen()) return;
+    setState(() => _openingLive = true);
+    try {
+      final camera = await CameraService()
+          .getCamera(incident.cameraId)
+          .timeout(const Duration(seconds: 10));
+      if (!mounted || !canOpen()) return;
+      if (camera == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nie znaleziono kamery zgłoszenia.')),
+        );
+        return;
+      }
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => CameraEventLiveScreen(camera: camera),
+        ),
+      );
+    } catch (error) {
+      debugPrint('INCIDENT LIVE ERROR: ${error.runtimeType}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nie udało się otworzyć podglądu.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _openingLive = false);
     }
   }
 
@@ -365,18 +400,27 @@ class _IncidentDetailsScreenState
                       color: Colors.white70,
                     ),
                     const SizedBox(height: 10),
-                    Text(
-                      isActive
-                          ? 'LIVE będzie dostępny tutaj'
-                          : incident.hasRecording
-                              ? 'Nagranie będzie '
-                                  'dostępne tutaj'
-                              : 'Brak nagrania',
-                      style:
-                          const TextStyle(
-                        color: Colors.white70,
+                    if (incident.canOpenCameraLive(_currentUid, DateTime.now()))
+                      FilledButton.icon(
+                        onPressed: _openingLive ? null : _openCameraLive,
+                        icon: const Icon(Icons.play_arrow),
+                        label: Text(_openingLive
+                            ? 'Otwieranie…'
+                            : 'Otwórz podgląd na żywo'),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          isActive
+                              ? _isReporter
+                                  ? 'Brak kamery w tym zgłoszeniu'
+                                  : 'Podgląd dostępny dla właściciela kamery'
+                              : 'Brak dostępnego nagrania',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white70),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),

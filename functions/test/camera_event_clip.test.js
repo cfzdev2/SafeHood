@@ -6,8 +6,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {createHash} = require("node:crypto");
 const {Timestamp, FieldValue} = require("firebase-admin/firestore");
-const {inspectMp4, decodeClip, maximumClipBytes,
-  createClipUploadHandler} = require("../camera_event_clip");
+const {
+  inspectMp4, decodeClip, maximumClipBytes,
+  createClipUploadHandler, savePhoneMotionClip,
+} = require("../camera_event_clip");
 
 const movie = fs.readFileSync(
     path.join(__dirname, "../../tools/fake_clip.mp4"),
@@ -77,14 +79,15 @@ const harness = ({camera = {}, event = {}, receipt = {},
       }
     },
   };
-  const handler = createClipUploadHandler({db, Timestamp, FieldValue,
+  const getBucket = () => ({file: (name, options) => {
+    assert.equal(name, `users/${ownerId}/cameraEvents/${eventId}/clip.mp4`);
+    if (options) assert.deepEqual(options, {generation: "1"});
+    return file;
+  }});
+  const handler = createClipUploadHandler({db, Timestamp, FieldValue, getBucket,
     authenticate: async () => authenticated ? {ownerId, bridgeId} : null,
-    getBucket: () => ({file: (name, options) => {
-      assert.equal(name, `users/${ownerId}/cameraEvents/${eventId}/clip.mp4`);
-      if (options) assert.deepEqual(options, {generation: "1"});
-      return file;
-    }}), log: {error: () => {}}});
-  return {documents, stored: () => stored, writes: () => writes,
+    log: {error: () => {}}});
+  return {documents, db, getBucket, stored: () => stored, writes: () => writes,
     send: async (changes = {}, method = "POST") => {
       let status;
       let body;
@@ -100,6 +103,62 @@ const harness = ({camera = {}, event = {}, receipt = {},
       return {status, body};
     }};
 };
+
+const phoneMovie = fs.readFileSync(
+    path.join(__dirname, "fixtures/phone_motion_clip.mp4.b64"), "utf8",
+).trim();
+const phoneClip = ({camera, event, ...options} = {}) => {
+  const h = harness({...options,
+    camera: {liveMotionEnabled: true, ...camera},
+    event: {source: "phone-motion",
+      lastPhoneMotionAt: Timestamp.fromMillis(occurredAtMillis), ...event},
+  });
+  return {...h, upload: (changes = {}) => savePhoneMotionClip({
+    db: h.db, getBucket: h.getBucket, FieldValue, Timestamp,
+    ownerId, now: occurredAtMillis + 8000,
+    data: {cameraId, eventId, mp4Base64: phoneMovie},
+    ...changes,
+  })};
+};
+
+test("phone motion attaches a private MP4 once", async () => {
+  const h = phoneClip();
+  const expected = `users/${ownerId}/cameraEvents/${eventId}/clip.mp4`;
+  assert.deepEqual(await h.upload(), {clipPath: expected});
+  assert.deepEqual(await h.upload(), {clipPath: expected});
+  assert.equal(h.writes(), 1);
+  assert.deepEqual(h.stored().bytes, Buffer.from(phoneMovie, "base64"));
+  const event = h.documents.get(`cameraEvents/${eventId}`);
+  assert.equal(event.clipPath, expected);
+  assert.equal(event.clipDurationMillis, 2000);
+  assert.equal(event.clipPrebufferMillis, 0);
+});
+
+test("phone clips require the owner and a recent phone detection", async () => {
+  const wrongOwner = phoneClip({event: {ownerId: "neighbor"}});
+  await assert.rejects(wrongOwner.upload(), {status: 403});
+  assert.equal(wrongOwner.writes(), 0);
+
+  const noPhoneMotion = phoneClip({event: {lastPhoneMotionAt: null}});
+  await assert.rejects(noPhoneMotion.upload(), {status: 403});
+  const tooLate = phoneClip();
+  await assert.rejects(tooLate.upload({now: occurredAtMillis + 301000}),
+      {status: 403});
+  assert.equal(tooLate.writes(), 0);
+
+  await assert.rejects(phoneClip().upload({
+    data: {eventId, cameraId, mp4Base64: movie.toString("base64")},
+  }), {status: 400});
+});
+
+test("phone clip is removed if monitoring stops mid-upload", async () => {
+  const h = phoneClip({beforeTransaction: (docs, cameraPath) => {
+    docs.get(cameraPath).liveMotionEnabled = false;
+  }});
+  await assert.rejects(h.upload(), {status: 403});
+  assert.equal(h.stored(), null);
+  assert.equal(h.documents.get(`cameraEvents/${eventId}`).clipPath, undefined);
+});
 
 test("czyta rzeczywiste MP4 H.264 i jego czas", () => {
   assert.deepEqual(inspectMp4(movie), {

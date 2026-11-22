@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
@@ -28,7 +29,8 @@ bool supportsLiveMotion(Camera camera) =>
     camera.usesLocalConnection;
 
 typedef LiveMotionFrame = Future<Uint8List?> Function(VideoPlayerController);
-typedef SaveLiveMotion = Future<void> Function(DateTime, Uint8List?);
+typedef SaveLiveMotion = Future<String?> Function(DateTime, Uint8List?);
+typedef AttachLiveMotionClip = Future<void> Function(String, Uint8List);
 
 /// Shares the LIVE player and follows its lifecycle, including fullscreen.
 class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
@@ -38,6 +40,8 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
     required this._sample,
     required this._snapshot,
     required this._save,
+    this._recordClip,
+    this._saveClip,
   }) : super(LiveMotionStatus.off) {
     _session.addListener(_sync);
     _settings = enabled.listen(_enable, onError: (Object _) => _enable(false));
@@ -51,15 +55,22 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
       enabled: CameraService().watchLiveMotionEnabled(camera.id),
       sample: (player) => _readFrame(player, 'sample'),
       snapshot: (player) => _readFrame(player, 'snapshot'),
+      recordClip: (player) => _readFrame(player, 'clip'),
       save: (time, jpeg) async {
-        await events.ingestFromCamera(
+        final event = await events.ingestFromCamera(
           cameraId: camera.id,
           type: 'motion',
           source: 'phone-motion',
           occurredAt: time,
           phoneSnapshot: jpeg,
         );
+        return event.eventId;
       },
+      saveClip: (eventId, mp4) => events.attachPhoneMotionClip(
+        cameraId: camera.id,
+        eventId: eventId,
+        mp4: mp4,
+      ),
     );
   }
 
@@ -70,6 +81,8 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
   final LiveMotionFrame _sample;
   final LiveMotionFrame _snapshot;
   final SaveLiveMotion _save;
+  final LiveMotionFrame? _recordClip;
+  final AttachLiveMotionClip? _saveClip;
   final _detector = LiveMotionDetector();
   final _sinceLastEvent = Stopwatch();
   late final StreamSubscription<bool> _settings;
@@ -87,13 +100,16 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
     final session = CameraLivePlayback.frameSessionFor(player);
     final size = player.value.size;
     if (session == null || size.isEmpty || !size.isFinite) return null;
-    final scale = math.min(1.0, 480.0 / math.max(size.width, size.height));
+    final clip = method == 'clip';
+    final maxEdge = clip ? 320.0 : 480.0;
+    final scale = math.min(1.0, maxEdge / math.max(size.width, size.height));
+    int dimension(double value) => clip
+        ? math.max(16, 16 * (value * scale / 16).floor())
+        : math.max(1, (value * scale).round());
     return _channel.invokeMethod<Uint8List>(method, {
       'session': session,
-      if (method == 'snapshot')
-        'width': math.max(1, (size.width * scale).round()),
-      if (method == 'snapshot')
-        'height': math.max(1, (size.height * scale).round()),
+      if (method != 'sample') 'width': dimension(size.width),
+      if (method != 'sample') 'height': dimension(size.height),
     });
   }
 
@@ -178,15 +194,53 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
       _sinceLastEvent
         ..reset()
         ..start();
+      final recording = _captureClip(player, generation);
+      String? eventId;
       try {
-        await _save(occurredAt, jpeg).timeout(const Duration(seconds: 20));
+        eventId = await _save(
+          occurredAt,
+          jpeg,
+        ).timeout(const Duration(seconds: 20));
         if (current()) value = LiveMotionStatus.saved;
       } catch (error) {
         debugPrint('PHONE MOTION EVENT: ${error.runtimeType}');
         if (current()) value = LiveMotionStatus.saveFailed;
       }
+      final clip = await recording;
+      if (eventId != null && clip != null) {
+        unawaited(_attachClip(eventId, clip));
+      }
     } finally {
       if (current()) _schedule(player, generation);
+    }
+  }
+
+  Future<Uint8List?> _captureClip(
+    VideoPlayerController player,
+    int generation,
+  ) async {
+    final record = _recordClip;
+    if (record == null || _saveClip == null) return null;
+    try {
+      final bytes = await record(player).timeout(const Duration(seconds: 9));
+      if (!_current(player, generation)) return null;
+      if (bytes != null && bytes.length >= 100 && bytes.length <= 1024 * 1024) {
+        return bytes;
+      }
+      debugPrint('PHONE MOTION RECORDING: clip unavailable');
+    } catch (error) {
+      debugPrint('PHONE MOTION RECORDING: ${error.runtimeType}');
+    }
+    return null;
+  }
+
+  Future<void> _attachClip(String eventId, Uint8List mp4) async {
+    try {
+      await _saveClip?.call(eventId, mp4);
+    } on FirebaseFunctionsException catch (error) {
+      debugPrint('PHONE MOTION CLIP UPLOAD: ${error.code}');
+    } catch (error) {
+      debugPrint('PHONE MOTION CLIP UPLOAD: ${error.runtimeType}');
     }
   }
 

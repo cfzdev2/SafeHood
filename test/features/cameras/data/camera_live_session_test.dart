@@ -31,7 +31,10 @@ void main() {
       enabled: toggle.stream,
       sample: (_) async => _motionFrame(++samples > 1),
       snapshot: (_) async => snapshot,
-      save: (_, jpeg) async => pictures.add(jpeg),
+      save: (_, jpeg) async {
+        pictures.add(jpeg);
+        return 'event-1';
+      },
     );
     await session.resume();
     await tester.pump(const Duration(seconds: 1));
@@ -75,6 +78,7 @@ void main() {
       snapshot: (_) => pendingSnapshot.future,
       save: (_, _) async {
         reports++;
+        return 'event-1';
       },
     );
     await session.resume();
@@ -94,6 +98,63 @@ void main() {
     unawaited(toggle.close());
     await tester.pump();
   });
+
+  for (final leaveEarly in [false, true]) {
+    testWidgets(
+      leaveEarly
+          ? 'closing the live view during capture keeps the event without video'
+          : 'the event saves before a completed recording attaches to its ID',
+      (tester) async {
+        final provider = _Provider();
+        final session = CameraLiveSession(
+          provider,
+          createPlayback: provider.createPlayback,
+        );
+        final toggle = StreamController<bool>.broadcast();
+        final clip = Completer<Uint8List?>();
+        final snapshot = Uint8List(20);
+        final video = Uint8List(500);
+        final saved = <Uint8List?>[];
+        final uploads = <(String, Uint8List)>[];
+        var frames = 0;
+        var captures = 0;
+        final monitor = LiveMotionMonitor(
+          session: session,
+          enabled: toggle.stream,
+          sample: (_) async => _motionFrame(++frames > 1),
+          snapshot: (_) async => snapshot,
+          recordClip: (_) {
+            captures++;
+            return clip.future;
+          },
+          save: (_, picture) async {
+            saved.add(picture);
+            return 'recorded-motion';
+          },
+          saveClip: (eventId, bytes) async => uploads.add((eventId, bytes)),
+        );
+        await session.resume();
+        toggle.add(true);
+        await tester.pump();
+        for (var i = 0; i < 3; i++) {
+          await tester.pump(const Duration(milliseconds: 800));
+        }
+        expect(captures, 1);
+        expect(saved, [snapshot]);
+        expect(monitor.value, LiveMotionStatus.saved);
+        expect(uploads, isEmpty);
+
+        if (leaveEarly) await session.suspend();
+        clip.complete(video);
+        await tester.pump();
+        expect(uploads, leaveEarly ? isEmpty : [('recorded-motion', video)]);
+        monitor.dispose();
+        session.dispose();
+        unawaited(toggle.close());
+        await tester.pump();
+      },
+    );
+  }
 
   testWidgets('reopens fullscreen after the Wi-Fi camera returns', (
     tester,

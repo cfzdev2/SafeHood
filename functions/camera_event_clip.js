@@ -4,6 +4,7 @@ const {createHash} = require("node:crypto");
 const {normalizeDocumentId} = require("./camera_event_snapshot");
 
 const maximumClipBytes = 6 * 1024 * 1024;
+const maximumPhoneClipBytes = 1024 * 1024;
 const uuidPattern = new RegExp(
     "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-" +
     "[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -130,6 +131,115 @@ function decodeClip(value) {
   const bytes = Buffer.from(value, "base64");
   if (bytes.toString("base64") !== value) fail("Niepoprawne Base64.");
   return {bytes, ...inspectMp4(bytes)};
+}
+
+/**
+ * Attaches a silent clip to a recent motion event recorded by this owner.
+ * @param {Object} input Authenticated UID, media and backend dependencies.
+ * @return {Promise<Object>} The private clip path.
+ */
+async function savePhoneMotionClip({db, getBucket, FieldValue, Timestamp,
+  ownerId, data, now = Date.now()}) {
+  let cameraId;
+  let eventId;
+  try {
+    cameraId = normalizeDocumentId(data.cameraId, "cameraId");
+    eventId = normalizeDocumentId(data.eventId, "eventId");
+  } catch (_) {
+    fail("Nieprawidłowa kamera lub wykrycie.");
+  }
+  const value = data.mp4Base64;
+  if (typeof value !== "string" ||
+      value.length > 4 * Math.ceil(maximumPhoneClipBytes / 3)) {
+    fail("Nieprawidłowy rozmiar nagrania z podglądu.");
+  }
+  const clip = decodeClip(value);
+  if (clip.bytes.length > maximumPhoneClipBytes ||
+      clip.width > 320 || clip.height > 320 || clip.durationMillis > 7000) {
+    fail("Nieprawidłowe nagranie z podglądu.");
+  }
+
+  const cameraRef = db.collection("users").doc(ownerId)
+      .collection("cameras").doc(cameraId);
+  const eventRef = db.collection("cameraEvents").doc(eventId);
+  const clipPath = `users/${ownerId}/cameraEvents/${eventId}/clip.mp4`;
+  const verify = (cameraSnapshot, eventSnapshot) => {
+    if (!cameraSnapshot.exists || !eventSnapshot.exists) {
+      fail("Nie znaleziono wykrycia lub kamery.", 404);
+    }
+    const camera = cameraSnapshot.data();
+    const event = eventSnapshot.data();
+    const capturedAt = event.lastPhoneMotionAt;
+    const received = capturedAt && typeof capturedAt.toMillis === "function" ?
+      capturedAt.toMillis() : NaN;
+    if (event.ownerId !== ownerId || event.cameraId !== cameraId ||
+        camera.deletionPending === true || camera.liveMotionEnabled !== true ||
+        !["onvif", "rtsp"].includes(camera.connectionType) ||
+        !Number.isSafeInteger(received) || received > now + 60000 ||
+        now - received > 5 * 60 * 1000) {
+      fail("Nie można dołączyć nagrania do tego wykrycia.", 403);
+    }
+    return {event, received};
+  };
+  const {event, received} = verify(...await db.getAll(cameraRef, eventRef));
+  if (event.clipPath === clipPath) return {clipPath};
+
+  const file = getBucket().file(clipPath);
+  let created = false;
+  let generation = null;
+  try {
+    try {
+      await file.save(clip.bytes, {
+        resumable: false, validation: "crc32c",
+        preconditionOpts: {ifGenerationMatch: 0},
+        metadata: {
+          contentType: "video/mp4", cacheControl: "private, max-age=0",
+          metadata: {ownerId, cameraId, eventId, source: "phone-motion",
+            durationMillis: String(clip.durationMillis),
+            startedAtMillis: String(received)},
+        },
+      });
+      created = true;
+    } catch (error) {
+      if (Number(error.code) !== 412) throw error;
+    }
+    const [metadata] = await file.getMetadata();
+    if (created) generation = metadata.generation;
+    const attributes = metadata.metadata || {};
+    const duration = Number(attributes.durationMillis);
+    const started = Number(attributes.startedAtMillis);
+    const size = Number(metadata.size);
+    if (metadata.contentType !== "video/mp4" ||
+        attributes.ownerId !== ownerId || attributes.cameraId !== cameraId ||
+        attributes.eventId !== eventId ||
+        attributes.source !== "phone-motion" || !Number.isSafeInteger(size) ||
+        size < 100 || size > maximumPhoneClipBytes ||
+        !Number.isSafeInteger(duration) || duration < 1000 || duration > 7000 ||
+        !Number.isSafeInteger(started)) {
+      fail("Istniejące nagranie ma nieprawidłowe metadane.", 409);
+    }
+    await db.runTransaction(async (transaction) => {
+      const currentCamera = await transaction.get(cameraRef);
+      const currentEvent = await transaction.get(eventRef);
+      const {event} = verify(currentCamera, currentEvent);
+      if (!event.clipPath) {
+        transaction.update(eventRef, {
+          clipPath, clipDurationMillis: duration, clipPrebufferMillis: 0,
+          clipStartedAt: Timestamp.fromMillis(started),
+          clipEndedAt: Timestamp.fromMillis(started + duration),
+          clipUpdatedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    });
+    return {clipPath};
+  } catch (error) {
+    if (generation && [403, 404].includes(error.status)) {
+      await getBucket().file(clipPath, {generation})
+          .delete({ignoreNotFound: true}).catch(() => {});
+    }
+    throw error;
+  }
 }
 
 /**
@@ -297,4 +407,4 @@ function createClipUploadHandler({db, authenticate, getBucket,
 }
 
 module.exports = {maximumClipBytes, inspectMp4, decodeClip,
-  createClipUploadHandler};
+  createClipUploadHandler, savePhoneMotionClip};

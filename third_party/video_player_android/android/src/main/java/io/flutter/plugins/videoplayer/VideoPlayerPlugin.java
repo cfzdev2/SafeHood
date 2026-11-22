@@ -47,7 +47,8 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             binding.getTextureRegistry());
     flutterState.startListening(this, binding.getBinaryMessenger());
     frameSampler =
-        new VideoFrameSampler(binding.getBinaryMessenger(), framePlayers::get);
+        new VideoFrameSampler(binding.getBinaryMessenger(), framePlayers::get,
+            binding.getApplicationContext().getCacheDir());
 
     binding
         .getPlatformViewRegistry()

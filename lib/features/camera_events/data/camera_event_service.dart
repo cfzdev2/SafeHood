@@ -309,4 +309,21 @@ class CameraEventService {
       alreadyEscalated: data['alreadyEscalated'] == true,
     );
   }
+
+  Future<void> attachPhoneMotionClip({
+    required String cameraId,
+    required String eventId,
+    required Uint8List mp4,
+  }) async {
+    _requireUid();
+    final callable = _functions.httpsCallable(
+      'uploadPhoneMotionClip',
+      options: HttpsCallableOptions(timeout: const Duration(seconds: 30)),
+    );
+    await callable.call<Map<String, dynamic>>({
+      'cameraId': cameraId,
+      'eventId': eventId,
+      'mp4Base64': base64Encode(mp4),
+    });
+  }
 }

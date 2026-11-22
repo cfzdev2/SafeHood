@@ -100,11 +100,13 @@ class CameraCard extends StatelessWidget {
                           label: availabilityLabel,
                           color: availabilityColor,
                         ),
-                        _buildStatusChip(
-                          context,
-                          label: _statusLabel(effectiveStatus),
-                          color: monitoringColor,
-                        ),
+                        if (effectiveStatus !=
+                            CameraCardStatus.monitoringDuringLive)
+                          _buildStatusChip(
+                            context,
+                            label: _statusLabel(effectiveStatus),
+                            color: monitoringColor,
+                          ),
                       ],
                     ),
                   ],

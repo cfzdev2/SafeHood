@@ -18,6 +18,11 @@ video connection. Stopping playback or disposing the player makes sampling
 unavailable. The channel returns a small luma frame, or a bounded JPEG when
 requested for a detected event.
 
+On motion the app may request a single five-second silent H.264 clip from the
+same surface. The encoder reads downscaled frames on the sampling thread and
+removes its temporary MP4 after handing the bytes to the app. No second camera
+stream is opened.
+
 The same channel exposes decoder counters for the active RTSP player. The app
 uses them to recognize an ongoing stream that renders too few frames or drops
 many frames and can try a lighter profile. Reading these counters does not

@@ -59,7 +59,8 @@ const {
 const geofire =
     require("geofire-common");
 
-const {createClipUploadHandler} = require("./camera_event_clip");
+const {createClipUploadHandler, savePhoneMotionClip} =
+  require("./camera_event_clip");
 
 const {
   mergeCameraEventAiMetadata,
@@ -2882,6 +2883,10 @@ async function ingestCameraEventInternal(
                   );
               }
 
+              if (phoneMotion) {
+                updatedEventData.lastPhoneMotionAt = nowTimestamp;
+              }
+
               if (notificationRequired) {
                 updatedEventData.notificationState = {
                   schemaVersion: 1,
@@ -2986,6 +2991,7 @@ async function ingestCameraEventInternal(
             ...(eventAiMetadata === null ? {} : {
               aiMetadata: eventAiMetadata,
             }),
+            ...(phoneMotion ? {lastPhoneMotionAt: nowTimestamp} : {}),
             incidentId: null,
             createdAt:
               nowTimestamp,
@@ -4746,6 +4752,33 @@ exports.uploadBridgeCameraEventClip = onRequest(
     createClipUploadHandler({db,
       authenticate: authenticateBridgeRequest,
       getBucket: () => getStorage().bucket(), FieldValue, Timestamp}),
+);
+
+exports.uploadPhoneMotionClip = onCall(
+    {region: "europe-central2", timeoutSeconds: 30,
+      memory: "256MiB", maxInstances: 3},
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError(
+            "unauthenticated", "Zaloguj się, aby zapisać film.",
+        );
+      }
+      if (request.auth.token.email_verified !== true) {
+        throw new HttpsError("permission-denied", "Zweryfikuj adres e-mail.");
+      }
+      try {
+        return await savePhoneMotionClip({
+          db, getBucket: () => getStorage().bucket(), FieldValue, Timestamp,
+          ownerId: request.auth.uid, data: request.data || {},
+        });
+      } catch (error) {
+        const code = {400: "invalid-argument", 403: "permission-denied",
+          404: "not-found", 409: "failed-precondition"}[error.status];
+        if (code) throw new HttpsError(code, error.message);
+        console.warn("PHONE MOTION CLIP:", error.code || "storage-error");
+        throw new HttpsError("internal", "Nie udało się dołączyć nagrania.");
+      }
+    },
 );
 
 /**

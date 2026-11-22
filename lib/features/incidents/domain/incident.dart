@@ -49,6 +49,13 @@ class Incident {
     this.participantIds = const [],
   });
 
+  bool canOpenCameraLive(String? uid, DateTime now) =>
+      uid != null &&
+      uid == reporterId &&
+      cameraId.trim().isNotEmpty &&
+      status == IncidentStatus.active &&
+      (expiresAt == null || now.isBefore(expiresAt!));
+
   Map<String, dynamic> toMap() {
     return {
       'reporterId': reporterId,

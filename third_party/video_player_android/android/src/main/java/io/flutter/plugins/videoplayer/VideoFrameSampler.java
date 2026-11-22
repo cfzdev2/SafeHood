@@ -13,6 +13,7 @@ import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 
 /** Samples only an existing RTSP player's video surface. Owned by one Flutter engine. */
 final class VideoFrameSampler {
@@ -22,25 +23,28 @@ final class VideoFrameSampler {
   private static final int SNAPSHOT_SIZE_LIMIT = 256 * 1024;
   private final MethodChannel channel;
   private final PlayerLookup lookup;
+  private final File cacheDirectory;
   private final Handler main = new Handler(Looper.getMainLooper());
   private HandlerThread thread;
   private boolean copying;
-  private boolean closed;
+  private volatile boolean closed;
 
   interface PlayerLookup {
     TextureVideoPlayer get(String session);
   }
 
-  VideoFrameSampler(BinaryMessenger messenger, PlayerLookup lookup) {
+  VideoFrameSampler(BinaryMessenger messenger, PlayerLookup lookup, File cacheDirectory) {
     this.lookup = lookup;
+    this.cacheDirectory = cacheDirectory;
     channel = new MethodChannel(messenger, CHANNEL);
     channel.setMethodCallHandler(this::handle);
   }
 
   private void handle(MethodCall call, MethodChannel.Result result) {
     boolean jpeg = "snapshot".equals(call.method);
+    boolean clip = "clip".equals(call.method);
     boolean stats = "frameStats".equals(call.method);
-    if (!jpeg && !stats && !"sample".equals(call.method)) {
+    if (!jpeg && !clip && !stats && !"sample".equals(call.method)) {
       result.notImplemented();
       return;
     }
@@ -63,10 +67,15 @@ final class VideoFrameSampler {
       result.success(null);
       return;
     }
-    Integer width = jpeg ? call.argument("width") : SAMPLE_WIDTH;
-    Integer height = jpeg ? call.argument("height") : SAMPLE_HEIGHT;
+    Integer width = jpeg || clip ? call.argument("width") : SAMPLE_WIDTH;
+    Integer height = jpeg || clip ? call.argument("height") : SAMPLE_HEIGHT;
     if (width == null || height == null || width < 1 || height < 1
         || width > 640 || height > 640) {
+      result.success(null);
+      return;
+    }
+    if (clip && (width < 16 || height < 16 || width > MotionClipRecorder.MAX_EDGE
+        || height > MotionClipRecorder.MAX_EDGE || (width & 15) != 0 || (height & 15) != 0)) {
       result.success(null);
       return;
     }
@@ -77,7 +86,13 @@ final class VideoFrameSampler {
     }
     Handler worker = new Handler(thread.getLooper());
     copying = true;
-    worker.post(() -> copy(surface, width, height, jpeg, worker, result));
+    if (clip) {
+      worker.post(() -> new MotionClipRecorder(
+          cacheDirectory, surface, width, height, worker, () -> closed,
+          bytes -> complete(result, bytes)).start());
+    } else {
+      worker.post(() -> copy(surface, width, height, jpeg, worker, result));
+    }
   }
 
   @RequiresApi(24)
