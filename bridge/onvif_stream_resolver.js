@@ -271,6 +271,7 @@ async function resolveOnvifStreamUri(
   {
     fetchImpl = globalThis.fetch,
     timeoutMs = 10000,
+    signal,
   } = {},
 ) {
   if (typeof fetchImpl !== 'function') {
@@ -293,9 +294,15 @@ async function resolveOnvifStreamUri(
 
   // Bound the full negotiation, including fallback ports and profiles.
   const deadline = Date.now() + Math.min(30_000, timeoutMs * 5);
-  const request = (endpoint, body) => sendSoap(endpoint, body, {
-    fetchImpl, timeoutMs: Math.max(1, Math.min(timeoutMs, deadline - Date.now())),
-  });
+  const cancelableFetch = signal == null ? fetchImpl : (input, options) =>
+    fetchImpl(input, {...options, signal: AbortSignal.any([options.signal, signal])});
+  const request = (endpoint, body) => {
+    signal?.throwIfAborted();
+    return sendSoap(endpoint, body, {
+      fetchImpl: cancelableFetch,
+      timeoutMs: Math.max(1, Math.min(timeoutMs, deadline - Date.now())),
+    });
+  };
 
   const tried = new Set();
   let failure;

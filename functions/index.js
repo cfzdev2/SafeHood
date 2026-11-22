@@ -61,6 +61,7 @@ const geofire =
 
 const {createClipUploadHandler, savePhoneMotionClip} =
   require("./camera_event_clip");
+const {createIncidentLiveHandler} = require("./incident_live");
 
 const {
   mergeCameraEventAiMetadata,
@@ -814,6 +815,11 @@ async function getIncidentForParticipant(
     participantIds,
   };
 }
+
+exports.updateIncidentLive = onCall(
+    {region: "europe-central2", timeoutSeconds: 10, maxInstances: 4},
+    createIncidentLiveHandler({db, Timestamp, HttpsError}),
+);
 
 exports.getNearbyUsers = onCall(
     {
@@ -2474,6 +2480,12 @@ async function ingestCameraEventInternal(
     throw new HttpsError(
         "invalid-argument", "Nieprawidłowe wykrycie ruchu z telefonu.");
   }
+  const bridgeMotion = source === "bridge-motion";
+  if (bridgeMotion && (input.fromBridge !== true || type !== "motion")) {
+    throw new HttpsError(
+        "invalid-argument", "Nieprawidłowe wykrycie ruchu z Bridge.",
+    );
+  }
 
   const confidence =
       normalizeConfidence(
@@ -2626,6 +2638,16 @@ async function ingestCameraEventInternal(
             throw new HttpsError(
                 "failed-precondition",
                 "Wykrywanie ruchu podczas podglądu jest wyłączone.",
+            );
+          }
+          if (bridgeMotion && (
+            cameraData.liveMotionEnabled !== true ||
+            cameraData.motionDetectionEnabled === false ||
+            cameraData.connectionType !== "onvif" ||
+            cameraData.bridgeId !== input.bridgeId
+          )) {
+            throw new HttpsError(
+                "failed-precondition", "Wykrywanie w tle jest wyłączone.",
             );
           }
           if (input.fromCameraApp && source === "onvif" && type === "motion" &&
@@ -3526,6 +3548,76 @@ exports.removeBridge = onCall(
       };
     },
 );
+exports.assignCameraToOnlineBridge = onCall(
+    {region: "europe-central2"},
+    async (request) => {
+      const auth = request.auth;
+      if (!auth || auth.token.email_verified !== true) {
+        throw new HttpsError(
+            "permission-denied", "Zweryfikuj adres e-mail.",
+        );
+      }
+      let cameraId;
+      try {
+        cameraId = normalizeDocumentId(
+            (request.data || {}).cameraId, "cameraId",
+        );
+      } catch (_) {
+        throw new HttpsError("invalid-argument", "Nieprawidłowa kamera.");
+      }
+      const owner = db.collection("users").doc(auth.uid);
+      const cameraRef = owner.collection("cameras").doc(cameraId);
+      const [profile, bridges] = await Promise.all([
+        owner.get(), owner.collection("bridges").get(),
+      ]);
+      const isOnline = (status) => status && status.status === "online" &&
+        status.lastSeenAt && typeof status.lastSeenAt.toMillis === "function" &&
+        Date.now() - status.lastSeenAt.toMillis() <= 90000;
+      const online = bridges.docs.filter((entry) => isOnline(entry.data()));
+      const activeId = (profile.data() || {}).activeBridgeId;
+      const selected = online.find((entry) => entry.id === activeId) ||
+        (online.length === 1 ? online[0] : null);
+      if (!selected) {
+        throw new HttpsError(
+            "failed-precondition", online.length > 1 ?
+              "Wybierz aktywny Bridge." :
+              "Uruchom sparowany Bridge na komputerze.",
+        );
+      }
+      const credentials = db.collection("bridgeCredentials").doc(selected.id);
+      return db.runTransaction(async (transaction) => {
+        const camera = (await transaction.get(cameraRef)).data();
+        const bridge = (await transaction.get(selected.ref)).data();
+        const identity = (await transaction.get(credentials)).data();
+        if (!camera || camera.deletionPending ||
+            camera.connectionType !== "onvif" ||
+            camera.liveMotionEnabled !== true ||
+            camera.motionDetectionEnabled === false) {
+          throw new HttpsError(
+              "failed-precondition", "Włącz wykrywanie ruchu w kamerze ONVIF.",
+          );
+        }
+        if (!isOnline(bridge) || !identity || identity.ownerId !== auth.uid ||
+            identity.status !== "active") {
+          throw new HttpsError(
+              "failed-precondition", "Bridge nie jest gotowy.",
+          );
+        }
+        if (camera.bridgeId !== selected.id ||
+            camera.monitoringMode !== "bridge") {
+          transaction.update(cameraRef, {
+            bridgeId: selected.id, monitoringMode: "bridge",
+            bridgeMonitoringStatus: "connecting",
+            bridgeAssignedAt: FieldValue.serverTimestamp(),
+            bridgeMonitoringUpdatedAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+        return {bridgeId: selected.id};
+      });
+    },
+);
+
 exports.assignCamerasToBridge = onCall(
     {
       region: "europe-central2",
@@ -4141,6 +4233,7 @@ exports.getBridgeConfiguration = onRequest(
               );
 
           if (
+            camera.deletionPending === true ||
             camera.connectionType !==
               "onvif" ||
             (
@@ -4222,6 +4315,8 @@ exports.getBridgeConfiguration = onRequest(
                 bridgeIdentity.bridgeId,
 
             motionDetectionEnabled,
+            frameMotionEnabled: motionDetectionEnabled &&
+              camera.liveMotionEnabled === true,
 
             aiEnabled:
                 aiEnabled &&
@@ -4661,6 +4756,8 @@ exports.ingestBridgeCameraEvent =
                   ownerId:
                       bridgeIdentity.ownerId,
                   cameraId,
+                  fromBridge: true,
+                  bridgeId: bridgeIdentity.bridgeId,
                   type,
                   source,
                   confidence:

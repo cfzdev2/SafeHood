@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -49,6 +50,8 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
 
   late String _cameraName;
   late String _locationName;
+  String? _bridgeId;
+  bool _assigningBackground = false;
 
   CameraNotificationSettings _notificationSettings =
       const CameraNotificationSettings();
@@ -77,6 +80,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     _aiIgnoreZones = List.of(widget.camera.aiIgnoreZones);
     _cameraName = widget.camera.name;
     _locationName = widget.camera.locationName;
+    _bridgeId = widget.camera.bridgeId;
 
     unawaited(_loadCurrentCamera());
   }
@@ -97,6 +101,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
         if (currentCamera != null) {
           _cameraName = currentCamera.name;
           _locationName = currentCamera.locationName;
+          _bridgeId = currentCamera.bridgeId;
           _monitoringEnabled = currentCamera.motionDetectionEnabled;
           _liveMotionEnabled = currentCamera.liveMotionEnabled;
           _aiEnabled = currentCamera.aiEnabled;
@@ -642,10 +647,41 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     );
   }
 
+  Future<void> _assignBackground() async {
+    if (_assigningBackground) return;
+    setState(() => _assigningBackground = true);
+    try {
+      final bridgeId = await _cameraService.assignToOnlineBridge(
+        widget.camera.id,
+      );
+      if (!mounted) return;
+      setState(() => _bridgeId = bridgeId);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Bridge przypisany. Czekam na połączenie z kamerą.'),
+        ),
+      );
+    } on FirebaseFunctionsException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message ?? 'Bridge nie jest gotowy.')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nie udało się przypisać Bridge’a.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _assigningBackground = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
-    final bridgeId = widget.camera.bridgeId;
+    final bridgeId = _bridgeId;
     final rtspOnly = widget.camera.connectionType == CameraConnectionType.rtsp;
     final local = widget.camera.usesLocalConnection;
     final notificationsBusy =
@@ -768,15 +804,29 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                         ? null
                         : _setMotionPreference,
                   ),
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Na Androidzie wykrywanie działa także podczas otwartego podglądu.',
+                  if (widget.camera.connectionType ==
+                      CameraConnectionType.onvif)
+                    ListTile(
+                      leading: const Icon(Icons.hub_outlined),
+                      title: const Text('Wykrywanie w tle'),
+                      subtitle: Text(
+                        _bridgeId == null
+                            ? 'Połącz z Bridge’em, aby wykrywać ruch poza aplikacją.'
+                            : 'Bridge przypisany. Musi działać na komputerze i mieć połączenie z kamerą.',
                       ),
+                      trailing: _assigningBackground
+                          ? const SizedBox.square(
+                              dimension: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.chevron_right),
+                      onTap:
+                          _assigningBackground ||
+                              notificationsBusy ||
+                              !_motionPreference.detects
+                          ? null
+                          : _assignBackground,
                     ),
-                  ),
                 ] else
                   SwitchListTile.adaptive(
                     secondary: const Icon(Icons.sensors_outlined),

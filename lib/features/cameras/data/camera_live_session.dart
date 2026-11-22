@@ -33,7 +33,8 @@ class CameraLiveSession extends ChangeNotifier {
     this._createPlayback = CameraLivePlayback.new,
     this._qualityStore = const LocalCameraConnectionStore(),
     this._readFrameStats = CameraLivePlayback.readFrameStats,
-  });
+    double initialVolume = 1,
+  }) : _volume = initialVolume;
 
   final CameraProvider _provider;
   final void Function(bool isOnline)? onAvailabilityChanged;
@@ -107,7 +108,7 @@ class CameraLiveSession extends ChangeNotifier {
   bool _active = false;
   bool _closed = false;
   bool _userPaused = false;
-  double _volume = 1;
+  double _volume;
 
   Future<void> resume() {
     if (_closed || _active) return Future<void>.value();

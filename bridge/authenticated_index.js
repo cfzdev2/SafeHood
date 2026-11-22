@@ -47,6 +47,7 @@ const {AiEventOutbox} = require('./ai/event_outbox');
 const {ClipUploadQueue} = require('./ai/clip_upload_queue');
 const {EventRecordingManager} = require('./ai/event_recording_manager');
 const {buildBridgeDiagnostics} = require('./ai/bridge_diagnostics');
+const {BackgroundMotionSession} = require('./background_motion_session');
 
 const CONFIG_PATH =
   path.join(
@@ -564,6 +565,7 @@ function updateCameraMonitoringStatus(
 async function ingestDetection(
   camera,
   detection,
+  signal,
 ) {
   const mediaUrls =
     buildFakeMediaUrls(
@@ -596,6 +598,7 @@ async function ingestDetection(
         ...mediaUrls,
       },
       20000,
+      signal,
     );
 
   console.log(
@@ -1082,27 +1085,48 @@ async function stopSession(
   );
 }
 
+function monitoringFingerprint(camera) {
+  return JSON.stringify([connectionFingerprint(camera), camera.frameMotionEnabled === true]);
+}
+
 function startSession(camera) {
-  const fingerprint =
-    connectionFingerprint(
-      camera,
-    );
+  const fingerprint = monitoringFingerprint(camera);
+  cameraStatuses.set(camera.id, 'connecting');
+  let eventStatus = 'connecting';
+  let frameStatus = camera.frameMotionEnabled === true ? 'connecting' : 'offline';
+  const report = () => {
+    if (sessions.get(camera.id)?.session !== session) return;
+    const statuses = [eventStatus, frameStatus];
+    const status = ['online', 'connecting', 'reconnecting'].find((s) => statuses.includes(s)) ||
+      'offline';
+    if (status !== cameraStatuses.get(camera.id)) {
+      updateCameraMonitoringStatus(camera, status);
+    }
+  };
 
-  cameraStatuses.set(
-    camera.id,
-    'connecting',
-  );
-
-  const session =
-    new OnvifCameraSession({
-      camera,
-
-      onDetection:
-        ingestDetection,
-
-      onStatusChanged:
-        updateCameraMonitoringStatus,
-    });
+  const events = new OnvifCameraSession({
+    camera, onDetection: ingestDetection,
+    onStatusChanged: (_, status) => {
+      eventStatus = status;
+      report();
+    },
+  });
+  const motion = camera.frameMotionEnabled === true ? new BackgroundMotionSession({
+    camera, onDetection: ingestDetection,
+    onStatusChanged: (_, status) => {
+      frameStatus = status;
+      report();
+    },
+  }) : null;
+  const session = {
+    start() {
+      events.start();
+      motion?.start();
+    },
+    async stop() {
+      await Promise.all([events.stop(), motion?.stop()]);
+    },
+  };
 
   sessions.set(
     camera.id,
@@ -1176,10 +1200,7 @@ async function syncCameras(
       continue;
     }
 
-    const nextFingerprint =
-      connectionFingerprint(
-        camera,
-      );
+    const nextFingerprint = monitoringFingerprint(camera);
 
     if (
       existing.fingerprint !==

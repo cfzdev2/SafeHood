@@ -17,7 +17,8 @@
     "test:storage-rules:unit": "node --test --test-concurrency=1 test/storage_rules.test.js",
     "test:clips:backend": "firebase emulators:exec --only firestore,storage --config ../firebase.rules-test.json --project demo-safehood-clips-test \"node --test test/camera_event_clip_integration.test.js\"",
     "test:free-flow": "firebase emulators:exec --only firestore,storage --config ../firebase.rules-test.json --project demo-safehood-neighbor-flow \"node --test test/camera_neighborhood_flow_integration.test.js\"",
-    "test:phone-motion": "firebase emulators:exec --only firestore,storage --config ../firebase.rules-test.json --project demo-safehood-phone-motion \"node --test test/phone_motion_integration.test.js\""
+    "test:phone-motion": "firebase emulators:exec --only firestore,storage --config ../firebase.rules-test.json --project demo-safehood-phone-motion \"node --test test/phone_motion_integration.test.js\"",
+    "test:incident-live": "firebase emulators:exec --only firestore --config ../firebase.rules-test.json --project demo-safehood-incident-live \"node --test --test-concurrency=1 test/incident_live_integration.test.js test/background_motion_integration.test.js\""
   },
   "engines": {
     "node": "22"

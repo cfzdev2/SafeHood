@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -104,6 +105,20 @@ class CameraLivePlayback {
   static final _frameSessions = Expando<String>();
   static String? frameSessionFor(VideoPlayerController player) =>
       _frameSessions[player];
+
+  static Future<Uint8List?> readShareFrame(VideoPlayerController player) {
+    final session = frameSessionFor(player);
+    final size = player.value.size;
+    if (session == null || size.isEmpty || !size.isFinite) {
+      return Future.value(null);
+    }
+    final scale = math.min(1.0, 320.0 / math.max(size.width, size.height));
+    return _frameChannel.invokeMethod<Uint8List>('snapshot', {
+      'session': session,
+      'width': math.max(1, (size.width * scale).round()),
+      'height': math.max(1, (size.height * scale).round()),
+    });
+  }
 
   static Future<CameraLiveFrameStats?> readFrameStats(
     VideoPlayerController player,

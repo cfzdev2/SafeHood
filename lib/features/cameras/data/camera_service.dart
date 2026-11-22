@@ -88,6 +88,17 @@ class CameraService {
     });
   }
 
+  Future<String> assignToOnlineBridge(String cameraId) async {
+    final result = await _functions
+        .httpsCallable('assignCameraToOnlineBridge')
+        .call<Map<String, dynamic>>({'cameraId': cameraId});
+    final bridgeId = result.data['bridgeId'];
+    if (bridgeId is! String || bridgeId.isEmpty) {
+      throw StateError('Nie otrzymano identyfikatora Bridge.');
+    }
+    return bridgeId;
+  }
+
   Future<void> addCamera(
     Camera camera, {
     LocalCameraConnection connection = const LocalCameraConnection(),

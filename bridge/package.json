@@ -10,7 +10,8 @@
     "verify-pairing": "node verify_pairing.js",
     "start-worker": "node authenticated_index.js",
     "test:ai": "node --test test/detection_zones.test.js test/bridge_diagnostics.test.js test/yolox_postprocess.test.js test/object_tracker.test.js test/inference_scheduler.test.js test/camera_ai_session.test.js test/ffmpeg_snapshot_capture.test.js test/onvif_stream_resolver.test.js test/snapshot_upload_queue.test.js test/ai_snapshot_ingest.test.js test/event_outbox.test.js test/outbox_fault_proxy.test.js test/clip_upload_queue.test.js test/event_recording.test.js test/event_metadata.test.js",
-    "test:recording": "node --test test/event_recording_ffmpeg.test.js"
+    "test:recording": "node --test test/event_recording_ffmpeg.test.js",
+    "test:background-motion": "node --test test/background_motion_session.test.js"
   },
   "keywords": [],
   "author": "",

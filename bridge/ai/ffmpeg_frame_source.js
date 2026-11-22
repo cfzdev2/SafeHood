@@ -20,6 +20,9 @@ class FfmpegFrameSource {
     onError = () => {},
     onExit = () => {},
     framesPerSecond = 2,
+    width = frameWidth,
+    height = frameHeight,
+    pixelFormat = 'bgr24',
     realtimeInput = false,
     ffmpegPath =
       process.env.SAFEHOOD_FFMPEG_PATH ||
@@ -66,6 +69,15 @@ class FfmpegFrameSource {
     this.onExit = onExit;
     this.framesPerSecond =
       framesPerSecond;
+    if (!Number.isInteger(width) || width < 16 || width > frameWidth ||
+        !Number.isInteger(height) || height < 16 || height > frameHeight ||
+        !['bgr24', 'gray'].includes(pixelFormat)) {
+      throw new RangeError('Nieprawidłowy format klatek.');
+    }
+    this.width = width;
+    this.height = height;
+    this.pixelFormat = pixelFormat;
+    this.frameSize = width * height * (pixelFormat === 'gray' ? 1 : 3);
     this.realtimeInput =
       realtimeInput === true;
     this.ffmpegPath = ffmpegPath;
@@ -111,9 +123,9 @@ class FfmpegFrameSource {
 
     const filter =
       `fps=${this.framesPerSecond},` +
-      'scale=416:416:' +
+      `scale=${this.width}:${this.height}:` +
       'force_original_aspect_ratio=decrease,' +
-      'pad=416:416:0:0:color=0x727272';
+      `pad=${this.width}:${this.height}:0:0:color=0x727272`;
 
     const args = [
       '-hide_banner',
@@ -129,7 +141,7 @@ class FfmpegFrameSource {
       '-vf',
       filter,
       '-pix_fmt',
-      'bgr24',
+      this.pixelFormat,
       '-f',
       'rawvideo',
       'pipe:1',
@@ -280,16 +292,16 @@ class FfmpegFrameSource {
 
     while (
       data.length - offset >=
-      frameByteLength
+      this.frameSize
     ) {
       const frame = Buffer.from(
         data.subarray(
           offset,
-          offset + frameByteLength,
+          offset + this.frameSize,
         ),
       );
 
-      offset += frameByteLength;
+      offset += this.frameSize;
 
       this._dispatchFrame(frame);
     }

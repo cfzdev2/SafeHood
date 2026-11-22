@@ -510,6 +510,30 @@ service cloud.firestore {
 allow create, update, delete:
   if false;
 
+      match /live/{previewId} {
+        function canWatchLive() {
+          let incident = get(
+            /databases/$(database)/documents/incidents/$(incidentId)
+          ).data;
+          return isVerifiedUser()
+              && request.auth.uid in incident.participantIds
+              && incident.status == 'active'
+              && incident.expiresAt is timestamp
+              && request.time < incident.expiresAt;
+        }
+
+        allow get:
+          if previewId == 'current'
+          && canWatchLive()
+          && (resource == null || (
+            resource.data.leaseUntil is timestamp
+            && request.time < resource.data.leaseUntil
+          ));
+
+        allow list, create, update, delete:
+          if false;
+      }
+
       match /responses/{responseUserId} {
         function isParticipant() {
           return isVerifiedUser()
