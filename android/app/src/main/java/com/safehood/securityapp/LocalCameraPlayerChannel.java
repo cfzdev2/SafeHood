@@ -193,7 +193,7 @@ public final class LocalCameraPlayerChannel implements AutoCloseable {
         }
     }
 
-    private static final class CameraSockets extends SocketFactory {
+    static final class CameraSockets extends SocketFactory {
         private final SocketFactory base;
         private final InetAddress host;
         private final int port;

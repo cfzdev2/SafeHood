@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../data/camera_background_motion.dart';
 import '../data/camera_service.dart';
 import '../data/local_camera_connection.dart';
 import 'camera_wifi_setup_screen.dart';
@@ -52,6 +54,7 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
   late String _locationName;
   String? _bridgeId;
   bool _assigningBackground = false;
+  bool _phoneMotionBusy = false;
 
   CameraNotificationSettings _notificationSettings =
       const CameraNotificationSettings();
@@ -678,6 +681,90 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
     }
   }
 
+  Future<void> _togglePhoneMotion(bool enabled) async {
+    if (_phoneMotionBusy) return;
+    setState(() => _phoneMotionBusy = true);
+    final service = CameraBackgroundMotion.instance;
+    String? message;
+    try {
+      if (enabled) {
+        final camera = await _cameraService.getCamera(widget.camera.id);
+        if (!mounted) return;
+        if (camera == null || !camera.liveMotionEnabled) {
+          throw const CameraConnectionIssue('Najpierw włącz wykrywanie ruchu.');
+        }
+        final allowed = await service.start(camera);
+        if (!allowed && _motionPreference.sendsAlert) {
+          message = 'Zezwól SafeHood na powiadomienia w ustawieniach Androida.';
+        }
+      } else {
+        await service.stop(widget.camera.id);
+      }
+    } on CameraConnectionIssue catch (error) {
+      message = error.message;
+    } on PlatformException catch (error) {
+      message = switch (error.code) {
+        'notLocalNetwork' => 'Podłącz telefon do domowego Wi-Fi kamery.',
+        'alreadyActive' =>
+          'Najpierw zatrzymaj wykrywanie w tle na drugiej kamerze.',
+        'unsupported' => 'Ta wersja Androida nie obsługuje wykrywania w tle.',
+        _ => 'Nie udało się uruchomić wykrywania w tle.',
+      };
+    } catch (_) {
+      message = 'Nie udało się połączyć z kamerą do wykrywania w tle.';
+    } finally {
+      if (mounted) {
+        setState(() => _phoneMotionBusy = false);
+        if (message != null) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(message)));
+        }
+      }
+    }
+  }
+
+  Widget _phoneMotionSetting(
+    bool busy,
+  ) => ValueListenableBuilder<CameraBackgroundMotionStatus>(
+    valueListenable: CameraBackgroundMotion.instance.status,
+    builder: (context, status, child) {
+      final active = status.cameraId == widget.camera.id;
+      final other = !active && status.cameraId != null;
+      final description = _phoneMotionBusy
+          ? 'Łączenie z kamerą…'
+          : other
+          ? 'Telefon już monitoruje inną kamerę.'
+          : active
+          ? switch (status.phase) {
+              'watching' =>
+                'Telefon wykrywa ruch także po zminimalizowaniu SafeHood.',
+              'preview' => 'Wykrywanie z otwartego podglądu.',
+              'reconnecting' => 'Wznawiam połączenie z kamerą.',
+              'wifiLost' => 'Połącz telefon z domowym Wi-Fi i włącz ponownie.',
+              'uploadFailed' =>
+                'Nie udało się zapisać ruchu. Sprawdź internet.',
+              _ => 'Czekam na obraz z kamery…',
+            }
+          : _motionPreference.detects
+          ? 'Telefon wykrywa ruch w domowym Wi-Fi przy zminimalizowanej aplikacji.'
+          : 'Najpierw włącz wykrywanie ruchu powyżej.';
+      return SwitchListTile.adaptive(
+        secondary: const Icon(Icons.notifications_active_outlined),
+        title: const Text('Wykrywanie w tle'),
+        subtitle: Text(description),
+        value: active,
+        onChanged:
+            _phoneMotionBusy ||
+                busy ||
+                other ||
+                (!active && !_motionPreference.detects)
+            ? null
+            : _togglePhoneMotion,
+      );
+    },
+  );
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -767,7 +854,9 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                     ),
                     onTap: _deleting ? null : _editLocalConnection,
                   ),
-                  if (widget.camera.connectionType ==
+                  if (CameraBackgroundMotion.supported(widget.camera))
+                    _phoneMotionSetting(_loadingMonitoring || notificationsBusy)
+                  else if (widget.camera.connectionType ==
                       CameraConnectionType.onvif)
                     ListTile(
                       leading: const Icon(Icons.wifi),

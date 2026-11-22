@@ -8,6 +8,7 @@ class MainActivity : FlutterActivity() {
     private var reolinkPairing: ReolinkPairingChannel? = null
     private var localCameras: LocalCameraChannel? = null
     private var localPlayer: LocalCameraPlayerChannel? = null
+    private var backgroundMotion: BackgroundMotionChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -16,6 +17,7 @@ class MainActivity : FlutterActivity() {
         reolinkPairing = ReolinkPairingChannel(this, messenger)
         localCameras = LocalCameraChannel(this, messenger)
         localPlayer = LocalCameraPlayerChannel(this, messenger, flutterEngine.renderer)
+        backgroundMotion = BackgroundMotionChannel(this, messenger)
     }
 
     override fun onRequestPermissionsResult(
@@ -29,6 +31,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        backgroundMotion?.close()
+        backgroundMotion = null
         localPlayer?.close()
         localPlayer = null
         localCameras?.close()

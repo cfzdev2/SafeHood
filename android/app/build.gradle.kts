@@ -46,6 +46,13 @@ kotlin {
 dependencies {
     implementation("androidx.media3:media3-exoplayer:1.9.2")
     implementation("androidx.media3:media3-exoplayer-rtsp:1.9.2")
+    val firebaseSdkVersion = rootProject.findProperty("FirebaseSDKVersion")
+        ?: rootProject.project(":firebase_core").property("FirebaseSDKVersion")
+    implementation(platform("com.google.firebase:firebase-bom:$firebaseSdkVersion"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-functions")
+    testImplementation("junit:junit:4.13.2")
 }
 
 flutter {

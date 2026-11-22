@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MethodCall, MethodChannel;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:safehood/features/camera_events/presentation/camera_event_live_screen.dart';
 import 'package:safehood/features/cameras/data/camera_live_playback.dart';
@@ -14,6 +15,43 @@ import 'package:safehood/features/cameras/domain/camera_provider.dart';
 import 'package:video_player/video_player.dart';
 
 void main() {
+  testWidgets('a suspended view gives monitoring back to the phone service', (
+    tester,
+  ) async {
+    const channel = MethodChannel('safehood/background_motion');
+    final handovers = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+      call,
+    ) async {
+      handovers.add(call);
+      return null;
+    });
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    final provider = _Provider();
+    final view = CameraLiveSession(
+      provider,
+      createPlayback: provider.createPlayback,
+    );
+
+    await view.resume();
+    await view.suspend();
+    final emit = handovers.first.arguments as Map;
+    expect(emit['cameraId'], provider.camera.id);
+    expect(handovers.last.arguments, {'lease': emit['lease']});
+
+    await view.resume();
+    view.dispose();
+    await tester.pump();
+    final next = handovers[2].arguments as Map;
+    expect(next['lease'], isNot(emit['lease']));
+    expect(handovers.last.arguments, {'lease': next['lease']});
+  });
+
   testWidgets('phone motion samples only while enabled and reports one event', (
     tester,
   ) async {

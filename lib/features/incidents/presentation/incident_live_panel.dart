@@ -10,6 +10,7 @@ import '../../cameras/data/camera_live_playback.dart';
 import '../../cameras/data/camera_live_session.dart';
 import '../../cameras/data/camera_provider_factory.dart';
 import '../../cameras/data/camera_service.dart';
+import '../../cameras/data/live_motion_monitor.dart';
 import '../../cameras/presentation/widgets/camera_live_placeholder.dart';
 import '../../cameras/presentation/widgets/camera_live_refresh_button.dart';
 import '../data/incident_live_service.dart';
@@ -38,6 +39,7 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
   Timer? _retry;
   Timer? _capture;
   CameraLiveSession? _session;
+  LiveMotionMonitor? _motion;
   IncidentLiveFrame? _frame;
   String? _uid;
   String? _shareId;
@@ -142,6 +144,7 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
         initialVolume: 0,
       );
       _session = session..addListener(_redraw);
+      _motion = LiveMotionMonitor.attach(camera, session);
       _redraw();
       await session.resume();
     } catch (error) {
@@ -289,6 +292,8 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
     _frame = null;
     _cameraError = null;
     _shareError = null;
+    _motion?.dispose();
+    _motion = null;
     _session?.removeListener(_redraw);
     _session?.dispose();
     _session = null;

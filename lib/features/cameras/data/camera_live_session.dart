@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:video_player/video_player.dart';
 
 import '../domain/camera_provider.dart';
+import 'camera_background_motion.dart';
 import 'camera_live_playback.dart';
 import 'local_camera_connection.dart';
 
@@ -108,11 +109,13 @@ class CameraLiveSession extends ChangeNotifier {
   bool _active = false;
   bool _closed = false;
   bool _userPaused = false;
+  int? _previewLease;
   double _volume;
 
   Future<void> resume() {
     if (_closed || _active) return Future<void>.value();
     _active = true;
+    _previewLease = CameraBackgroundMotion.claimPreview(_provider.camera);
     _retryIndex = 0;
     _qualityLoaded = false;
     _skipSavedQuality = false;
@@ -134,8 +137,12 @@ class CameraLiveSession extends ChangeNotifier {
     final closing = previous == null
         ? Future<void>.value()
         : _enqueue(() => _release(previous));
+    final previewLease = _previewLease;
+    _previewLease = null;
     _update(CameraLivePhase.idle);
-    return closing;
+    return closing.whenComplete(
+      () => CameraBackgroundMotion.releasePreview(previewLease),
+    );
   }
 
   Future<void> retry() {
@@ -658,14 +665,17 @@ class CameraLiveSession extends ChangeNotifier {
     _generation++;
     _cancelRetry();
     final previous = _detachController();
+    final previewLease = _previewLease;
+    _previewLease = null;
     _playback = null;
     _preferred = null;
     unawaited(
       _enqueue(() async {
-        if (previous != null) await _release(previous);
         try {
+          if (previous != null) await _release(previous);
           await _provider.disconnect();
         } finally {
+          CameraBackgroundMotion.releasePreview(previewLease);
           await _provider.dispose();
         }
       }),

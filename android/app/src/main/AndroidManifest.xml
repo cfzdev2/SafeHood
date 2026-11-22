@@ -1,11 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <application
         android:label="safehood"
         android:name="${applicationName}"
         android:fullBackupContent="@xml/safehood_backup"
         android:dataExtractionRules="@xml/safehood_data_extraction"
         android:icon="@mipmap/ic_launcher">
+        <service
+            android:name=".BackgroundMotionService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
