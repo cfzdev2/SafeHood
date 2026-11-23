@@ -76,6 +76,7 @@ class Camera {
   // Stan sesji ONVIF Events,
   // niezależny od Media/RTSP/LIVE.
   final CameraMonitoringRuntimeStatus bridgeMonitoringStatus;
+  final DateTime? bridgeMonitoringUpdatedAt;
 
   const Camera({
     required this.id,
@@ -106,6 +107,7 @@ class Camera {
     this.monitoringMode = CameraMonitoringMode.bridge,
     this.bridgeId,
     this.bridgeMonitoringStatus = CameraMonitoringRuntimeStatus.unknown,
+    this.bridgeMonitoringUpdatedAt,
   });
 
   Camera copyWith({
@@ -137,6 +139,7 @@ class Camera {
     CameraMonitoringMode? monitoringMode,
     String? bridgeId,
     CameraMonitoringRuntimeStatus? bridgeMonitoringStatus,
+    DateTime? bridgeMonitoringUpdatedAt,
   }) {
     return Camera(
       id: id ?? this.id,
@@ -170,6 +173,8 @@ class Camera {
       bridgeId: bridgeId ?? this.bridgeId,
       bridgeMonitoringStatus:
           bridgeMonitoringStatus ?? this.bridgeMonitoringStatus,
+      bridgeMonitoringUpdatedAt:
+          bridgeMonitoringUpdatedAt ?? this.bridgeMonitoringUpdatedAt,
     );
   }
 
@@ -244,6 +249,8 @@ class Camera {
       bridgeMonitoringStatus: _parseMonitoringStatus(
         map['bridgeMonitoringStatus'] as String?,
       ),
+      bridgeMonitoringUpdatedAt:
+          (map['bridgeMonitoringUpdatedAt'] as Timestamp?)?.toDate(),
     );
   }
 

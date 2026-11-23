@@ -5,6 +5,7 @@ import '../../domain/camera.dart';
 enum CameraCardStatus {
   monitoringActive,
   monitoringDuringLive,
+  phoneMonitoring,
   monitoringDisabled,
   monitoringConnecting,
   bridgeOffline,
@@ -100,13 +101,11 @@ class CameraCard extends StatelessWidget {
                           label: availabilityLabel,
                           color: availabilityColor,
                         ),
-                        if (effectiveStatus !=
-                            CameraCardStatus.monitoringDuringLive)
-                          _buildStatusChip(
-                            context,
-                            label: _statusLabel(effectiveStatus),
-                            color: monitoringColor,
-                          ),
+                        _buildStatusChip(
+                          context,
+                          label: _statusLabel(effectiveStatus),
+                          color: monitoringColor,
+                        ),
                       ],
                     ),
                   ],
@@ -163,7 +162,10 @@ class CameraCard extends StatelessWidget {
         return 'Monitoring aktywny';
 
       case CameraCardStatus.monitoringDuringLive:
-        return 'Wykrywanie podczas podglądu';
+        return 'Brak stałego monitoringu';
+
+      case CameraCardStatus.phoneMonitoring:
+        return 'Monitoring przez telefon';
 
       case CameraCardStatus.monitoringDisabled:
         return 'Monitoring wyłączony';
@@ -175,12 +177,14 @@ class CameraCard extends StatelessWidget {
         return 'Bridge offline';
 
       case CameraCardStatus.monitoringUnavailable:
-        return 'Brak monitoringu';
+        return 'Brak stałego monitoringu';
     }
   }
 
   Color _statusColor(BuildContext context, CameraCardStatus status) {
     switch (status) {
+      case CameraCardStatus.phoneMonitoring:
+        return Colors.orange;
       case CameraCardStatus.monitoringActive:
         return Colors.green;
 

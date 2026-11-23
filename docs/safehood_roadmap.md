@@ -11,11 +11,31 @@ Wi-Fi. Kreator wybiera sposób połączenia i potwierdza go obrazem.
 | Okolica | Tworzenie zgłoszeń, odbieranie alertów od sąsiadów i zgłoszenie problemu z poziomu zdarzenia kamery. | Funkcje społeczności pozostają darmowe. |
 | Analiza | Klasyfikacja podstawowych zdarzeń, także gdy wymaga modelu AI. | Szukanie po opisie, podsumowania i bardziej szczegółowe reguły. |
 
-Podstawową funkcję nazywamy **Wykrywanie**. Sprzęt i dostęp do obrazu
-decydują, czy działa tylko podgląd, wykrywanie podczas oglądania czy
-monitoring 24/7. Dla modeli, które nie dostarczają odpowiednich zdarzeń,
-całodobowe wykrywanie wymaga działającego źródła obrazu i Bridge albo
-innej potwierdzonej integracji. To warunek techniczny, niezależny od planu.
+Podstawową funkcję nazywamy **Wykrywanie**. Użytkownik wybiera raz:
+**Wyłączone**, **Tylko historia** albo **Historia i alert**. Nie ma osobnego
+ustawienia „wykrywanie w tle”. Otwieranie LIVE nie jest warunkiem włączenia
+monitoringu. SafeHood sam uruchamia dostępny odbiornik i próbuje przypisać
+kamerę do działającego, sparowanego Bridge’a.
+
+Docelowo telefon jest klientem: kamera wykrywa zdarzenie, działająca integracja
+dostarcza je do backendu, a backend zapisuje je i wysyła alert właścicielowi.
+Ten przepływ musi działać przy zamkniętej aplikacji, także poza domowym Wi-Fi.
+Pełną kompatybilność potwierdza dopiero taki test na rzeczywistym urządzeniu.
+
+Odbiornik Androida analizujący obraz jest rozwiązaniem przejściowym dla
+połączenia lokalnego. Włącza się automatycznie z jednym ustawieniem ruchu,
+ale nadal zależy od telefonu, jego Wi-Fi i działającej usługi Androida.
+Nie jest równoważny monitoringowi niezależnemu od telefonu. Obecny odbiornik
+Androida obsługuje jedną kamerę; aplikacja nie powinna losowo wybierać jednej
+z kilku ani oznaczać pozostałych jako chronionych.
+
+Dla kamery udostępniającej wyłącznie zdarzenia i obraz w LAN potrzebny jest
+osiągalny odbiornik, np. działający Bridge. Obsługiwana integracja producenta
+lub wysyłka zdarzeń bezpośrednio do backendu może go zastąpić. Plan Blaze
+sam nie daje backendowi dostępu do prywatnego adresu kamery. To warunek
+techniczny, niezależny od płatnego planu. Status „Monitoring aktywny” przy
+połączeniu Bridge wymaga świeżego potwierdzenia połączenia z tą kamerą
+oraz świeżego heartbeat Bridge’a, nie samego przypisania lub udanego LIVE.
 
 Wykrycie i zdjęcie są prywatne. Sąsiedzi mogą zobaczyć zgłoszenie, gdy
 właściciel zdecyduje się je utworzyć. Powiadomienie dostają osoby,
@@ -61,20 +81,39 @@ Wi-Fi. Jedna przerwa nie powinna zmienić jakości. Przy powtarzających się
 zacięciach SafeHood może wybrać mniejszy obraz. Po ustabilizowaniu obrazu
 otwórz LIVE ponownie i sprawdź, czy aplikacja zaczyna od tej jakości.
 
-## Próba wykrywania ruchu na telefonie
+## Próba automatycznego uruchomienia wykrywania
 
-Zaktualizuj aplikację na Androidzie przez ponowne uruchomienie `flutter run`
-oraz uruchom ponownie dotychczasowe emulatory Firebase z tymi samymi danymi.
 W **Moje kamery → robot… → Ustawienia → Wykrywanie ruchu** wybierz
-**Historia i alert**. Do zapisu bez powiadomień służy **Tylko historia**.
-Otwórz LIVE,
-poczekaj na informację o aktywnym wykrywaniu i przejdź w kadrze. Sprawdź
-własny alert oraz zdarzenie ze zdjęciem w historii. Funkcja korzysta z
-odtwarzanego obrazu i działa również na pełnym ekranie. Po wyjściu z LIVE
-lub przejściu aplikacji w tło telefon przestaje analizować obraz.
+**Historia i alert**. Nie włączaj niczego dodatkowego i nie otwieraj LIVE.
+SafeHood uruchamia odbiornik automatycznie. Przy odbiorniku telefonu
+wymagane są Wi-Fi kamery i połączenie z backendem. Zminimalizuj aplikację,
+przejdź w kadrze i sprawdź prawdziwe zdarzenie oraz alert właściciela.
+Wyłączenie wykrywania ma zatrzymać odbiornik.
 
-Do tej próby kamera nie musi być dostępna z komputera Bridge. Telefon
-potrzebuje połączenia z kamerą i z backendem SafeHood. Wykrycia dotyczą
-ruchu w obrazie; klasyfikacja osób i pojazdów to kolejny etap.
+Po przypisaniu Bridge’a telefon nadal może być odbiornikiem, dopóki Bridge
+nie potwierdzi połączenia z kamerą. Sam status „Bridge online” nie dowodzi,
+że kamera jest osiągalna. Odłącz kamerę i sprawdź zmianę stanu, następnie
+przywróć zasilanie. Dane o monitoringu starsze niż 90 sekund nie mogą
+podtrzymywać zielonego statusu.
 
-Test backendu: `npm --prefix functions run test:phone-motion`.
+## Próba monitoringu niezależnego od telefonu
+
+Po potwierdzeniu odbioru zdarzeń przez Bridge lub integrację producenta
+zamknij SafeHood i odłącz telefon od domowego Wi-Fi. Inne urządzenie ma
+wywołać rzeczywisty ruch przed kamerą. Zdarzenie musi zapisać się w backendzie,
+a właściciel ma odebrać alert przez internet. Utrata odbiornika ma być widoczna
+jako brak stałego monitoringu, bez utraty zapisanego ustawienia ruchu.
+
+Dla chińskiej kamery robot potwierdziliśmy dotąd lokalny obraz i detekcję
+z klatek. Z logów użytkownika wynika, że Bridge na komputerze nie nawiązywał
+połączenia z jej adresami ONVIF/RTSP. Pełny test niezależny od telefonu
+pozostaje niepotwierdzony. Dla Motoroli dotychczasowy strumień przez Hubble
+i ADB również nie stanowi samodzielnej integracji SafeHood.
+
+Testy automatyzacji:
+- Flutter: `flutter test test/features/cameras/data/camera_monitoring_coordinator_test.dart`.
+- Backend telefonu: `npm --prefix functions run test:phone-motion`.
+- Backend odbiornika: `npm --prefix functions run test:incident-live`.
+
+Testy backendu przechwytują wysyłkę FCM; dostarczenie powiadomienia na
+rzeczywisty telefon jest osobnym testem sprzętowym.

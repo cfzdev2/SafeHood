@@ -22,8 +22,9 @@ class CameraBackgroundMotionStatus {
       );
 }
 
-/// Configures the Android service from an explicit tap while SafeHood is open.
-/// The service keeps receiving samples even when the Flutter engine is gone.
+/// Runs the phone receiver for the saved motion preference, without a separate
+/// user setting. It is a local fallback; independent monitoring needs a receiver
+/// that can reach the camera while this phone is unavailable.
 class CameraBackgroundMotion {
   CameraBackgroundMotion._() {
     _channel.setMethodCallHandler((call) async {

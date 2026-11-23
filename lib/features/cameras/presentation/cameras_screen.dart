@@ -8,6 +8,7 @@ import '../../bridges/domain/bridge_status.dart';
 import '../../bridges/presentation/bridge_management_screen.dart';
 import '../../bridges/presentation/widgets/bridge_status_card.dart';
 import '../data/camera_service.dart';
+import '../data/camera_monitoring_coordinator.dart';
 import '../data/local_camera_registration.dart';
 import '../data/local_camera_store.dart';
 import '../domain/camera.dart';
@@ -347,13 +348,16 @@ class _CamerasScreenState extends State<CamerasScreen>
               key: ValueKey(camera.id),
               camera: camera,
               enabled: checkAvailability,
-              builder: (context, availability) => CameraCard(
-                camera: camera,
-                availability: availability,
-                status: _cameraStatus(camera, bridges, availability),
-                onTap: () {
-                  _openCamera(context, camera);
-                },
+              builder: (context, availability) => ListenableBuilder(
+                listenable: CameraMonitoringCoordinator.instance,
+                builder: (context, child) => CameraCard(
+                  camera: camera,
+                  availability: availability,
+                  status: _cameraStatus(camera, bridges, availability),
+                  onTap: () {
+                    _openCamera(context, camera);
+                  },
+                ),
               ),
             );
           },
@@ -367,19 +371,21 @@ class _CamerasScreenState extends State<CamerasScreen>
     List<BridgeStatus> bridges,
     CameraAvailability availability,
   ) {
-    final previewMotion =
-        supportsLocalCameraSetup &&
-        camera.usesLocalConnection &&
-        camera.liveMotionEnabled;
-    CameraCardStatus withPreviewFallback(CameraCardStatus otherwise) =>
-        previewMotion ? CameraCardStatus.monitoringDuringLive : otherwise;
-
-    if (camera.connectionType == CameraConnectionType.rtsp) {
-      return withPreviewFallback(CameraCardStatus.monitoringDisabled);
+    if (camera.usesLocalConnection) {
+      return switch (CameraMonitoringCoordinator.instance.statusFor(camera)) {
+        AutomaticMonitoringStatus.off => CameraCardStatus.monitoringDisabled,
+        AutomaticMonitoringStatus.connecting =>
+          CameraCardStatus.monitoringConnecting,
+        AutomaticMonitoringStatus.independent =>
+          CameraCardStatus.monitoringActive,
+        AutomaticMonitoringStatus.phone => CameraCardStatus.phoneMonitoring,
+        AutomaticMonitoringStatus.unavailable =>
+          CameraCardStatus.monitoringUnavailable,
+      };
     }
 
     if (!camera.motionDetectionEnabled) {
-      return withPreviewFallback(CameraCardStatus.monitoringDisabled);
+      return CameraCardStatus.monitoringDisabled;
     }
 
     if (camera.monitoringMode == CameraMonitoringMode.cloud) {
@@ -396,19 +402,13 @@ class _CamerasScreenState extends State<CamerasScreen>
     }
 
     if (camera.monitoringMode == CameraMonitoringMode.app) {
-      return switch (availability) {
-        CameraAvailability.online => CameraCardStatus.monitoringActive,
-        CameraAvailability.checking => withPreviewFallback(
-          CameraCardStatus.monitoringConnecting,
-        ),
-        _ => withPreviewFallback(CameraCardStatus.monitoringUnavailable),
-      };
+      return CameraCardStatus.monitoringUnavailable;
     }
 
     final bridgeId = camera.bridgeId;
 
     if (bridgeId == null) {
-      return withPreviewFallback(CameraCardStatus.bridgeOffline);
+      return CameraCardStatus.bridgeOffline;
     }
 
     BridgeStatus? assignedBridge;
@@ -421,7 +421,7 @@ class _CamerasScreenState extends State<CamerasScreen>
     }
 
     if (assignedBridge == null || !assignedBridge.isOnlineAt(DateTime.now())) {
-      return withPreviewFallback(CameraCardStatus.bridgeOffline);
+      return CameraCardStatus.bridgeOffline;
     }
 
     switch (camera.bridgeMonitoringStatus) {
@@ -430,11 +430,11 @@ class _CamerasScreenState extends State<CamerasScreen>
 
       case CameraMonitoringRuntimeStatus.connecting:
       case CameraMonitoringRuntimeStatus.reconnecting:
-        return withPreviewFallback(CameraCardStatus.monitoringConnecting);
+        return CameraCardStatus.monitoringConnecting;
 
       case CameraMonitoringRuntimeStatus.offline:
       case CameraMonitoringRuntimeStatus.unknown:
-        return withPreviewFallback(CameraCardStatus.monitoringUnavailable);
+        return CameraCardStatus.monitoringUnavailable;
     }
   }
 }

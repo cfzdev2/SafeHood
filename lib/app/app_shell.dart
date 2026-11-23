@@ -6,7 +6,10 @@ import 'package:flutter/material.dart';
 import '../core/services/push_notification_service.dart';
 import '../core/state/app_state.dart';
 import '../features/cameras/data/camera_service.dart';
+import '../features/cameras/data/camera_monitoring_coordinator.dart';
 import '../features/cameras/domain/camera.dart';
+import '../features/bridges/data/bridge_service.dart';
+import '../features/bridges/domain/bridge_status.dart';
 import '../features/cameras/presentation/cameras_screen.dart';
 import '../features/camera_events/data/camera_monitoring_service.dart';
 import '../features/community/presentation/community_screen.dart';
@@ -28,7 +31,7 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
+class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   int selectedIndex = 0;
 
   late final AppState appState;
@@ -46,6 +49,9 @@ class _AppShellState extends State<AppShell> {
   late final Stream<List<Incident>> _incidentsStream;
 
   StreamSubscription<List<Camera>>? _camerasSubscription;
+  StreamSubscription<List<BridgeStatus>>? _bridgesSubscription;
+  final _automaticMonitoring = CameraMonitoringCoordinator.instance;
+  late final int _monitoringGeneration;
 
   Timer? _incidentStatusTimer;
 
@@ -53,6 +59,7 @@ class _AppShellState extends State<AppShell> {
   bool _reportedNoOnvifCameras = false;
 
   Future<void> _syncCameraMonitoring(List<Camera> cameras) async {
+    unawaited(_automaticMonitoring.updateCameras(cameras));
     final onvifCameras = cameras
         .where(
           (camera) =>
@@ -111,6 +118,18 @@ class _AppShellState extends State<AppShell> {
   void initState() {
     super.initState();
 
+    WidgetsBinding.instance.addObserver(this);
+    _monitoringGeneration = _automaticMonitoring.begin();
+    _automaticMonitoring.setForeground(
+      WidgetsBinding.instance.lifecycleState == null ||
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+    );
+    _bridgesSubscription = BridgeService().watchBridges().listen(
+      (bridges) => unawaited(_automaticMonitoring.updateBridges(bridges)),
+      onError: (Object _) =>
+          unawaited(_automaticMonitoring.updateBridges(const [])),
+    );
+
     appState = AppState(currentUser: widget.currentUser);
 
     _incidentsStream = _incidentService.watchIncidents();
@@ -155,7 +174,15 @@ class _AppShellState extends State<AppShell> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _automaticMonitoring.setForeground(state == AppLifecycleState.resumed);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _automaticMonitoring.end(_monitoringGeneration);
+    unawaited(_bridgesSubscription?.cancel());
     _incidentStatusTimer?.cancel();
 
     unawaited(_camerasSubscription?.cancel());

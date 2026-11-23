@@ -90,7 +90,10 @@ class CameraService {
 
   Future<String> assignToOnlineBridge(String cameraId) async {
     final result = await _functions
-        .httpsCallable('assignCameraToOnlineBridge')
+        .httpsCallable(
+          'assignCameraToOnlineBridge',
+          options: HttpsCallableOptions(timeout: const Duration(seconds: 6)),
+        )
         .call<Map<String, dynamic>>({'cameraId': cameraId});
     final bridgeId = result.data['bridgeId'];
     if (bridgeId is! String || bridgeId.isEmpty) {
