@@ -47,7 +47,11 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
     _settings = enabled.listen(_enable, onError: (Object _) => _enable(false));
   }
 
-  static LiveMotionMonitor? attach(Camera camera, CameraLiveSession session) {
+  static LiveMotionMonitor? attach(
+    Camera camera,
+    CameraLiveSession session, {
+    bool recordClips = true,
+  }) {
     if (!supportsLiveMotion(camera)) return null;
     final events = CameraEventService();
     return LiveMotionMonitor(
@@ -55,7 +59,7 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
       enabled: CameraService().watchLiveMotionEnabled(camera.id),
       sample: (player) => _readFrame(player, 'sample'),
       snapshot: (player) => _readFrame(player, 'snapshot'),
-      recordClip: (player) => _readFrame(player, 'clip'),
+      recordClip: recordClips ? (player) => _readFrame(player, 'clip') : null,
       save: (time, jpeg) async {
         final event = await events.ingestFromCamera(
           cameraId: camera.id,

@@ -144,7 +144,8 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
         initialVolume: 0,
       );
       _session = session..addListener(_redraw);
-      _motion = LiveMotionMonitor.attach(camera, session);
+      // A clip locks the frame sampler and would interrupt the shared preview.
+      _motion = LiveMotionMonitor.attach(camera, session, recordClips: false);
       _redraw();
       await session.resume();
     } catch (error) {
