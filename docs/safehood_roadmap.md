@@ -1,5 +1,16 @@
 # SafeHood: darmowa podstawa i dalsze prace
 
+**Stan na 23.11.2026:** użytkownik nie ma teraz możliwości wykonania testu
+kamery. Próby ostatnich zmian na sprzęcie są **odłożone i niezaliczone**.
+Monitoring niezależny od telefonu pozostaje otwartym wymaganiem P0.
+93 testy Fluttera potwierdziły logikę aplikacji; nie zastępują tej próby.
+Nie dodajemy ponownie osobnego przełącznika „wykrywanie w tle”.
+
+Kolejność pracy bez sprzętu, rejestr odłożonych prób i scenariusz testu
+całego systemu są w [planie testu generalnego](safehood_acceptance_test.md).
+Po powrocie do kamer zaczynamy od tego rejestru, bez ponownego parowania
+działających urządzeń i bez traktowania dawnych prób jako testu nowej wersji.
+
 SafeHood ma działać także dla osoby, która nie ma kamery: może zgłosić
 zdarzenie, zobaczyć zgłoszenia w okolicy i odbierać alerty od sąsiadów.
 Dodawanie obsługiwanej kamery zaczyna się od zasilania, telefonu i domowego
