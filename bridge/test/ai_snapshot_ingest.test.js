@@ -19,7 +19,7 @@ const end = source.indexOf('\nfunction safeAiErrorMessage(', start);
 assert.ok(start >= 0 && end > start);
 const handlerCode = source.slice(start, end) + '\ningestAiDetection;';
 const endpointStart = source.indexOf('async function callBridgeEndpoint(');
-const endpointEnd = source.indexOf('\nfunction isFakeCamera(', endpointStart);
+const endpointEnd = source.indexOf('\nconst cameraHealth =', endpointStart);
 assert.ok(endpointStart >= 0 && endpointEnd > endpointStart);
 const endpointCode = source.slice(endpointStart, endpointEnd) + '\ncallBridgeEndpoint;';
 const camera = {id: 'camera-1'};

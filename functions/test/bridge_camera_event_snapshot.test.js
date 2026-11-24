@@ -106,7 +106,14 @@ const createHarness = ({
             assert.equal(writes.length, 0, "Odczyt po zapisie transakcji.");
             return ref.get();
           },
-          update: (ref, data) => writes.push({ref, data, merge: true}),
+          update: (ref, data) => {
+            updates.push(data);
+            if (updateFailures > 0) {
+              updateFailures--;
+              throw new Error("Firestore niedostępny.");
+            }
+            writes.push({ref, data, merge: true});
+          },
           set: (ref, data, options) => {
             if (ref.path.startsWith("bridgeCameraEventReceipts/") &&
                 receiptWriteFailures > 0) {
@@ -142,7 +149,10 @@ const createHarness = ({
         metadata: {...options.metadata, size: String(buffer.length)},
       };
     },
-    getMetadata: async () => [stored.metadata],
+    getMetadata: async () => {
+      if (!stored) throw Object.assign(new Error("Not found"), {code: 404});
+      return [stored.metadata];
+    },
   };
   const exported = {};
   vm.runInNewContext(uploadCode, {

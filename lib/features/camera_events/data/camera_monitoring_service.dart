@@ -8,267 +8,139 @@ import '../../cameras/domain/camera_provider.dart';
 import 'camera_event_service.dart';
 
 class CameraMonitoringService {
-  final CameraEventService _cameraEventService;
+  CameraMonitoringService({
+    this.cameraEventService,
+    CameraProvider Function(Camera)? providerFactory,
+    this.ingest,
+  }) : _providerFactory = providerFactory ?? CameraProviderFactory.create;
 
+  final CameraEventService? cameraEventService;
+  final CameraProvider Function(Camera) _providerFactory;
+  final Future<void> Function(Camera, CameraDetection)? ingest;
   final Map<String, _CameraMonitoringSession> _sessions = {};
-
-  final Set<String> _startingCameraIds = {};
-
-  CameraMonitoringService({CameraEventService? cameraEventService})
-    : _cameraEventService = cameraEventService ?? CameraEventService();
+  final Map<String, int> _generations = {};
+  bool _disposed = false;
 
   bool get isRunning => _sessions.isNotEmpty;
-
+  // Includes pending connections so a new configuration can cancel them.
   Set<String> get activeCameraIds => Set.unmodifiable(_sessions.keys);
 
   Future<void> start(Camera camera) async {
-    final existingSession = _sessions[camera.id];
-
-    if (existingSession != null) {
-      if (_hasSameConnectionConfiguration(existingSession.camera, camera)) {
-        debugPrint(
-          'CAMERA MONITORING: '
-          'kamera ${camera.id} już monitorowana',
-        );
-
-        return;
-      }
-
-      debugPrint(
-        'CAMERA MONITORING: '
-        'zmieniono konfigurację ${camera.id} '
-        '— restart sesji',
-      );
-
-      await stopCamera(camera.id);
-    }
-
-    if (_startingCameraIds.contains(camera.id)) {
-      debugPrint(
-        'CAMERA MONITORING: '
-        'kamera ${camera.id} już się uruchamia',
-      );
-
+    if (_disposed) return;
+    final generation = (_generations[camera.id] ?? 0) + 1;
+    final existing = _sessions[camera.id];
+    if (existing != null && _sameConfiguration(existing.camera, camera)) return;
+    _generations[camera.id] = generation;
+    _sessions.remove(camera.id);
+    if (existing != null) await _close(existing);
+    bool wanted() => !_disposed && _generations[camera.id] == generation;
+    if (!wanted()) return;
+    final provider = _providerFactory(camera);
+    if (provider is! CameraDetectionSource) {
+      await provider.dispose();
       return;
     }
-
-    _startingCameraIds.add(camera.id);
-
-    CameraProvider? provider;
-
-    StreamSubscription<CameraDetection>? detectionSubscription;
-
+    final session = _CameraMonitoringSession(camera, provider);
+    _sessions[camera.id] = session;
+    bool current() => wanted() && identical(_sessions[camera.id], session);
     try {
-      debugPrint(
-        'CAMERA MONITORING: '
-        'start ${camera.id}',
-      );
-
-      provider = CameraProviderFactory.create(camera);
-
-      if (provider is! CameraDetectionSource) {
-        debugPrint(
-          'CAMERA MONITORING: '
-          'provider kamery ${camera.id} '
-          'nie obsługuje wykryć',
-        );
-
-        await provider.dispose();
-
+      session.subscription = (provider as CameraDetectionSource)
+          .watchDetections()
+          .listen(
+            (detection) {
+              if (current()) unawaited(_handleDetection(camera, detection));
+            },
+            onError: (Object _) {
+              debugPrint(
+                'CAMERA MONITORING: przerwane wykrywanie ${camera.id}',
+              );
+            },
+          );
+      await provider.connect().timeout(const Duration(seconds: 15));
+      if (!current()) {
+        await _close(session);
         return;
       }
-
-      final detectionSource = provider as CameraDetectionSource;
-
-      detectionSubscription = detectionSource.watchDetections().listen(
-        (detection) {
-          unawaited(_handleDetection(camera, detection));
-        },
-        onError: (Object error, StackTrace stackTrace) {
-          debugPrint(
-            'CAMERA MONITORING STREAM ERROR '
-            '[${camera.id}]: '
-            '$error',
-          );
-
-          debugPrint('$stackTrace');
-        },
-      );
-
-      debugPrint(
-        'CAMERA MONITORING: '
-        'listener uruchomiony '
-        '${camera.id}',
-      );
-
-      await provider.connect();
-
       if (provider is CameraDetectionMonitoringController) {
         await (provider as CameraDetectionMonitoringController)
-            .startDetectionMonitoring();
+            .startDetectionMonitoring()
+            .timeout(const Duration(seconds: 10));
       }
-
-      _sessions[camera.id] = _CameraMonitoringSession(
-        camera: camera,
-        provider: provider,
-        detectionSubscription: detectionSubscription,
-      );
-
-      debugPrint(
-        'CAMERA MONITORING: '
-        'aktywne ${camera.id}',
-      );
-
-      debugPrint(
-        'CAMERA MONITORING: '
-        'łącznie aktywnych = '
-        '${_sessions.length}',
-      );
-    } catch (error, stackTrace) {
-      debugPrint(
-        'CAMERA MONITORING START ERROR '
-        '[${camera.id}]: '
-        '$error',
-      );
-
-      debugPrint('$stackTrace');
-
-      if (detectionSubscription != null) {
-        await detectionSubscription.cancel();
-      }
-
-      if (provider is CameraDetectionMonitoringController) {
-        try {
-          await (provider as CameraDetectionMonitoringController)
-              .stopDetectionMonitoring();
-        } catch (_) {}
-      }
-
-      if (provider != null) {
-        try {
-          await provider.dispose();
-        } catch (_) {}
-      }
-
-      rethrow;
-    } finally {
-      _startingCameraIds.remove(camera.id);
+      if (!current()) await _close(session);
+    } catch (error) {
+      final wasCurrent = current();
+      if (wasCurrent) _sessions.remove(camera.id);
+      await _close(session);
+      if (wasCurrent) rethrow;
     }
   }
 
-  bool _hasSameConnectionConfiguration(Camera previous, Camera current) {
-    return previous.connectionType == current.connectionType &&
-        previous.ipAddress == current.ipAddress &&
-        previous.onvifServiceUrl == current.onvifServiceUrl &&
-        setEquals(previous.openPorts, current.openPorts);
-  }
+  bool _sameConfiguration(Camera a, Camera b) =>
+      a.connectionType == b.connectionType &&
+      a.ipAddress == b.ipAddress &&
+      a.onvifServiceUrl == b.onvifServiceUrl &&
+      a.onvifDeviceId == b.onvifDeviceId &&
+      setEquals(a.openPorts.toSet(), b.openPorts.toSet());
 
   Future<void> _handleDetection(
     Camera camera,
     CameraDetection detection,
   ) async {
-    debugPrint(
-      'CAMERA MONITORING DETECTION '
-      '[${camera.id}]: '
-      '${detection.type} → backend',
-    );
-
     try {
-      final result = await _cameraEventService.ingestFromCamera(
-        cameraId: camera.id,
-        type: detection.type,
-        source: detection.source,
-        confidence: detection.confidence,
-        occurredAt: detection.occurredAt,
-      );
-
-      debugPrint(
-        'CAMERA MONITORING INGEST '
-        '[${camera.id}]: '
-        'id=${result.eventId}, '
-        'type=${result.type}, '
-        'merged=${result.merged}, '
-        'count=${result.occurrenceCount}',
-      );
-    } catch (error, stackTrace) {
-      debugPrint(
-        'CAMERA MONITORING INGEST ERROR '
-        '[${camera.id}]: '
-        '$error',
-      );
-
-      debugPrint('$stackTrace');
+      final sink = ingest;
+      if (sink != null) {
+        await sink(camera, detection);
+      } else {
+        await (cameraEventService ?? CameraEventService()).ingestFromCamera(
+          cameraId: camera.id,
+          type: detection.type,
+          source: detection.source,
+          confidence: detection.confidence,
+          occurredAt: detection.occurredAt,
+        );
+      }
+    } catch (_) {
+      debugPrint('CAMERA MONITORING: nie zapisano zdarzenia ${camera.id}');
     }
   }
 
-  Future<void> stopCamera(String cameraId) async {
-    final session = _sessions.remove(cameraId);
-
-    if (session == null) {
-      return;
-    }
-
-    await session.detectionSubscription.cancel();
-
+  Future<void> _close(_CameraMonitoringSession session) async {
+    await session.subscription?.cancel();
+    session.subscription = null;
     final provider = session.provider;
-
     if (provider is CameraDetectionMonitoringController) {
       try {
         await (provider as CameraDetectionMonitoringController)
-            .stopDetectionMonitoring();
-      } catch (error) {
-        debugPrint(
-          'CAMERA MONITORING STOP EVENTS ERROR '
-          '[$cameraId]: '
-          '$error',
-        );
-      }
+            .stopDetectionMonitoring()
+            .timeout(const Duration(seconds: 3));
+      } catch (_) {}
     }
-
     try {
-      await provider.dispose();
-    } catch (error) {
-      debugPrint(
-        'CAMERA MONITORING DISPOSE ERROR '
-        '[$cameraId]: '
-        '$error',
-      );
-    }
+      await provider.dispose().timeout(const Duration(seconds: 3));
+    } catch (_) {}
+  }
 
-    debugPrint(
-      'CAMERA MONITORING: '
-      'zatrzymano $cameraId',
-    );
-
-    debugPrint(
-      'CAMERA MONITORING: '
-      'łącznie aktywnych = '
-      '${_sessions.length}',
-    );
+  Future<void> stopCamera(String id) async {
+    _generations[id] = (_generations[id] ?? 0) + 1;
+    final session = _sessions.remove(id);
+    if (session != null) await _close(session);
   }
 
   Future<void> stop() async {
-    final cameraIds = _sessions.keys.toList();
-
-    for (final cameraId in cameraIds) {
-      await stopCamera(cameraId);
+    for (final id in {..._generations.keys, ..._sessions.keys}) {
+      await stopCamera(id);
     }
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     await stop();
   }
 }
 
 class _CameraMonitoringSession {
+  _CameraMonitoringSession(this.camera, this.provider);
   final Camera camera;
   final CameraProvider provider;
-
-  final StreamSubscription<CameraDetection> detectionSubscription;
-
-  const _CameraMonitoringSession({
-    required this.camera,
-    required this.provider,
-    required this.detectionSubscription,
-  });
+  StreamSubscription<CameraDetection>? subscription;
 }

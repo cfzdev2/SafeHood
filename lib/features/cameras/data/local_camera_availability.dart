@@ -23,6 +23,7 @@ Future<CameraAvailability> checkLocalCameraAvailability(
     }
   }
 
+  connection = connection.forCamera(camera);
   final localCamera = connection.cameraWithLocalEndpoint(camera);
   final onvif = localCamera.connectionType == CameraConnectionType.onvif
       ? cameraOnvifEndpoints(localCamera).firstOrNull

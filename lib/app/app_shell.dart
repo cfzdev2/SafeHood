@@ -57,8 +57,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   bool _openingPushTarget = false;
   bool _reportedNoOnvifCameras = false;
+  int _cameraSyncVersion = 0;
 
   Future<void> _syncCameraMonitoring(List<Camera> cameras) async {
+    final version = ++_cameraSyncVersion;
+    bool current() => mounted && version == _cameraSyncVersion;
     unawaited(_automaticMonitoring.updateCameras(cameras));
     final onvifCameras = cameras
         .where(
@@ -76,6 +79,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     final cameraIdsToStop = activeCameraIds.difference(desiredCameraIds);
 
     for (final cameraId in cameraIdsToStop) {
+      if (!current()) return;
       await _cameraMonitoringService.stopCamera(cameraId);
     }
 
@@ -96,6 +100,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     _reportedNoOnvifCameras = false;
 
     for (final camera in onvifCameras) {
+      if (!current()) return;
       try {
         await _cameraMonitoringService.start(camera);
       } catch (error, stackTrace) {
@@ -180,6 +185,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _cameraSyncVersion++;
     WidgetsBinding.instance.removeObserver(this);
     _automaticMonitoring.end(_monitoringGeneration);
     unawaited(_bridgesSubscription?.cancel());

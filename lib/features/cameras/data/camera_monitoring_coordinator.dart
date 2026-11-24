@@ -175,6 +175,26 @@ class CameraMonitoringCoordinator extends ChangeNotifier {
     return AutomaticMonitoringStatus.unavailable;
   }
 
+  String messageFor(Camera camera) {
+    camera =
+        _cameras.where((item) => item.id == camera.id).firstOrNull ?? camera;
+    final status = statusFor(camera);
+    if (status == AutomaticMonitoringStatus.off ||
+        status == AutomaticMonitoringStatus.independent) {
+      return status.message;
+    }
+    final reason = switch (camera.bridgeMonitoringReason) {
+      'camera_auth_required' =>
+        'Odbiornik potrzebuje poprawnego loginu i hasła kamery.',
+      'camera_unreachable' =>
+        'Odbiornik nie może połączyć się z kamerą w domowej sieci.',
+      'stream_unavailable' =>
+        'Odbiornik nie dostaje obrazu z kamery i ponawia połączenie.',
+      _ => null,
+    };
+    return reason == null ? status.message : '${status.message} $reason';
+  }
+
   void _phoneChanged() {
     final current = phoneStatus.value.cameraId;
     // Respect the user's Stop action from Android's notification.

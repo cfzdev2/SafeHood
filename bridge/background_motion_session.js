@@ -67,13 +67,14 @@ class MotionDetector {
 }
 
 class BackgroundMotionSession {
-  constructor({camera, onDetection, onStatusChanged, now = Date.now,
+  constructor({camera, onDetection, onStatusChanged, onReason = () => {}, now = Date.now,
     resolve = resolveOnvifStreamUri, createSource = (args) => new FfmpegFrameSource(args),
     idleMillis = 12000, retryMillis = [2000, 4000, 8000, 15000, 30000]}) {
     this.camera = camera;
     this.onDetection = onDetection;
     this.onStatusChanged = onStatusChanged;
     this.now = now;
+    this.onReason = onReason;
     this.resolve = resolve;
     this.createSource = createSource;
     this.idleMillis = idleMillis;
@@ -105,6 +106,7 @@ class BackgroundMotionSession {
   async _run() {
     this._status('connecting');
     while (this.running) {
+      let reason = 'stream_unavailable';
       try {
         const input = await this.resolve(this.camera, {
           timeoutMs: 3500,
@@ -112,12 +114,15 @@ class BackgroundMotionSession {
         });
         if (!this.running) break;
         await this._watch(input);
-      } catch (_) {
+      } catch (error) {
         if (this.running) {
+          const auth = /401|403|auth|credential|password/i.test(String(error.message));
+          reason = auth ? 'camera_auth_required' : 'camera_unreachable';
           console.warn(`[BRIDGE MOTION][${this.camera.id}] brak obrazu z kamery.`);
         }
       }
       if (!this.running) break;
+      this.onReason(reason);
       this._status('reconnecting');
       const delay = this.retryMillis[this.retryIndex];
       this.retryIndex = Math.min(this.retryIndex + 1, this.retryMillis.length - 1);
@@ -155,6 +160,7 @@ class BackgroundMotionSession {
             if (!this.running || this.finishWait !== finish) return;
             resetIdle();
             this.retryIndex = 0;
+            this.onReason('receiving_frames');
             this._status('online');
             this._sample(frame);
           },

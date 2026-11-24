@@ -7,6 +7,8 @@ const path =
   require('path');
 
 const {createHash} = require('node:crypto');
+const {CameraEndpointRecovery} = require('./camera_endpoint_recovery');
+const endpointRecovery = new CameraEndpointRecovery();
 
 const {
   OnvifCameraSession,
@@ -48,6 +50,9 @@ const {ClipUploadQueue} = require('./ai/clip_upload_queue');
 const {EventRecordingManager} = require('./ai/event_recording_manager');
 const {buildBridgeDiagnostics} = require('./ai/bridge_diagnostics');
 const {BackgroundMotionSession} = require('./background_motion_session');
+const {CameraFrameCache} = require('./camera_frame_cache');
+const {DurableSnapshotQueue, CameraEvidencePipeline} = require('./camera_evidence_pipeline');
+const {IncidentLivePublisher} = require('./incident_live_publisher');
 
 const CONFIG_PATH =
   path.join(
@@ -223,9 +228,28 @@ const clipQueue = new ClipUploadQueue({
   },
 });
 
+const frameCache = new CameraFrameCache();
 const recordingManager = new EventRecordingManager({directory: recordingDirectory, uploadQueue: clipQueue,
+  onSample: (id, frame) => frameCache.sample(id, frame),
+  onSnapshot: (id, jpeg) => frameCache.snapshot(id, jpeg),
+  onPreview: (id, jpeg) => frameCache.preview(id, jpeg),
+  onSourceExit: (id) => frameCache.lost(id),
   onStatus: ({cameraId, status}) => console.log(`[BRIDGE AI BUFFER][${cameraId}] status=${status}`),
   onError: ({cameraId, error}) => console.error(`[BRIDGE AI BUFFER][${cameraId}] ${safeAiErrorMessage(error)}`),
+});
+
+const evidenceSnapshots = new DurableSnapshotQueue({
+  directory: path.join(recordingDirectory, 'snapshots'),
+  upload: (payload, signal) => callBridgeEndpoint('uploadBridgeCameraEventSnapshot', payload, 30000, signal),
+  onError: ({payload, error}) => console.error(
+    `[BRIDGE SNAPSHOT][${payload?.cameraId ?? '-'}] ${safeAiErrorMessage(error)}`),
+});
+const evidencePipeline = new CameraEvidencePipeline({eventOutbox, frameCache,
+  snapshotQueue: evidenceSnapshots, recordingManager,
+  onError: ({cameraId, error}) => console.error(`[BRIDGE MEDIA][${cameraId}] ${safeAiErrorMessage(error)}`),
+});
+const incidentLive = new IncidentLivePublisher({frameCache,
+  publish: (payload, signal) => callBridgeEndpoint('publishBridgeIncidentLive', payload, 8000, signal),
 });
 
 let shuttingDown = false;
@@ -383,6 +407,7 @@ async function callBridgeEndpoint(
         `HTTP ${response.status}`,
       );
       error.statusCode = response.status;
+      if (result.retryable === false) error.retryable = false;
       throw error;
     }
 
@@ -395,77 +420,7 @@ async function callBridgeEndpoint(
   }
 }
 
-function isFakeCamera(camera) {
-  const brand =
-    typeof camera.brand ===
-      'string' ?
-      camera.brand.toLowerCase() :
-      '';
-
-  const sources =
-    Array.isArray(
-      camera.discoverySources,
-    ) ?
-      camera.discoverySources :
-      [];
-
-  return (
-    brand.includes(
-      'safehood fake',
-    ) ||
-    sources.some(
-      (source) =>
-        String(source)
-          .toLowerCase() ===
-        'fake',
-    )
-  );
-}
-
-function buildFakeMediaUrls(camera) {
-  if (!isFakeCamera(camera)) {
-    return {};
-  }
-
-  const serviceUrl =
-    typeof camera.onvifServiceUrl ===
-      'string' ?
-      camera.onvifServiceUrl.trim() :
-      '';
-
-  if (!serviceUrl) {
-    return {};
-  }
-
-  try {
-    const snapshotUrl =
-      new URL(
-        '/snapshot.png',
-        serviceUrl,
-      );
-
-    snapshotUrl.searchParams.set(
-      'event',
-      String(Date.now()),
-    );
-
-    const clipUrl =
-      new URL(
-        '/clip.mp4',
-        serviceUrl,
-      );
-
-    return {
-      snapshotUrl:
-        snapshotUrl.toString(),
-
-      clipUrl:
-        clipUrl.toString(),
-    };
-  } catch (_) {
-    return {};
-  }
-}
+const cameraHealth = new Map();
 
 function cameraStatusPayload() {
   return [
@@ -475,6 +430,7 @@ function cameraStatusPayload() {
       return {
         cameraId,
         status,
+        ...(cameraHealth.get(cameraId) || {}),
       };
     },
   );
@@ -513,7 +469,8 @@ function queueStateReport(
                       desiredAiSessionsStartedAtMillis,
                     scheduler: aiScheduler,
                     eventOutbox,
-                    snapshotQueue,
+                    snapshotQueue: {pendingCount:
+                      snapshotQueue.pendingCount + evidenceSnapshots.pendingCount},
                     clipQueue,
                     recordingManager,
                   }),
@@ -567,48 +524,8 @@ async function ingestDetection(
   detection,
   signal,
 ) {
-  const mediaUrls =
-    buildFakeMediaUrls(
-      camera,
-    );
-
-  const result =
-    await callBridgeEndpoint(
-      'ingestBridgeCameraEvent',
-      {
-        cameraId:
-          camera.id,
-
-        type:
-          detection.type,
-
-        source:
-          detection.source ||
-          'onvif',
-
-        confidence:
-          detection.confidence ??
-          null,
-
-        occurredAt:
-          detection.occurredAt ||
-          new Date()
-            .toISOString(),
-
-        ...mediaUrls,
-      },
-      20000,
-      signal,
-    );
-
-  console.log(
-    `[BRIDGE INGEST][${camera.id}] ` +
-    `id=${result.eventId ?? result.id ?? '-'}, ` +
-    `type=${result.type ?? detection.type}, ` +
-    `merged=${result.merged ?? false}, ` +
-    `count=${result.occurrenceCount ?? 1}`,
-  );
-  return result;
+  signal?.throwIfAborted();
+  return evidencePipeline.ingest(camera, detection);
 }
 
 function aiSessionFingerprint(camera) {
@@ -739,7 +656,7 @@ async function stopAiSession(
   cameraId,
 ) {
   snapshotQueue.cancelCamera(cameraId);
-  await recordingManager.stopCamera(cameraId);
+  if (!sessions.has(cameraId)) await recordingManager.stopCamera(cameraId);
   const entry =
     aiSessions.get(cameraId);
 
@@ -768,13 +685,14 @@ async function startAiSession(camera) {
     return false;
   }
 
-  await recordingManager.syncCamera(camera.id, input, camera.aiRecordingEnabled === true);
+  await recordingManager.syncCamera(camera.id, input,
+    camera.aiRecordingEnabled === true || camera.motionDetectionEnabled === true);
 
   let scheduler;
   try {
     scheduler = await getAiScheduler();
   } catch (error) {
-    await recordingManager.stopCamera(camera.id);
+    if (!sessions.has(camera.id)) await recordingManager.stopCamera(camera.id);
     throw error;
   }
 
@@ -1001,7 +919,8 @@ async function syncAiSessions(
       existing.camera =
         camera;
 
-      await recordingManager.syncCamera(cameraId, existing.input, camera.aiRecordingEnabled === true);
+      await recordingManager.syncCamera(cameraId, existing.input,
+        camera.aiRecordingEnabled === true || camera.motionDetectionEnabled === true);
 
       continue;
     }
@@ -1068,6 +987,8 @@ async function stopSession(
 
   await entry.session.stop();
 
+  if (!aiSessions.has(cameraId)) await recordingManager.stopCamera(cameraId);
+
   if (!shuttingDown) {
     await queueStateReport(
       'online',
@@ -1078,6 +999,7 @@ async function stopSession(
     cameraStatuses.delete(
       cameraId,
     );
+    cameraHealth.delete(cameraId);
   }
 
   console.log(
@@ -1086,20 +1008,47 @@ async function stopSession(
 }
 
 function monitoringFingerprint(camera) {
-  return JSON.stringify([connectionFingerprint(camera), camera.frameMotionEnabled === true]);
+  return JSON.stringify([connectionFingerprint(camera), camera.frameMotionEnabled === true,
+    camera.onvifDeviceId ?? null]);
+}
+
+async function resolveMonitoredCamera(camera, options) {
+  try { return await resolveOnvifStreamUri(camera, options); } catch (error) {
+    if (/HTTP (401|403)\b/.test(error.message)) throw error;
+    const endpoint = await endpointRecovery.recover(camera, options.signal);
+    if (!endpoint) throw error;
+    // Confirm ONVIF returns a stream before saving the same device's new address.
+    const input = await resolveOnvifStreamUri({...camera, ...endpoint}, options);
+    options.signal?.throwIfAborted();
+    await callBridgeEndpoint('reportBridgeCameraEndpoint', {
+      cameraId: camera.id, onvifDeviceId: camera.onvifDeviceId,
+      previousIpAddress: camera.ipAddress, ...endpoint,
+    }, 5000, options.signal);
+    return input;
+  }
 }
 
 function startSession(camera) {
   const fingerprint = monitoringFingerprint(camera);
   cameraStatuses.set(camera.id, 'connecting');
+  cameraHealth.set(camera.id, {reason: 'connecting', source: 'none'});
   let eventStatus = 'connecting';
   let frameStatus = camera.frameMotionEnabled === true ? 'connecting' : 'offline';
+  let frameReason = 'connecting';
   const report = () => {
     if (sessions.get(camera.id)?.session !== session) return;
     const statuses = [eventStatus, frameStatus];
     const status = ['online', 'connecting', 'reconnecting'].find((s) => statuses.includes(s)) ||
       'offline';
-    if (status !== cameraStatuses.get(camera.id)) {
+    const health = {
+      source: frameStatus === 'online' ? (eventStatus === 'online' ? 'events_and_frames' : 'frames') :
+        (eventStatus === 'online' ? 'events' : 'none'),
+      reason: frameStatus === 'online' ? 'receiving_frames' :
+        (eventStatus === 'online' ? 'receiving_events' : frameReason),
+    };
+    const changed = JSON.stringify(health) !== JSON.stringify(cameraHealth.get(camera.id));
+    cameraHealth.set(camera.id, health);
+    if (status !== cameraStatuses.get(camera.id) || changed) {
       updateCameraMonitoringStatus(camera, status);
     }
   };
@@ -1112,7 +1061,11 @@ function startSession(camera) {
     },
   });
   const motion = camera.frameMotionEnabled === true ? new BackgroundMotionSession({
-    camera, onDetection: ingestDetection,
+    camera, onDetection: ingestDetection, resolve: resolveMonitoredCamera,
+    onReason: (reason) => { frameReason = reason; },
+    createSource: ({input, onFrame, onExit}) => frameCache.motionSource(
+      camera.id, input, {onFrame, onExit},
+      () => recordingManager.syncCamera(camera.id, input, true)),
     onStatusChanged: (_, status) => {
       frameStatus = status;
       report();
@@ -1264,6 +1217,12 @@ async function fetchConfiguration() {
     result.cameras,
     result.localAiEnabled === true,
   );
+  try {
+    const live = await callBridgeEndpoint('getBridgeIncidentLive', {});
+    incidentLive.sync(live.sessions);
+  } catch (_) {
+    // A temporarily unavailable API cannot interrupt camera monitoring.
+  }
 }
 
 function queueConfigurationSync() {
@@ -1290,10 +1249,7 @@ async function shutdown(signal) {
   }
 
   shuttingDown = true;
-  snapshotQueue.close();
-  await recordingManager.close();
-  await clipQueue.close();
-  await eventOutbox.close();
+  incidentLive.close();
 
   if (configurationTimer) {
     clearInterval(
@@ -1347,6 +1303,12 @@ async function shutdown(signal) {
 
   aiInitializationPromise = null;
 
+  snapshotQueue.close();
+  await recordingManager.close();
+  await clipQueue.close();
+  await eventOutbox.close();
+  await evidenceSnapshots.close();
+
   try {
     await callBridgeEndpoint(
       'reportBridgeState',
@@ -1398,6 +1360,7 @@ async function main() {
   console.log('');
 
   await eventOutbox.start();
+  await evidenceSnapshots.start();
   try {
     await clipQueue.start();
     await recordingManager.start();

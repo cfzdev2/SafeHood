@@ -277,6 +277,10 @@ async function deleteAccountTopLevelData(
       db,
       db.collection("bridgeCameraEventReceipts").where("ownerId", "==", uid),
   );
+  const deletedLiveGrantCount = await deleteQueryDocuments(
+      db,
+      db.collection("incidentLiveGrants").where("ownerId", "==", uid),
+  );
 
   return {
     deletedBridgeCredentialCount,
@@ -284,6 +288,7 @@ async function deleteAccountTopLevelData(
     deletedStateCount,
     deletedCameraEventCount,
     deletedBridgeEventReceiptCount,
+    deletedLiveGrantCount,
   };
 }
 /**

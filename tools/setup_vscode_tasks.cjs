@@ -22,22 +22,27 @@ function readTasks(source) {
 }
 
 function main() {
-  if (!fs.existsSync(tasksPath)) {
-    throw new Error('Nie ma .vscode/tasks.json. Otwórz folder SafeHood z dotychczasowym zadaniem Firebase.');
+  let config = {version: '2.0.0', tasks: []};
+  if (fs.existsSync(tasksPath)) {
+    try {
+      config = readTasks(fs.readFileSync(tasksPath, 'utf8').replace(/^\uFEFF/, ''));
+    } catch {
+      throw new Error('Nie udało się odczytać .vscode/tasks.json. Plik nie został zmieniony.');
+    }
   }
-  let config;
-  try {
-    config = readTasks(fs.readFileSync(tasksPath, 'utf8').replace(/^\uFEFF/, ''));
-  } catch {
-    throw new Error('Nie udało się odczytać .vscode/tasks.json. Plik nie został zmieniony.');
+  if (config.version !== '2.0.0' || !Array.isArray(config.tasks)) {
+    throw new Error('Nieprawidłowy format zadań VS Code. Plik nie został zmieniony.');
   }
-  const firebase = Array.isArray(config?.tasks)
-    ? config.tasks.find((task) => task?.label === firebaseLabel)
-    : null;
-  if (config?.version !== '2.0.0' || !firebase) {
-    throw new Error(`Brakuje zadania „${firebaseLabel}”. Plik nie został zmieniony.`);
-  }
-
+  const oldFirebase = config.tasks.find((task) => task?.label === firebaseLabel);
+  const firebase = {
+    ...oldFirebase,
+    label: firebaseLabel,
+    type: 'shell', command: 'node tools/start_dev_firebase.cjs',
+    options: {...oldFirebase?.options, cwd: '${workspaceFolder}'},
+    isBackground: true, problemMatcher: [],
+    presentation: {...oldFirebase?.presentation, reveal: 'always', panel: 'dedicated'},
+    runOptions: {instanceLimit: 1},
+  };
   const original = JSON.stringify(config);
   const oldBridge = config.tasks.find((task) => task?.label === bridgeLabel);
   const shell = oldBridge?.options?.shell ?? firebase.options?.shell;
@@ -67,7 +72,7 @@ function main() {
     problemMatcher: [],
     runOptions: {runOn: 'folderOpen', instanceLimit: 1},
   };
-  for (const replacement of [bridge, stack]) {
+  for (const replacement of [firebase, bridge, stack]) {
     const index = config.tasks.findIndex((task) => task?.label === replacement.label);
     if (index === -1) config.tasks.push(replacement);
     else config.tasks[index] = replacement;
@@ -86,7 +91,9 @@ function main() {
 
   const backup = path.join(path.dirname(tasksPath), `tasks.${Date.now()}.json.bak`);
   const temporary = `${tasksPath}.${process.pid}.tmp`;
-  fs.copyFileSync(tasksPath, backup, fs.constants.COPYFILE_EXCL);
+  fs.mkdirSync(path.dirname(tasksPath), {recursive: true});
+  const hadTasks = fs.existsSync(tasksPath);
+  if (hadTasks) fs.copyFileSync(tasksPath, backup, fs.constants.COPYFILE_EXCL);
   fs.writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, {flag: 'wx'});
   try {
     fs.renameSync(temporary, tasksPath);
@@ -94,7 +101,7 @@ function main() {
     fs.rmSync(temporary, {force: true});
   }
   console.log('Autostart SafeHood: Firebase i Bridge. Atrapy, strumienie i Flutter uruchamiasz ręcznie.');
-  console.log(`Kopia poprzednich zadań: .vscode/${path.basename(backup)}`);
+  if (hadTasks) console.log(`Kopia poprzednich zadań: .vscode/${path.basename(backup)}`);
 }
 
 try {

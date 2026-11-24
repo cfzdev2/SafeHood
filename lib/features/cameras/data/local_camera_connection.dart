@@ -35,8 +35,36 @@ class LocalCameraConnection {
     return uri == null || rtspVerified ? uri : applyCameraLogin(uri, login);
   }
 
+  LocalCameraConnection forCamera(Camera camera) {
+    final identity = camera.onvifDeviceId;
+    final verifiedIdentity =
+        identity != null &&
+        RegExp(
+          r'^(?:urn:)?(?:uuid:)?[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$',
+          caseSensitive: false,
+        ).hasMatch(identity);
+    final saved = onvifUri;
+    final current = parseManualOnvifUri(camera.onvifServiceUrl ?? '');
+    if (!verifiedIdentity ||
+        saved == null ||
+        current == null ||
+        current.host != camera.ipAddress ||
+        saved.host == current.host) {
+      return this;
+    }
+    return LocalCameraConnection(
+      login: login,
+      onvifUri: current,
+      rtspUri: rtspUri?.host == saved.host
+          ? rtspUri!.replace(host: current.host)
+          : rtspUri,
+      reolinkUid: reolinkUid,
+      rtspVerified: rtspVerified,
+    );
+  }
+
   Camera cameraWithLocalEndpoint(Camera camera) {
-    final endpoint = onvifUri;
+    final endpoint = forCamera(camera).onvifUri;
     return endpoint == null
         ? camera
         : camera.copyWith(

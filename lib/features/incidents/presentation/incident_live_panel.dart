@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
@@ -38,15 +37,18 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
   Timer? _frameExpiry;
   Timer? _retry;
   Timer? _capture;
+  Timer? _shareExpiry;
   CameraLiveSession? _session;
   LiveMotionMonitor? _motion;
   IncidentLiveFrame? _frame;
   String? _uid;
-  String? _shareId;
+  IncidentLiveShare? _share;
+  String? get _shareId => _share?.id;
   String? _shareError;
   String? _cameraError;
   int _visibility = 0;
   int _shareAttempt = 0;
+  final _cancelledShares = <int>{};
   bool _active = false;
   bool _foreground = true;
   bool _routeCurrent = false;
@@ -61,12 +63,7 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
   bool get _canWatch =>
       _isOpen && _uid != null && _incident.participantIds.contains(_uid);
   bool get _canShare =>
-      _active &&
-      _canWatch &&
-      _isOwner &&
-      _auth.currentUser?.uid == _uid &&
-      !kIsWeb &&
-      defaultTargetPlatform == TargetPlatform.android;
+      _active && _canWatch && _isOwner && _auth.currentUser?.uid == _uid;
 
   @override
   void initState() {
@@ -116,9 +113,9 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
       final generation = ++_visibility;
       if (_isOwner) {
         unawaited(_openOwnerPreview(generation));
-      } else {
-        _watchFrames(generation);
+        unawaited(_restoreShare(generation));
       }
+      _watchFrames(generation);
     }
     _redraw();
   }
@@ -156,7 +153,7 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
   }
 
   void _watchFrames(int generation) {
-    if (!_current(generation) || _isOwner) return;
+    if (!_current(generation)) return;
     _frames = _relay
         .watch(_incident.id)
         .listen(
@@ -207,9 +204,7 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
       _supportsCapture(player);
 
   Future<void> _startSharing() async {
-    if (!_canShare ||
-        !_supportsCapture(_session?.controller) ||
-        _startingShare) {
+    if (!_canShare || _startingShare) {
       return;
     }
     final attempt = ++_shareAttempt;
@@ -217,13 +212,20 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
     _shareError = null;
     _redraw();
     try {
-      final id = await _relay.start(_incident.id);
+      final share = await _relay.start(_incident.id);
+      final id = share.id;
       if (!_canShare || attempt != _shareAttempt) {
-        await _releaseShare(id);
+        if (!share.independent || _cancelledShares.remove(attempt)) {
+          await _releaseShare(id);
+        }
         return;
       }
-      _shareId = id;
-      unawaited(_publish(attempt, id));
+      if (!share.independent && !_supportsCapture(_session?.controller)) {
+        await _releaseShare(id);
+        throw StateError('Brak dostępnego źródła obrazu.');
+      }
+      _setShare(share);
+      if (!share.independent) unawaited(_publish(attempt, id));
     } catch (_) {
       if (attempt == _shareAttempt && _canShare) {
         _shareError = 'Nie udało się udostępnić obrazu.';
@@ -234,6 +236,35 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
         _redraw();
       }
     }
+  }
+
+  Future<void> _restoreShare(int generation) async {
+    final attempt = _shareAttempt;
+    try {
+      final share = await _relay.status(_incident.id);
+      if (_current(generation) && attempt == _shareAttempt && !_startingShare) {
+        _setShare(share);
+        _redraw();
+      }
+    } catch (_) {
+      // A temporary status failure must not stop an independent publisher.
+    }
+  }
+
+  void _setShare(IncidentLiveShare? share) {
+    _shareExpiry?.cancel();
+    _share = share;
+    if (share == null) return;
+    final remaining = share.expiresAt.difference(DateTime.now());
+    if (remaining <= Duration.zero) {
+      _share = null;
+      return;
+    }
+    _shareExpiry = Timer(remaining, () {
+      _share = null;
+      _capture?.cancel();
+      _redraw();
+    });
   }
 
   Future<void> _publish(int attempt, String id, [int misses = 0]) async {
@@ -273,19 +304,28 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
     }
   }
 
-  void _stopSharing() {
+  void _stopSharing({bool leaving = false}) {
+    if (_startingShare && !leaving) _cancelledShares.add(_shareAttempt);
     _shareAttempt++;
     _startingShare = false;
     _capture?.cancel();
     final id = _shareId;
-    _shareId = null;
+    _setShare(null);
     if (id != null) unawaited(_releaseShare(id));
   }
 
   void _leave() {
     _visibility++;
     _active = false;
-    _stopSharing();
+    if (_share?.independent == true) {
+      // The receiver keeps the explicitly shared report live after navigation.
+      _shareAttempt++;
+      _startingShare = false;
+      _capture?.cancel();
+      _setShare(null);
+    } else {
+      _stopSharing(leaving: true);
+    }
     _frameExpiry?.cancel();
     _retry?.cancel();
     unawaited(_frames?.cancel());
@@ -313,7 +353,7 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
   Widget _picture() {
     if (!_isOpen) return _message('Transmisja zakończona.');
     if (!_canWatch) return _message('Brak dostępu do transmisji.');
-    if (!_isOwner) {
+    if (!_isOwner || (_frame != null && _share?.independent == true)) {
       final frame = _frame;
       return frame == null
           ? _message('Czekam, aż autor zgłoszenia udostępni obraz.')
@@ -391,14 +431,16 @@ class _IncidentLivePanelState extends State<IncidentLivePanel>
             )
           else
             FilledButton.icon(
-              onPressed: _supportsCapture(_session?.controller)
-                  ? _startSharing
-                  : null,
+              onPressed: _startSharing,
               icon: const Icon(Icons.share_outlined),
               label: const Text('Udostępnij obraz uczestnikom'),
             ),
           if (_shareId != null)
-            const Text('Uczestnicy widzą obraz z tego zgłoszenia bez dźwięku.'),
+            Text(
+              _share?.independent == true
+                  ? 'Obraz bez dźwięku jest udostępniany do 10 minut, także po zamknięciu aplikacji.'
+                  : 'Udostępnianie obrazu bez dźwięku trwa, gdy ten ekran jest otwarty.',
+            ),
           if (_shareError case final error?) Text(error),
         ],
       ],

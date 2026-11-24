@@ -2,8 +2,10 @@
 
 **Stan na 23.11.2026:** użytkownik nie ma teraz możliwości wykonania testu
 kamery. Próby ostatnich zmian na sprzęcie są **odłożone i niezaliczone**.
-Monitoring niezależny od telefonu pozostaje otwartym wymaganiem P0.
-93 testy Fluttera potwierdziły logikę aplikacji; nie zastępują tej próby.
+Monitoring niezależny od telefonu ma przygotowaną ścieżkę Bridge; jego
+działanie na obu fizycznych kamerach pozostaje otwartym wymaganiem P0.
+96 testów Fluttera oraz zestawy Bridge/backendu potwierdziły logikę pakietu;
+nie zastępują tej próby.
 Nie dodajemy ponownie osobnego przełącznika „wykrywanie w tle”.
 
 Kolejność pracy bez sprzętu, rejestr odłożonych prób i scenariusz testu

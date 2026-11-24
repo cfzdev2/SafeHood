@@ -11,6 +11,30 @@ class IncidentLiveFrame {
   final DateTime validUntil;
 }
 
+class IncidentLiveShare {
+  const IncidentLiveShare(this.id, this.independent, this.expiresAt);
+
+  final String id;
+  final bool independent;
+  final DateTime expiresAt;
+
+  static IncidentLiveShare? parse(Map<String, dynamic> result) {
+    final id = result['sessionId'];
+    final expires = result['expiresAtMillis'];
+    if (id is! String ||
+        !RegExp(r'^[a-f0-9]{32}$').hasMatch(id) ||
+        expires is! num ||
+        !expires.isFinite) {
+      return null;
+    }
+    return IncidentLiveShare(
+      id,
+      result['publisher'] == 'bridge',
+      DateTime.fromMillisecondsSinceEpoch(expires.toInt()),
+    );
+  }
+}
+
 class IncidentLiveService {
   static const maximumFrameBytes = 96 * 1024;
   final _db = FirebaseFirestore.instance;
@@ -33,14 +57,16 @@ class IncidentLiveService {
         return IncidentLiveFrame(bytes, lease.toDate());
       });
 
-  Future<String> start(String incidentId) async {
+  Future<IncidentLiveShare?> status(String incidentId) async =>
+      IncidentLiveShare.parse(await _call(incidentId, 'status'));
+
+  Future<IncidentLiveShare> start(String incidentId) async {
     final result = await _call(incidentId, 'start');
-    final sessionId = result['sessionId'];
-    if (sessionId is! String ||
-        !RegExp(r'^[a-f0-9]{32}$').hasMatch(sessionId)) {
+    final share = IncidentLiveShare.parse(result);
+    if (share == null) {
       throw StateError('Brak sesji transmisji.');
     }
-    return sessionId;
+    return share;
   }
 
   Future<void> send(String incidentId, String sessionId, Uint8List jpeg) async {

@@ -11,7 +11,11 @@ function normalizePayload(value) {
   if (!value || !idPattern.test(value.externalEventId) ||
     typeof value.cameraId !== 'string' || !value.cameraId.trim() ||
     value.cameraId.length > 256 || /[/\0]/.test(value.cameraId) ||
-    !['person', 'vehicle'].includes(value.type) || value.source !== 'local-ai' ||
+    !['person', 'vehicle', 'motion', 'sound'].includes(value.type) ||
+    !['local-ai', 'bridge-motion', 'onvif'].includes(value.source) ||
+    (value.source === 'local-ai' && !['person', 'vehicle'].includes(value.type)) ||
+    (value.source === 'bridge-motion' && value.type !== 'motion') ||
+    (value.aiMetadata != null && value.source !== 'local-ai') ||
     (value.confidence !== null && (!Number.isFinite(value.confidence) ||
       value.confidence < 0 || value.confidence > 1)) ||
     typeof value.occurredAt !== 'string' || !Number.isFinite(Date.parse(value.occurredAt))) {
@@ -27,7 +31,7 @@ function normalizePayload(value) {
     externalEventId: value.externalEventId,
     cameraId: value.cameraId,
     type: value.type,
-    source: 'local-ai',
+    source: value.source,
     confidence: value.confidence,
     occurredAt: value.occurredAt,
     ...(aiMetadata === null ? {} : {aiMetadata}),

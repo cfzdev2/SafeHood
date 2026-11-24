@@ -55,6 +55,7 @@ class LocalCameraRegistration {
         ipAddress: uri.host,
         macAddress: detected?.macAddress,
         onvifServiceUrl: endpoint?.toString(),
+        onvifDeviceId: isOnvif ? detected?.deviceId : null,
         openPorts: {
           ...?detected?.openPorts,
           uri.hasPort ? uri.port : 554,

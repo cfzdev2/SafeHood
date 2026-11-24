@@ -58,12 +58,13 @@ function createIncidentLiveHandler({
       throw new HttpsError("invalid-argument", "Nieprawidłowe zgłoszenie.");
     }
     const action = data.action;
-    if (!["start", "frame", "stop"].includes(action)) {
+    if (!["start", "frame", "stop", "status"].includes(action)) {
       throw new HttpsError("invalid-argument", "Nieprawidłowa operacja LIVE.");
     }
     const sessionId = action === "start" ?
       randomBytes(16).toString("hex") : data.sessionId;
-    if (typeof sessionId !== "string" || !validSessionId.test(sessionId)) {
+    if (action !== "status" &&
+        (typeof sessionId !== "string" || !validSessionId.test(sessionId))) {
       throw new HttpsError("invalid-argument", "Nieprawidłowa sesja LIVE.");
     }
     let jpeg;
@@ -86,9 +87,31 @@ function createIncidentLiveHandler({
         );
       }
       const preview = (await transaction.get(previewRef)).data();
+      if (action === "status") {
+        if (!preview || preview.publisher !== "bridge" ||
+            incident.status !== "active" ||
+            !(incident.expiresAt?.toMillis() > now()) ||
+            !incident.participantIds?.includes(auth.uid)) {
+          return {sessionId: null};
+        }
+        const grant = (await transaction.get(
+            db.collection("incidentLiveGrants").doc(preview.sessionId),
+        )).data();
+        return grant?.ownerId === auth.uid &&
+          grant.incidentId === incidentId &&
+          grant.expiresAt?.toMillis() > now() ? {
+            sessionId: preview.sessionId, publisher: "bridge",
+            expiresAtMillis: grant.expiresAt.toMillis(),
+          } : {sessionId: null};
+      }
       if (action === "stop") {
         if (preview && preview.sessionId === sessionId) {
           transaction.delete(previewRef);
+          if (preview.publisher === "bridge") {
+            transaction.delete(db.collection("incidentLiveGrants").doc(
+                sessionId,
+            ));
+          }
         }
         return {ok: true};
       }
@@ -109,10 +132,49 @@ function createIncidentLiveHandler({
           Math.min(timestamp + leaseMillis, end.toMillis()),
       );
       if (action === "start") {
-        transaction.set(previewRef, {sessionId, leaseUntil});
-        return {sessionId};
+        const camera = (await transaction.get(db.collection("users")
+            .doc(auth.uid).collection("cameras").doc(incident.cameraId)))
+            .data();
+        let bridge = null;
+        let credential = null;
+        if (camera?.bridgeId && typeof camera.bridgeId === "string" &&
+            !camera.bridgeId.includes("/")) {
+          bridge = (await transaction.get(db.collection("users")
+              .doc(auth.uid).collection("bridges").doc(camera.bridgeId)))
+              .data();
+          credential = (await transaction.get(db.collection("bridgeCredentials")
+              .doc(camera.bridgeId))).data();
+        }
+        const recent = (time) => time?.toMillis &&
+          timestamp - time.toMillis() >= -5000 &&
+          timestamp - time.toMillis() <= 90000;
+        const independent = camera && !camera.deletionPending &&
+          camera.monitoringMode === "bridge" &&
+          camera.motionDetectionEnabled !== false &&
+          camera.bridgeMonitoringStatus === "online" &&
+          recent(camera.bridgeMonitoringUpdatedAt) &&
+          bridge?.status === "online" && recent(bridge.lastSeenAt) &&
+          credential?.status === "active" && credential.ownerId === auth.uid;
+        const publisher = independent ? "bridge" : "phone";
+        const expiresAtMillis = Math.min(
+            end.toMillis(), timestamp + 10 * 60 * 1000,
+        );
+        if (preview?.publisher === "bridge") {
+          transaction.delete(db.collection("incidentLiveGrants")
+              .doc(preview.sessionId));
+        }
+        if (independent) {
+          transaction.set(db.collection("incidentLiveGrants").doc(sessionId), {
+            ownerId: auth.uid, cameraId: incident.cameraId,
+            incidentId, sessionId, bridgeId: camera.bridgeId,
+            expiresAt: Timestamp.fromMillis(expiresAtMillis),
+          });
+        }
+        transaction.set(previewRef, {sessionId, leaseUntil, publisher});
+        return {sessionId, publisher, expiresAtMillis};
       }
       if (!preview || preview.sessionId !== sessionId ||
+          preview.publisher === "bridge" ||
           preview.leaseUntil.toMillis() <= timestamp) {
         throw new HttpsError("failed-precondition", "Transmisja zakończona.");
       }
@@ -121,7 +183,7 @@ function createIncidentLiveHandler({
         return {ok: true, accepted: false};
       }
       transaction.set(previewRef, {
-        sessionId, leaseUntil, jpeg,
+        sessionId, leaseUntil, jpeg, publisher: "phone",
         lastFrameAt: Timestamp.fromMillis(timestamp),
       });
       return {ok: true, accepted: true};
@@ -129,4 +191,4 @@ function createIncidentLiveHandler({
   };
 }
 
-module.exports = {createIncidentLiveHandler};
+module.exports = {createIncidentLiveHandler, smallJpeg};

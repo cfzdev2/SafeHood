@@ -62,6 +62,9 @@ const geofire =
 const {createClipUploadHandler, savePhoneMotionClip} =
   require("./camera_event_clip");
 const {createIncidentLiveHandler} = require("./incident_live");
+const {createBridgeIncidentLiveApi} = require("./bridge_incident_live");
+const {createCameraEndpointRecoveryHandler} =
+  require("./camera_endpoint_recovery");
 
 const {
   mergeCameraEventAiMetadata,
@@ -819,6 +822,23 @@ async function getIncidentForParticipant(
 exports.updateIncidentLive = onCall(
     {region: "europe-central2", timeoutSeconds: 10, maxInstances: 4},
     createIncidentLiveHandler({db, Timestamp, HttpsError}),
+);
+
+const bridgeIncidentLive = createBridgeIncidentLiveApi({
+  db, Timestamp, authenticate: authenticateBridgeRequest,
+});
+exports.getBridgeIncidentLive = onRequest(
+    {region: "europe-central2"}, bridgeIncidentLive.list,
+);
+exports.publishBridgeIncidentLive = onRequest(
+    {region: "europe-central2", timeoutSeconds: 10, maxInstances: 4},
+    bridgeIncidentLive.publish,
+);
+
+exports.reportBridgeCameraEndpoint = onRequest(
+    {region: "europe-central2", timeoutSeconds: 10},
+    createCameraEndpointRecoveryHandler({db, Timestamp,
+      authenticate: authenticateBridgeRequest}),
 );
 
 exports.getNearbyUsers = onCall(
@@ -2510,7 +2530,8 @@ async function ingestCameraEventInternal(
           input.occurredAt,
           nowMillis,
       );
-  if (input.bridgeReceipt && source === "local-ai") {
+  if (input.bridgeReceipt &&
+      (input.fromBridge === true || source === "local-ai")) {
     const originalTime = typeof input.occurredAt === "string" ?
       Date.parse(input.occurredAt) : NaN;
     if (Number.isFinite(originalTime) && originalTime > 0 &&
@@ -2641,13 +2662,12 @@ async function ingestCameraEventInternal(
             );
           }
           if (bridgeMotion && (
-            cameraData.liveMotionEnabled !== true ||
             cameraData.motionDetectionEnabled === false ||
             cameraData.connectionType !== "onvif" ||
             cameraData.bridgeId !== input.bridgeId
           )) {
             throw new HttpsError(
-                "failed-precondition", "Wykrywanie w tle jest wyłączone.",
+                "failed-precondition", "Wykrywanie ruchu jest wyłączone.",
             );
           }
           if (input.fromCameraApp && source === "onvif" && type === "motion" &&
@@ -2690,7 +2710,8 @@ async function ingestCameraEventInternal(
                 ...data.result,
                 duplicate: true,
                 externalEventId,
-                snapshotRequired: original.exists && source === "local-ai" &&
+                snapshotRequired: original.exists &&
+                  (source === "local-ai" || input.fromBridge === true) &&
                   !(typeof originalData.snapshotPath === "string" &&
                     originalData.snapshotPath.trim()),
               };
@@ -2868,6 +2889,9 @@ async function ingestCameraEventInternal(
                   source ?
                     source :
                     "multiple",
+                hasBridgeDetection:
+                  activeEvent.hasBridgeDetection === true ||
+                  input.fromBridge === true,
                 hasLocalAiDetection:
                   activeEvent.hasLocalAiDetection === true ||
                   activeEvent.source === "local-ai" ||
@@ -2953,7 +2977,7 @@ async function ingestCameraEventInternal(
                 notificationType:
                   notificationRequired ? type : null,
                 snapshotRequired:
-                  source === "local-ai" &&
+                  (source === "local-ai" || input.fromBridge === true) &&
                   !(typeof activeEvent.snapshotPath === "string" &&
                     activeEvent.snapshotPath.trim()),
               });
@@ -2996,6 +3020,7 @@ async function ingestCameraEventInternal(
             occurrenceCount: 1,
             source,
             hasLocalAiDetection: source === "local-ai",
+            hasBridgeDetection: input.fromBridge === true,
             confidence,
             snapshotUrl,
             clipUrl,
@@ -3057,7 +3082,8 @@ async function ingestCameraEventInternal(
             notificationRequired,
             notificationType:
               notificationRequired ? type : null,
-            snapshotRequired: source === "local-ai",
+            snapshotRequired:
+              source === "local-ai" || input.fromBridge === true,
           });
         },
     );
@@ -3591,7 +3617,6 @@ exports.assignCameraToOnlineBridge = onCall(
         const identity = (await transaction.get(credentials)).data();
         if (!camera || camera.deletionPending ||
             camera.connectionType !== "onvif" ||
-            camera.liveMotionEnabled !== true ||
             camera.motionDetectionEnabled === false) {
           throw new HttpsError(
               "failed-precondition", "Włącz wykrywanie ruchu w kamerze ONVIF.",
@@ -4292,6 +4317,8 @@ exports.getBridgeConfiguration = onRequest(
                   camera.ipAddress :
                   null,
 
+            onvifDeviceId: typeof camera.onvifDeviceId === "string" ?
+              camera.onvifDeviceId : null,
             onvifServiceUrl:
                 typeof camera.onvifServiceUrl ===
                 "string" ?
@@ -4315,8 +4342,7 @@ exports.getBridgeConfiguration = onRequest(
                 bridgeIdentity.bridgeId,
 
             motionDetectionEnabled,
-            frameMotionEnabled: motionDetectionEnabled &&
-              camera.liveMotionEnabled === true,
+            frameMotionEnabled: motionDetectionEnabled,
 
             aiEnabled:
                 aiEnabled &&
@@ -4417,6 +4443,7 @@ exports.reportBridgeState = onRequest(
 
         const normalizedStatuses =
             new Map();
+        const health = new Map();
 
         for (
           const receivedStatus of
@@ -4450,10 +4477,16 @@ exports.reportBridgeState = onRequest(
             continue;
           }
 
-          normalizedStatuses.set(
-              cameraId,
-              status,
-          );
+          normalizedStatuses.set(cameraId, status);
+          health.set(cameraId, {
+            reason: ["receiving_frames", "receiving_events", "connecting",
+              "camera_unreachable", "camera_auth_required",
+              "stream_unavailable",
+              "offline"].includes(receivedStatus.reason) ?
+              receivedStatus.reason : null,
+            source: ["frames", "events", "events_and_frames", "none"]
+                .includes(receivedStatus.source) ? receivedStatus.source : null,
+          });
         }
 
         const statusEntries = [
@@ -4528,10 +4561,12 @@ exports.reportBridgeState = onRequest(
           batch.update(
               cameraSnapshot.ref,
               {
-                bridgeMonitoringStatus:
-                    cameraStatus,
-                bridgeMonitoringUpdatedAt:
-                    timestamp,
+                bridgeMonitoringStatus: cameraStatus,
+                bridgeMonitoringReason: bridgeStatus === "offline" ?
+                  "offline" : health.get(cameraSnapshot.id).reason,
+                bridgeMonitoringSource: bridgeStatus === "offline" ?
+                  "none" : health.get(cameraSnapshot.id).source,
+                bridgeMonitoringUpdatedAt: timestamp,
               },
           );
         }
@@ -4833,7 +4868,10 @@ exports.ingestBridgeCameraEvent =
               status = 404;
             }
 
+            if (code === "permission-denied") status = 403;
+            if (code === "failed-precondition") status = 409;
             response.status(status).json({
+              retryable: status >= 500,
               error:
                 "Nie udało się zapisać zdarzenia.",
             });
@@ -4920,11 +4958,39 @@ exports.uploadBridgeCameraEventSnapshot =
                     "cameraId",
                 );
 
-            const eventId =
-                normalizeDocumentId(
-                    data.eventId,
-                    "eventId",
+            let receipt = null;
+            if (data.externalEventId != null) {
+              const externalEventId = normalizeBridgeExternalEventId(
+                  data.externalEventId,
+              );
+              const receiptId = createHash("sha256").update(JSON.stringify([
+                bridgeIdentity.ownerId, bridgeIdentity.bridgeId,
+                cameraId, externalEventId,
+              ])).digest("hex");
+              receipt = (await db.collection("bridgeCameraEventReceipts")
+                  .doc(receiptId).get()).data();
+              if (!receipt) {
+                response.status(409).json({error: "Zdarzenie oczekuje."});
+                return;
+              }
+              if (receipt.ownerId !== bridgeIdentity.ownerId ||
+                  receipt.cameraId !== cameraId ||
+                  receipt.bridgeId !== bridgeIdentity.bridgeId ||
+                  receipt.externalEventId !== externalEventId ||
+                  !["local-ai", "bridge-motion", "onvif"]
+                      .includes(receipt.source) ||
+                  !Number.isSafeInteger(data.capturedAtMillis) ||
+                  data.occurredAtMillis !== Date.parse(receipt.occurredAt) ||
+                  Math.abs(data.capturedAtMillis - data.occurredAtMillis) >
+                    5000) {
+                throw new CameraEventSnapshotError(
+                    "permission-denied", "Nieprawidłowe powiązanie zdjęcia.",
                 );
+              }
+            }
+            const eventId = normalizeDocumentId(
+                receipt ? receipt.result?.eventId : data.eventId, "eventId",
+            );
 
             const cameraRef =
                 db
@@ -4959,6 +5025,7 @@ exports.uploadBridgeCameraEventSnapshot =
                 cameraSnapshot.data() || {};
 
             if (
+              camera.deletionPending === true ||
               camera.bridgeId !==
                 bridgeIdentity.bridgeId ||
               camera.connectionType !==
@@ -4984,8 +5051,11 @@ exports.uploadBridgeCameraEventSnapshot =
               event.ownerId !==
                 bridgeIdentity.ownerId ||
               event.cameraId !== cameraId ||
-              (event.source !== "local-ai" &&
-                event.hasLocalAiDetection !== true)
+              (receipt && receipt.source !== "local-ai" ?
+                event.hasBridgeDetection !== true :
+                (event.source !== "local-ai" &&
+                event.hasLocalAiDetection !== true &&
+                !(receipt && event.hasBridgeDetection === true)))
             ) {
               throw new CameraEventSnapshotError(
                   "permission-denied",
@@ -5014,6 +5084,18 @@ exports.uploadBridgeCameraEventSnapshot =
             let size = snapshot.length;
 
             try {
+              // The emulator does not enforce every GCS precondition. Reading
+              // first also makes an acknowledged retry skip the upload.
+              let present = false;
+              try {
+                await file.getMetadata();
+                present = true;
+              } catch (error) {
+                if (Number(error.code) !== 404) throw error;
+              }
+              if (present) {
+                throw Object.assign(new Error("Exists"), {code: 412});
+              }
               await file.save(snapshot, {
                 resumable: false,
                 validation: "crc32c",
@@ -5025,7 +5107,9 @@ exports.uploadBridgeCameraEventSnapshot =
                     ownerId: bridgeIdentity.ownerId,
                     cameraId,
                     eventId,
-                    source: "local-ai",
+                    source: receipt?.source || "local-ai",
+                    ...(receipt ? {externalEventId: receipt.externalEventId,
+                      capturedAtMillis: String(data.capturedAtMillis)} : {}),
                   },
                 },
               });
@@ -5051,10 +5135,23 @@ exports.uploadBridgeCameraEventSnapshot =
             }
 
             if (!alreadyExists || event.snapshotPath !== snapshotPath) {
-              await eventRef.update({
-                snapshotPath,
-                snapshotUpdatedAt: FieldValue.serverTimestamp(),
-                updatedAt: FieldValue.serverTimestamp(),
+              await db.runTransaction(async (transaction) => {
+                const freshCamera = (await transaction.get(cameraRef)).data();
+                const freshEvent = (await transaction.get(eventRef)).data();
+                if (!freshCamera || freshCamera.deletionPending === true ||
+                    freshCamera.bridgeId !== bridgeIdentity.bridgeId ||
+                    !freshEvent ||
+                    freshEvent.ownerId !== bridgeIdentity.ownerId ||
+                    freshEvent.cameraId !== cameraId) {
+                  throw new CameraEventSnapshotError(
+                      "permission-denied", "Zapis zdjęcia jest niedostępny.",
+                  );
+                }
+                transaction.update(eventRef, {
+                  snapshotPath,
+                  snapshotUpdatedAt: FieldValue.serverTimestamp(),
+                  updatedAt: FieldValue.serverTimestamp(),
+                });
               });
             }
 
@@ -5079,6 +5176,7 @@ exports.uploadBridgeCameraEventSnapshot =
               ok: true,
               cameraId,
               eventId,
+              externalEventId: receipt?.externalEventId || null,
               snapshotPath,
               size,
               alreadyExists,

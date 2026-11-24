@@ -786,13 +786,12 @@ class _CameraSettingsScreenState extends State<CameraSettingsScreen> {
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Text(
                         CameraMonitoringCoordinator.instance
-                            .statusFor(
+                            .messageFor(
                               widget.camera.copyWith(
                                 motionDetectionEnabled: _monitoringEnabled,
                                 liveMotionEnabled: _liveMotionEnabled,
                               ),
-                            )
-                            .message,
+                            ),
                       ),
                     ),
                   ),

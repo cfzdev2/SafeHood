@@ -30,6 +30,7 @@ class Camera {
   final String? ipAddress;
   final String? macAddress;
   final String? onvifServiceUrl;
+  final String? onvifDeviceId;
   final Set<int> openPorts;
   final Set<String> discoverySources;
 
@@ -77,6 +78,8 @@ class Camera {
   // niezależny od Media/RTSP/LIVE.
   final CameraMonitoringRuntimeStatus bridgeMonitoringStatus;
   final DateTime? bridgeMonitoringUpdatedAt;
+  final String? bridgeMonitoringReason;
+  final String? bridgeMonitoringSource;
 
   const Camera({
     required this.id,
@@ -99,6 +102,7 @@ class Camera {
     this.ipAddress,
     this.macAddress,
     this.onvifServiceUrl,
+    this.onvifDeviceId,
     this.openPorts = const {},
     this.discoverySources = const {},
     this.connectionType = CameraConnectionType.mock,
@@ -108,6 +112,8 @@ class Camera {
     this.bridgeId,
     this.bridgeMonitoringStatus = CameraMonitoringRuntimeStatus.unknown,
     this.bridgeMonitoringUpdatedAt,
+    this.bridgeMonitoringReason,
+    this.bridgeMonitoringSource,
   });
 
   Camera copyWith({
@@ -119,6 +125,7 @@ class Camera {
     String? ipAddress,
     String? macAddress,
     String? onvifServiceUrl,
+    String? onvifDeviceId,
     Set<int>? openPorts,
     Set<String>? discoverySources,
     bool? isOnline,
@@ -140,6 +147,8 @@ class Camera {
     String? bridgeId,
     CameraMonitoringRuntimeStatus? bridgeMonitoringStatus,
     DateTime? bridgeMonitoringUpdatedAt,
+    String? bridgeMonitoringReason,
+    String? bridgeMonitoringSource,
   }) {
     return Camera(
       id: id ?? this.id,
@@ -150,6 +159,7 @@ class Camera {
       ipAddress: ipAddress ?? this.ipAddress,
       macAddress: macAddress ?? this.macAddress,
       onvifServiceUrl: onvifServiceUrl ?? this.onvifServiceUrl,
+      onvifDeviceId: onvifDeviceId ?? this.onvifDeviceId,
       openPorts: openPorts ?? this.openPorts,
       discoverySources: discoverySources ?? this.discoverySources,
       isOnline: isOnline ?? this.isOnline,
@@ -175,6 +185,10 @@ class Camera {
           bridgeMonitoringStatus ?? this.bridgeMonitoringStatus,
       bridgeMonitoringUpdatedAt:
           bridgeMonitoringUpdatedAt ?? this.bridgeMonitoringUpdatedAt,
+      bridgeMonitoringReason:
+          bridgeMonitoringReason ?? this.bridgeMonitoringReason,
+      bridgeMonitoringSource:
+          bridgeMonitoringSource ?? this.bridgeMonitoringSource,
     );
   }
 
@@ -187,6 +201,7 @@ class Camera {
       'ipAddress': ipAddress,
       'macAddress': macAddress,
       'onvifServiceUrl': onvifServiceUrl,
+      if (onvifDeviceId != null) 'onvifDeviceId': onvifDeviceId,
       'openPorts': openPorts.toList()..sort(),
       'discoverySources': discoverySources.toList()..sort(),
       'isOnline': isOnline,
@@ -222,6 +237,7 @@ class Camera {
       ipAddress: _parseNullableString(map['ipAddress']),
       macAddress: _parseNullableString(map['macAddress']),
       onvifServiceUrl: _parseNullableString(map['onvifServiceUrl']),
+      onvifDeviceId: _parseNullableString(map['onvifDeviceId']),
       openPorts: _parsePorts(map['openPorts']),
       discoverySources: _parseSources(map['discoverySources']),
       isOnline: map['isOnline'] as bool? ?? false,
@@ -246,6 +262,8 @@ class Camera {
       cloudDeviceId: _parseNullableString(map['cloudDeviceId']),
       monitoringMode: _parseMonitoringMode(map['monitoringMode'] as String?),
       bridgeId: _parseNullableString(map['bridgeId']),
+      bridgeMonitoringReason: map['bridgeMonitoringReason'] as String?,
+      bridgeMonitoringSource: map['bridgeMonitoringSource'] as String?,
       bridgeMonitoringStatus: _parseMonitoringStatus(
         map['bridgeMonitoringStatus'] as String?,
       ),

@@ -273,13 +273,17 @@ function createClipUploadHandler({db, authenticate, getBucket,
       const [cameraSnapshot, receiptSnapshot] = await db.getAll(
           cameraRef, receiptRef,
       );
+      const receiptSource = receiptSnapshot.exists ?
+        receiptSnapshot.data().source : null;
+      const motionEvidence = ["bridge-motion", "onvif"].includes(receiptSource);
       const checkCamera = (snapshot) => {
         if (!snapshot.exists) fail("Kamera nie istnieje.", 404);
         const camera = snapshot.data();
         if (camera.deletionPending === true ||
             camera.bridgeId !== identity.bridgeId ||
             camera.connectionType !== "onvif" ||
-            camera.aiRecordingEnabled !== true) {
+            (motionEvidence ? camera.motionDetectionEnabled === false :
+              camera.aiRecordingEnabled !== true)) {
           fail("Nagrywanie tej kamery jest niedostępne.", 403);
         }
       };
@@ -292,7 +296,8 @@ function createClipUploadHandler({db, authenticate, getBucket,
           receipt.cameraId !== cameraId ||
           receipt.bridgeId !== identity.bridgeId ||
           receipt.externalEventId !== externalEventId ||
-          receipt.source !== "local-ai" || !receipt.result) {
+          !["local-ai", "bridge-motion", "onvif"].includes(receipt.source) ||
+          !receipt.result) {
         fail("Nieprawidłowe powiązanie nagrania.", 403);
       }
       const eventId = normalizeDocumentId(receipt.result.eventId, "eventId");
@@ -301,8 +306,9 @@ function createClipUploadHandler({db, authenticate, getBucket,
         if (!snapshot.exists) fail("Zdarzenie nie istnieje.", 404);
         const event = snapshot.data();
         if (event.ownerId !== identity.ownerId || event.cameraId !== cameraId ||
-            (event.source !== "local-ai" &&
-              event.hasLocalAiDetection !== true)) {
+            (motionEvidence ? event.hasBridgeDetection !== true :
+              (event.source !== "local-ai" &&
+                event.hasLocalAiDetection !== true))) {
           fail("Bridge nie może zapisać nagrania tego zdarzenia.", 403);
         }
       };
@@ -336,7 +342,7 @@ function createClipUploadHandler({db, authenticate, getBucket,
               contentType: "video/mp4", cacheControl: "private, max-age=0",
               metadata: {
                 ownerId: identity.ownerId, cameraId, eventId,
-                source: "local-ai", externalEventId,
+                source: receipt.source, externalEventId,
                 durationMillis: String(clip.durationMillis),
                 prebufferMillis: String(prebufferMillis),
                 occurredAtMillis: String(occurredAtMillis),
@@ -359,7 +365,7 @@ function createClipUploadHandler({db, authenticate, getBucket,
       if (metadata.contentType !== "video/mp4" ||
           attributes.ownerId !== identity.ownerId ||
           attributes.cameraId !== cameraId || attributes.eventId !== eventId ||
-          attributes.source !== "local-ai" ||
+          !["local-ai", "bridge-motion", "onvif"].includes(attributes.source) ||
           !uuidPattern.test(attributes.externalEventId) ||
           !Number.isSafeInteger(size) || size < 100 ||
           size > maximumClipBytes || !Number.isSafeInteger(duration) ||

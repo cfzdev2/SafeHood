@@ -31,4 +31,9 @@ test("usuwanie konta obejmuje potwierdzenia jego zdarzeń Bridge", async () => {
   assert.equal(receiptQuery.field, "ownerId");
   assert.equal(receiptQuery.operator, "==");
   assert.equal(result.deletedBridgeEventReceiptCount, 1);
+  const liveQuery = removed.find((query) =>
+    query.name === "incidentLiveGrants");
+  assert.equal(liveQuery.uid, "owner-1");
+  assert.equal(liveQuery.field, "ownerId");
+  assert.equal(result.deletedLiveGrantCount, 1);
 });

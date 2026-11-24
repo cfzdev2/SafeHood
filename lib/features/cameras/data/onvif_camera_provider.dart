@@ -144,7 +144,9 @@ class OnvifCameraProvider
     _startingDetectionMonitoring = true;
 
     try {
-      final settings = await _connectionStore.read(camera.id);
+      final settings = (await _connectionStore.read(
+        camera.id,
+      )).forCamera(camera);
       final device = _device ??= await openOnvifDevice(
         settings.cameraWithLocalEndpoint(camera),
         settings.login,
@@ -204,7 +206,9 @@ class OnvifCameraProvider
     _emit(_state.copyWith(isConnecting: true, isOnline: false, isLive: false));
 
     try {
-      final settings = await _connectionStore.read(camera.id);
+      final settings = (await _connectionStore.read(
+        camera.id,
+      )).forCamera(camera);
       if (_disposed) return;
       final manualUri = settings.playbackUri;
       final configuredCamera = settings.cameraWithLocalEndpoint(camera);

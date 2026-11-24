@@ -4,19 +4,20 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {randomUUID} = require('node:crypto');
+const {JpegFrameParser} = require('../camera_frame_cache');
 
 const MAX_SEGMENT_DURATION_SECONDS = 6;
 const SEGMENT_OVERLAP_TOLERANCE_SECONDS = 0.15;
 const SEGMENT_GAP_TOLERANCE_SECONDS = 0.5;
 
-function buildBufferArguments({input, realtimeInput = true}) {
+function buildBufferArguments({input, realtimeInput = true, emitFrames = false}) {
   if (typeof input !== 'string' || !input.trim() || /[\r\n\0]/.test(input)) {
     throw new TypeError('Nieprawidłowe źródło nagrania.');
   }
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y'];
   if (/^rtsps?:\/\//i.test(input)) args.push('-rtsp_transport', 'tcp');
   else if (realtimeInput) args.push('-re');
-  return [...args, '-i', input, '-map', '0:v:0', '-an',
+  const result = [...args, '-i', input, '-map', '0:v:0', '-an',
     '-vf', "fps=10,scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
     '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
     '-pix_fmt', 'yuv420p', '-b:v', '1200k', '-maxrate', '1500k', '-bufsize', '3000k',
@@ -27,6 +28,15 @@ function buildBufferArguments({input, realtimeInput = true}) {
     '-segment_list', 'index.csv', '-segment_list_type', 'csv',
     '-segment_list_size', '12', '-segment_list_flags', '+live',
     '-segment_wrap', '16', 'segment_%02d.mp4'];
+  if (emitFrames) result.push(
+    '-map', '0:v:0', '-an', '-vf', 'fps=1,scale=320:320:force_original_aspect_ratio=decrease',
+    '-c:v', 'mjpeg', '-q:v', '6', '-threads', '1', '-f', 'image2pipe', 'pipe:3',
+    '-map', '0:v:0', '-an', '-vf', 'fps=2,scale=64:36',
+    '-pix_fmt', 'gray', '-threads', '1', '-f', 'rawvideo', 'pipe:4',
+    '-map', '0:v:0', '-an', '-vf', "fps=1,scale=w='min(960,iw)':h=-2",
+    '-c:v', 'mjpeg', '-q:v', '3', '-threads', '1', '-f', 'image2pipe', 'pipe:5',
+  );
+  return result;
 }
 
 function parseSegmentIndexRows(text, recoverTimeline) {
@@ -73,13 +83,15 @@ class EventVideoBuffer {
   constructor({input, directory, workDirectory, prebufferSeconds = 5,
     postbufferSeconds = 10, onCapture = () => {}, onError = () => {},
     onCancelled = () => {}, now = Date.now, ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg',
-    spawnProcess = spawn, realtimeInput = true}) {
+    spawnProcess = spawn, realtimeInput = true, emitFrames = false,
+    onSample = () => {}, onSnapshot = () => {}, onPreview = () => {}, onSourceExit = () => {}}) {
     if (!directory || !workDirectory || !Number.isFinite(prebufferSeconds) ||
         prebufferSeconds < 0 || prebufferSeconds > 5 || !Number.isFinite(postbufferSeconds) ||
         postbufferSeconds < 1 || postbufferSeconds > 10) throw new TypeError('Nieprawidłowe opcje bufora.');
     buildBufferArguments({input, realtimeInput});
     Object.assign(this, {input, directory, workDirectory, prebufferSeconds,
-      postbufferSeconds, onCapture, onError, onCancelled, now, ffmpegPath, spawnProcess, realtimeInput});
+      postbufferSeconds, onCapture, onError, onCancelled, now, ffmpegPath, spawnProcess, realtimeInput,
+      emitFrames, onSample, onSnapshot, onPreview, onSourceExit});
     this.running = false;
     this.originMillis = null;
     this.latestMediaSeconds = 0;
@@ -102,20 +114,38 @@ class EventVideoBuffer {
     this._terminationErrorReported = false;
     const child = this.spawnProcess(this.ffmpegPath,
       buildBufferArguments(this), {cwd: this.directory,
-        stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
+        stdio: this.emitFrames ? ['ignore', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe'] :
+          ['ignore', 'pipe', 'pipe'], windowsHide: true});
     this._child = child;
     // Konsumujemy wyjście, ale nie ujawniamy adresu ani hasła ze stderr FFmpeg.
     child.stdout?.on('data', () => {});
     child.stderr?.on('data', () => {});
+    if (this.emitFrames) {
+      const parser = new JpegFrameParser((jpeg) => this._notify(this.onPreview, jpeg));
+      const photo = new JpegFrameParser((jpeg) => this._notify(this.onSnapshot, jpeg), 512 * 1024);
+      child.stdio[5].on('data', (bytes) => photo.add(bytes));
+      child.stdio[3].on('data', (bytes) => parser.add(bytes));
+      let pending = Buffer.alloc(0);
+      child.stdio[4].on('data', (bytes) => {
+        pending = Buffer.concat([pending, bytes]);
+        while (pending.length >= 64 * 36) {
+          const frame = Buffer.from(pending.subarray(0, 64 * 36));
+          pending = pending.subarray(64 * 36);
+          this._notify(this.onSample, frame);
+        }
+      });
+    }
     this._exit = new Promise((resolve) => {
       child.once('error', () => {
         this._terminationErrorReported = true;
         this._notify(this.onError, new Error('Nie udało się uruchomić FFmpeg nagrania.'));
         this.running = false;
+        this._notify(this.onSourceExit);
         resolve();
       });
       child.once('close', (code) => {
         this.running = false;
+        this._notify(this.onSourceExit);
         if (this._timer) clearInterval(this._timer);
         this._timer = null;
         if (!this._stopping) {
