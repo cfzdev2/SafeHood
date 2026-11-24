@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {spawn} = require('node:child_process');
+const {resolveJava} = require('./dev_java.cjs');
 
 function readJson(filename) { return JSON.parse(fs.readFileSync(filename, 'utf8')); }
 
@@ -81,6 +82,8 @@ async function main(root = path.join(__dirname, '..')) {
     throw new Error('Brak projektu Firebase w .firebaserc.');
   }
   const cli = resolveCli(root);
+  const java = resolveJava();
+  console.log(`[SafeHood] Java ${java.major}: ${java.home || java.command}`);
   const initial = selectImport(root, projectId);
   const state = path.join(root, '.safehood-dev');
   fs.mkdirSync(state, {recursive: true, mode: 0o700});
@@ -103,7 +106,9 @@ async function main(root = path.join(__dirname, '..')) {
   if (initial) args.push('--import', initial);
   console.log(initial ? `[SafeHood] Wczytuję ostatni zapis Firebase (${validateExport(initial).accounts} kont).` :
     '[SafeHood] Pierwszy start bez zapisu. Kolejne uruchomienia wczytają utworzone dane.');
-  const child = spawn(process.execPath, args, {cwd: root, stdio: 'inherit', windowsHide: false});
+  const child = spawn(process.execPath, args, {
+    cwd: root, env: java.env, stdio: 'inherit', windowsHide: false,
+  });
   let stopping = false;
   let exporting = null;
   const checkpoint = () => {
@@ -111,7 +116,9 @@ async function main(root = path.join(__dirname, '..')) {
     exporting = new Promise((resolve) => {
       const directory = newDirectory();
       const exporter = spawn(process.execPath, [cli, 'emulators:export', directory,
-        '--project', projectId, '--force'], {cwd: root, stdio: 'pipe', windowsHide: true});
+        '--project', projectId, '--force'], {
+        cwd: root, env: java.env, stdio: 'pipe', windowsHide: true,
+      });
       // Drain output without copying account details into logs.
       exporter.stdout.resume();
       exporter.stderr.resume();

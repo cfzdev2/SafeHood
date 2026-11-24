@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {spawn} = require('node:child_process');
+const {resolveJava} = require('./dev_java.cjs');
 
 const root = path.join(__dirname, '..');
 const unitOnly = process.argv.includes('--unit-only');
@@ -36,6 +37,7 @@ if (includeFlutter) {
 }
 
 async function main() {
+  const environment = unitOnly ? process.env : resolveJava().env;
   const directory = path.join(root, '.safehood-dev', `checks-${Date.now()}`);
   fs.mkdirSync(directory, {recursive: true});
   const result = {startedAt: new Date().toISOString(), unitOnly,
@@ -49,7 +51,7 @@ async function main() {
       const child = spawn(check.command, check.args, {cwd: root,
         // Windows command shims need cmd.exe; arguments here are fixed code.
         shell: process.platform === 'win32' && check.command !== process.execPath,
-        env: {...process.env, CI: 'true'}, stdio: ['ignore', 'pipe', 'pipe']});
+        env: {...environment, CI: 'true'}, stdio: ['ignore', 'pipe', 'pipe']});
       child.stdout.pipe(log, {end: false});
       child.stderr.pipe(log, {end: false});
       child.once('error', (error) => resolve({code: 1, error: error.code}));

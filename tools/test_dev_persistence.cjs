@@ -5,8 +5,10 @@ const path = require('node:path');
 const os = require('node:os');
 const {spawn} = require('node:child_process');
 const {resolveCli, selectImport} = require('./start_dev_firebase.cjs');
+const {resolveJava} = require('./dev_java.cjs');
 
 async function main() {
+  const environment = resolveJava().env;
   const projectId = 'demo-safehood-persistence';
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'safehood-persistence-'));
   const cli = resolveCli(path.join(__dirname, '..'));
@@ -25,7 +27,7 @@ async function main() {
       args.push(`"${process.execPath}" "${probe}" ${phase}`);
       const code = await new Promise((resolve, reject) => {
         const child = spawn(process.execPath, args, {cwd: root, stdio: 'inherit',
-          env: {...process.env, CI: 'true', SAFEHOOD_FIREBASE_CLI: cli,
+          env: {...environment, CI: 'true', SAFEHOOD_FIREBASE_CLI: cli,
             SAFEHOOD_PERSISTENCE_TEST_ROOT: root}});
         child.on('error', reject);
         child.on('close', resolve);
