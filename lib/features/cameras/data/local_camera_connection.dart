@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../domain/camera.dart';
+import 'native_camera_profile.dart';
 
 class CameraLogin {
   const CameraLogin(this.username, this.password);
@@ -20,6 +21,7 @@ class LocalCameraConnection {
     this.onvifUri,
     this.reolinkUid,
     this.rtspVerified = false,
+    this.nativeProfile,
   });
 
   final CameraLogin? login;
@@ -27,6 +29,17 @@ class LocalCameraConnection {
   final Uri? onvifUri;
   final String? reolinkUid;
   final bool rtspVerified;
+  final NativeCameraProfile? nativeProfile;
+
+  LocalCameraConnection withNativeProfile(NativeCameraProfile profile) =>
+      LocalCameraConnection(
+        login: login,
+        rtspUri: rtspUri,
+        onvifUri: onvifUri,
+        reolinkUid: reolinkUid,
+        rtspVerified: rtspVerified,
+        nativeProfile: profile,
+      );
 
   bool get isEmpty => login == null && rtspUri == null && onvifUri == null;
 
@@ -60,6 +73,7 @@ class LocalCameraConnection {
           : rtspUri,
       reolinkUid: reolinkUid,
       rtspVerified: rtspVerified,
+      nativeProfile: nativeProfile,
     );
   }
 
@@ -135,6 +149,7 @@ class LocalCameraConnectionStore implements CameraLiveQualityStore {
       rtspUri: rtsp == null ? null : parseManualRtspUri(rtsp),
       onvifUri: onvif == null ? null : parseManualOnvifUri(onvif),
       rtspVerified: data['rtspVerified'] == true,
+      nativeProfile: NativeCameraProfile.fromMap(data['nativeProfile']),
       reolinkUid:
           reolinkUid != null && RegExp(r'^[A-Z0-9]{16}$').hasMatch(reolinkUid)
           ? reolinkUid
@@ -158,6 +173,8 @@ class LocalCameraConnectionStore implements CameraLiveQualityStore {
         'onvif': connection.onvifUri?.toString(),
         'reolinkUid': connection.reolinkUid,
         'rtspVerified': connection.rtspVerified,
+        if (connection.nativeProfile != null)
+          'nativeProfile': connection.nativeProfile!.toMap(),
       }),
     );
     await _forgetLiveQuality(userId, cameraId);

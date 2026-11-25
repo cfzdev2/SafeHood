@@ -27,7 +27,7 @@ if (!unitOnly) {
     args: ['tools/test_dev_persistence.cjs']});
   for (const script of ['test:rules', 'test:storage-rules', 'test:clips:backend',
     'test:free-flow', 'test:phone-motion', 'test:incident-live',
-    'test:account-deletion']) npmCheck('functions', script);
+    'test:account-deletion', 'test:xm']) npmCheck('functions', script);
 }
 if (includeFlutter) {
   checks.push({name: 'flutter:analyze', command: flutter,

@@ -1,0 +1,7 @@
+# Copy to xm-sdk.properties after SafeHood is approved on the vendor platform.
+# Keep the actual file private. Do not use another application's demo keys.
+enabled=false
+uuid=
+appKey=
+appSecret=
+moveCard=

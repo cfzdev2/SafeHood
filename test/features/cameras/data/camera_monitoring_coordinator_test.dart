@@ -21,6 +21,33 @@ const enabled = Camera(
 );
 
 void main() {
+  test(
+    'only a backend-confirmed vendor callback can replace the phone receiver',
+    () async {
+      final h = Harness();
+      addTearDown(h.controller.dispose);
+      await h.controller.updateCameras([enabled]);
+      await h.controller.updateCameras([
+        enabled.copyWith(xmMonitoringStatus: 'subscribed'),
+      ]);
+      expect(h.stopped, isEmpty);
+      final confirmed = enabled.copyWith(
+        xmMonitoringStatus: 'confirmed',
+        xmMonitoringConfirmedAt: h.now,
+        monitoringMode: CameraMonitoringMode.cloud,
+      );
+      await h.controller.updateCameras([confirmed]);
+      expect(h.stopped, ['robot']);
+      expect(
+        h.controller.statusFor(confirmed),
+        AutomaticMonitoringStatus.independent,
+      );
+      await h.controller.updateCameras([
+        confirmed.copyWith(xmMonitoringStatus: 'revoked'),
+      ]);
+      expect(h.started, ['robot', 'robot']);
+    },
+  );
   test('one motion setting starts monitoring without opening live', () async {
     final h = Harness();
     addTearDown(h.controller.dispose);

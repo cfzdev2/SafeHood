@@ -5,19 +5,27 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.net.Network;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import androidx.media3.common.util.UnstableApi;
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import java.net.URI;
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Executors;
 
 @UnstableApi
 public final class BackgroundMotionChannel implements AutoCloseable {
     private final Context context;
     private final MethodChannel channel;
+    private final java.util.concurrent.ExecutorService inspector = Executors.newSingleThreadExecutor();
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private boolean closed;
 
     public BackgroundMotionChannel(Context context, BinaryMessenger messenger) {
         this.context = context.getApplicationContext();
@@ -30,6 +38,27 @@ public final class BackgroundMotionChannel implements AutoCloseable {
     private void handle(MethodCall call, MethodChannel.Result result) {
         try {
             switch (call.method) {
+                case "inspectNative" -> {
+                    String host = call.argument("host");
+                    String username = call.argument("username");
+                    String password = call.argument("password");
+                    var address = CameraLocalNetwork.ipv4(host);
+                    var link = CameraLocalNetwork.forHost(context, address);
+                    if (username == null || password == null || username.length() > 128
+                            || password.length() > 128) throw new IllegalArgumentException();
+                    inspector.execute(() -> {
+                        Map<String, Object> profile = null;
+                        try (var socket = link.network().getSocketFactory().createSocket()) {
+                            socket.connect(new InetSocketAddress(address, 34567), 1500);
+                            try (var client = new DvripClient(socket)) {
+                                client.login(username, password);
+                                profile = client.inspect();
+                            }
+                        } catch (Exception unavailable) { /* A different camera family can still play. */ }
+                        Map<String, Object> value = profile;
+                        main.post(() -> { if (!closed) result.success(value); });
+                    });
+                }
                 case "status" -> result.success(BackgroundMotionService.status());
                 case "start" -> {
                     if (Build.VERSION.SDK_INT < 24) {
@@ -84,8 +113,17 @@ public final class BackgroundMotionChannel implements AutoCloseable {
             if (network == null) network = link.network();
             if (network.equals(link.network()) && !streams.contains(uri)) streams.add(uri);
         }
+        Map<String, Object> nativeLogin = call.argument("nativeLogin");
+        DvripAlarmReceiver.Credentials nativeCredentials = null;
+        if (nativeLogin != null) {
+            Object user = nativeLogin.get("username");
+            Object password = nativeLogin.get("password");
+            if (!(user instanceof String u) || u.isEmpty() || u.length() > 128
+                    || !(password instanceof String p) || p.length() > 128) throw new IllegalArgumentException();
+            nativeCredentials = new DvripAlarmReceiver.Credentials(streams.get(0).getHost(), u, p);
+        }
         return new BackgroundMotionService.Request(owner, camera, Collections.unmodifiableList(streams),
-                network, emulator);
+                network, emulator, nativeCredentials);
     }
 
     private static boolean validKey(String input) {
@@ -94,6 +132,8 @@ public final class BackgroundMotionChannel implements AutoCloseable {
     }
 
     @Override public void close() {
+        closed = true;
+        inspector.shutdownNow();
         channel.setMethodCallHandler(null);
         BackgroundMotionService.setObserver(null);
         BackgroundMotionService.clearPreviews();

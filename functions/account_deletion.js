@@ -281,6 +281,12 @@ async function deleteAccountTopLevelData(
       db,
       db.collection("incidentLiveGrants").where("ownerId", "==", uid),
   );
+  for (const collection of [
+    "xmAlarmRoutes", "xmAlarmBindings", "xmProviderAccounts",
+  ]) {
+    await deleteQueryDocuments(db,
+        db.collection(collection).where("ownerId", "==", uid));
+  }
 
   return {
     deletedBridgeCredentialCount,

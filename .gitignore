@@ -54,6 +54,8 @@ bridge/data/
 # Firebase Emulator Suite local data
 /emulator-data/
 /.safehood-dev/
+/android/xm-sdk.properties
+/functions/.secret.local
 
 # Local TLS certificates and private keys
 /auto.key

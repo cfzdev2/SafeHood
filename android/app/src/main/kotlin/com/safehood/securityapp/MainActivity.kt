@@ -9,6 +9,7 @@ class MainActivity : FlutterActivity() {
     private var localCameras: LocalCameraChannel? = null
     private var localPlayer: LocalCameraPlayerChannel? = null
     private var backgroundMotion: BackgroundMotionChannel? = null
+    private var xmCamera: XmCameraChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -18,6 +19,7 @@ class MainActivity : FlutterActivity() {
         localCameras = LocalCameraChannel(this, messenger)
         localPlayer = LocalCameraPlayerChannel(this, messenger, flutterEngine.renderer)
         backgroundMotion = BackgroundMotionChannel(this, messenger)
+        xmCamera = XmCameraChannel(this, messenger)
     }
 
     override fun onRequestPermissionsResult(
@@ -31,6 +33,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        xmCamera?.close()
+        xmCamera = null
         backgroundMotion?.close()
         backgroundMotion = null
         localPlayer?.close()

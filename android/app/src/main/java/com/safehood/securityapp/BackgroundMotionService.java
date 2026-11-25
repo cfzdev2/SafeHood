@@ -53,7 +53,7 @@ public final class BackgroundMotionService extends Service {
     private static final long[] RETRY_MS = {2000, 4000, 8000, 15000, 30000};
     // Main-thread state only. Camera credentials stay in memory, outside intents and logs.
     record Request(String owner, String camera, List<URI> streams, Network network,
-                   String emulatorHost) { }
+                   String emulatorHost, DvripAlarmReceiver.Credentials nativeCredentials) { }
     private static final Map<Integer, String> previews = new HashMap<>();
     private static Request pending;
     private static BackgroundMotionService current;
@@ -133,6 +133,9 @@ public final class BackgroundMotionService extends Service {
     private ListenerRegistration settings;
     private FirebaseAuth.AuthStateListener authListener;
     private HttpsCallableReference ingest;
+    private DvripAlarmReceiver nativeReceiver;
+    private boolean nativeAttempted;
+    private boolean nativeConfirmed;
 
     private record Attempt(URI uri, boolean tcp) { }
 
@@ -213,8 +216,9 @@ public final class BackgroundMotionService extends Service {
         if (previewOpen()) {
             cancelReconnect();
             closePlayback();
+            closeNative();
             phase("preview");
-        } else if (frames == null && !reconnectScheduled) {
+        } else if (frames == null && !nativeConfirmed && !reconnectScheduled) {
             // Give the foreground decoder time to release the camera on navigation.
             scheduleReconnect("preview".equals(phase) ? 550 : 0);
         }
@@ -232,7 +236,7 @@ public final class BackgroundMotionService extends Service {
     }
 
     private void open() {
-        if (stopping || !enabled || previewOpen() || frames != null) return;
+        if (stopping || !enabled || previewOpen() || frames != null || nativeConfirmed) return;
         if (!ownsCamera()) {
             finish();
             return;
@@ -245,6 +249,7 @@ public final class BackgroundMotionService extends Service {
             scheduleReconnect(30_000);
             return;
         }
+        startNative();
         URI uri = null;
         while (nextAttempt < attempts.size()) {
             attempt = attempts.get(nextAttempt++);
@@ -280,6 +285,45 @@ public final class BackgroundMotionService extends Service {
         frames = new BackgroundMotionFrames(receiver);
         frames.start();
         main.postDelayed(watchdog, 1000);
+    }
+
+    private void startNative() {
+        if (request.nativeCredentials() == null || nativeAttempted || nativeReceiver != null) return;
+        nativeAttempted = true;
+        var holder = new DvripAlarmReceiver[1];
+        var receiver = new DvripAlarmReceiver(request.network().getSocketFactory(),
+                request.nativeCredentials(), new DvripAlarmReceiver.Listener() {
+            @Override public void onMotion(long occurredAt, byte[] jpeg) {
+                main.post(() -> {
+                    if (stopping || previewOpen() || nativeReceiver != holder[0]) return;
+                    // Keep the existing fallback until an actual native alarm proves this path.
+                    nativeConfirmed = true;
+                    cancelReconnect();
+                    closePlayback();
+                    phase("nativeWatching");
+                    send(occurredAt, jpeg);
+                });
+            }
+            @Override public void onClosed() {
+                main.post(() -> {
+                    if (stopping || nativeReceiver != holder[0]) return;
+                    nativeReceiver = null;
+                    nativeConfirmed = false;
+                    if (!previewOpen() && frames == null) retry();
+                });
+            }
+        });
+        holder[0] = receiver;
+        nativeReceiver = receiver;
+        receiver.start();
+    }
+
+    private void closeNative() {
+        var receiver = nativeReceiver;
+        nativeReceiver = null;
+        nativeConfirmed = false;
+        nativeAttempted = false;
+        if (receiver != null) receiver.close();
     }
 
     private void startPlayback(Attempt selected, Surface surface) throws Exception {
@@ -364,6 +408,7 @@ public final class BackgroundMotionService extends Service {
             sending = false;
             if (stopping) return;
             uploadFailed = !result.isSuccessful();
+            if (nativeConfirmed) phase(uploadFailed ? "uploadFailed" : "nativeWatching");
             if (uploadFailed) Log.w(TAG, "Could not save background motion event");
             else Log.i(TAG, "Background motion event saved");
         });
@@ -391,6 +436,7 @@ public final class BackgroundMotionService extends Service {
         var stopAction = PendingIntent.getService(this, 0,
                 new Intent(this, BackgroundMotionService.class).setAction(STOP), PendingIntent.FLAG_IMMUTABLE);
         String detail = switch (phase) {
+            case "nativeWatching" -> "Kamera wykrywa ruch. Telefon odbiera jej alarmy.";
             case "watching" -> "Telefon obserwuje obraz z kamery.";
             case "preview" -> "Wykrywanie z otwartego podglądu.";
             case "reconnecting" -> "Wznawiam połączenie z kamerą.";
@@ -415,6 +461,7 @@ public final class BackgroundMotionService extends Service {
         stopping = true;
         main.removeCallbacksAndMessages(null);
         closePlayback();
+        closeNative();
         if (settings != null) settings.remove();
         if (authListener != null) FirebaseAuth.getInstance().removeAuthStateListener(authListener);
         request = null;

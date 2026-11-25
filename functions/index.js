@@ -10,6 +10,7 @@ const {
   onRequest,
   HttpsError,
 } = require("firebase-functions/v2/https");
+const {defineSecret} = require("firebase-functions/params");
 
 const {
   runManufacturerEventOnce,
@@ -63,6 +64,7 @@ const {createClipUploadHandler, savePhoneMotionClip} =
   require("./camera_event_clip");
 const {createIncidentLiveHandler} = require("./incident_live");
 const {createBridgeIncidentLiveApi} = require("./bridge_incident_live");
+const {createXmCameraApi} = require("./xm_camera");
 const {createCameraEndpointRecoveryHandler} =
   require("./camera_endpoint_recovery");
 
@@ -2494,6 +2496,9 @@ async function ingestCameraEventInternal(
       normalizeCameraEventSource(
           input.source,
       );
+  if (source === "xm-cloud" && input.fromXmCloud !== true) {
+    throw new HttpsError("permission-denied", "Nieprawidłowe źródło alarmu.");
+  }
 
   const phoneMotion = source === "phone-motion";
   if (phoneMotion && (input.phoneMotion !== true || type !== "motion")) {
@@ -2660,6 +2665,19 @@ async function ingestCameraEventInternal(
                 "failed-precondition",
                 "Wykrywanie ruchu podczas podglądu jest wyłączone.",
             );
+          }
+          if (input.fromXmCloud === true) {
+            const route = (await transaction.get(db.collection("xmAlarmRoutes")
+                .doc(input.xmRouteId))).data();
+            if (source !== "xm-cloud" || !route || route.state !== "active" ||
+                route.ownerId !== ownerId ||
+                cameraData.xmAlarmRouteId !== input.xmRouteId ||
+                cameraData.xmSerialNumber !== input.xmSerial ||
+                (cameraData.motionDetectionEnabled !== true &&
+                  cameraData.liveMotionEnabled !== true)) {
+              throw new HttpsError("failed-precondition",
+                  "Monitoring kamery jest nieaktywny.");
+            }
           }
           if (bridgeMotion && (
             cameraData.motionDetectionEnabled === false ||
@@ -5804,3 +5822,29 @@ if (process.env.FUNCTIONS_EMULATOR === "true") {
   exports.devIngestCameraEvent =
       devIngestCameraEvent;
 }
+
+// An unconfigured optional SDK must not make the local emulator fetch secrets
+// from a real project or prevent the rest of SafeHood from starting.
+const xmAccountKey = process.env.FUNCTIONS_EMULATOR === "true" ||
+  process.env.SAFEHOOD_XM_ENABLED !== "true" ? null :
+    defineSecret("SAFEHOOD_XM_ACCOUNT_KEY");
+const xmSecretOptions = xmAccountKey ? {secrets: [xmAccountKey]} : {};
+const xmCameraApi = createXmCameraApi({db, Timestamp, HttpsError,
+  accountKey: () => process.env.SAFEHOOD_XM_ENABLED !== "true" ? undefined :
+    xmAccountKey ? xmAccountKey.value() : process.env.SAFEHOOD_XM_ACCOUNT_KEY,
+  ingest: ingestCameraEventInternal, runOnce: runManufacturerEventOnce});
+exports.provisionXmCameraAccount = onCall(
+    {region: "europe-central2", ...xmSecretOptions},
+    xmCameraApi.provisionAccount);
+exports.confirmXmCameraAccount = onCall(
+    {region: "europe-central2"}, xmCameraApi.accountLinked);
+exports.createXmAlarmRoute = onCall(
+    {region: "europe-central2", ...xmSecretOptions},
+    xmCameraApi.createRoute);
+exports.bindXmCamera = onCall({region: "europe-central2"}, xmCameraApi.bind);
+exports.confirmXmAlarmSubscription = onCall(
+    {region: "europe-central2"}, xmCameraApi.subscribed);
+exports.revokeXmAlarmRoute = onCall(
+    {region: "europe-central2"}, xmCameraApi.revoke);
+exports.receiveXmCameraAlarm = onRequest(
+    {region: "europe-central2"}, xmCameraApi.receive);

@@ -8,6 +8,9 @@ import '../domain/camera.dart';
 import '../domain/camera_provider.dart';
 import 'camera_provider_factory.dart';
 import 'local_camera_connection.dart';
+import 'local_camera_auto_setup.dart';
+import 'native_camera_profile.dart';
+import 'xm_camera_service.dart';
 
 class CameraBackgroundMotionStatus {
   const CameraBackgroundMotionStatus({this.cameraId, this.phase = 'off'});
@@ -42,6 +45,7 @@ class CameraBackgroundMotion {
   static const _emulator = bool.fromEnvironment('USE_FIREBASE_EMULATORS');
   static const _emulatorHost = String.fromEnvironment('FIREBASE_EMULATOR_HOST');
   static int _nextPreview = 0;
+  final _nativeInspector = NativeCameraInspector();
 
   final status = ValueNotifier(const CameraBackgroundMotionStatus());
 
@@ -104,12 +108,52 @@ class CameraBackgroundMotion {
     if (FirebaseAuth.instance.currentUser?.uid != user.uid) {
       throw const CameraConnectionIssue('Zaloguj się ponownie.');
     }
+    const store = LocalCameraConnectionStore();
+    final connection = (await store.read(camera.id)).forCamera(camera);
+    final first = candidates.first;
+    final login =
+        connection.login ??
+        localCameraStoredLogin(connection.playbackUri) ??
+        const CameraLogin('admin', '');
+    var profile = connection.nativeProfile;
+    if (profile == null &&
+        connection.rtspVerified &&
+        first.host == camera.ipAddress) {
+      profile = await _nativeInspector.inspect(
+        cameraId: '${user.uid}/${camera.id}',
+        host: first.host,
+        username: login.username,
+        password: login.password,
+      );
+      if (profile != null &&
+          FirebaseAuth.instance.currentUser?.uid == user.uid) {
+        await store.save(
+          user.uid,
+          camera.id,
+          connection.withNativeProfile(profile),
+        );
+      }
+    }
+    if (FirebaseAuth.instance.currentUser?.uid != user.uid) {
+      throw const CameraConnectionIssue('Zaloguj się ponownie.');
+    }
     final notificationsAllowed = await _channel.invokeMethod<bool>('start', {
       'owner': user.uid,
       'cameraId': camera.id,
       'streams': candidates.map((uri) => uri.toString()).toList(),
+      if (profile?.motionSupported == true)
+        'nativeLogin': {'username': login.username, 'password': login.password},
       if (kDebugMode && _emulator) 'emulatorHost': _emulatorHost.trim(),
     });
+    if (profile != null) {
+      unawaited(
+        XmCameraService.instance.ensureCamera(
+          camera: camera,
+          profile: profile,
+          login: login,
+        ),
+      );
+    }
     return notificationsAllowed == true;
   }
 

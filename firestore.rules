@@ -361,7 +361,13 @@ service cloud.firestore {
   // Dodawanie kamery pozostaje na razie
   // po stronie aplikacji użytkownika.
   allow create:
-    if isCameraOwner();
+    if isCameraOwner()
+    && !request.resource.data.keys().hasAny([
+      'xmAlarmRouteId',
+      'xmSerialNumber',
+      'xmMonitoringStatus',
+      'xmMonitoringConfirmedAt'
+    ]);
 
   allow update:
     if isCameraOwner()

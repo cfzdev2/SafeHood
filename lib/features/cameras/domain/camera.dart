@@ -80,6 +80,8 @@ class Camera {
   final DateTime? bridgeMonitoringUpdatedAt;
   final String? bridgeMonitoringReason;
   final String? bridgeMonitoringSource;
+  final String? xmMonitoringStatus;
+  final DateTime? xmMonitoringConfirmedAt;
 
   const Camera({
     required this.id,
@@ -114,6 +116,8 @@ class Camera {
     this.bridgeMonitoringUpdatedAt,
     this.bridgeMonitoringReason,
     this.bridgeMonitoringSource,
+    this.xmMonitoringStatus,
+    this.xmMonitoringConfirmedAt,
   });
 
   Camera copyWith({
@@ -149,6 +153,8 @@ class Camera {
     DateTime? bridgeMonitoringUpdatedAt,
     String? bridgeMonitoringReason,
     String? bridgeMonitoringSource,
+    String? xmMonitoringStatus,
+    DateTime? xmMonitoringConfirmedAt,
   }) {
     return Camera(
       id: id ?? this.id,
@@ -189,6 +195,9 @@ class Camera {
           bridgeMonitoringReason ?? this.bridgeMonitoringReason,
       bridgeMonitoringSource:
           bridgeMonitoringSource ?? this.bridgeMonitoringSource,
+      xmMonitoringStatus: xmMonitoringStatus ?? this.xmMonitoringStatus,
+      xmMonitoringConfirmedAt:
+          xmMonitoringConfirmedAt ?? this.xmMonitoringConfirmedAt,
     );
   }
 
@@ -264,6 +273,9 @@ class Camera {
       bridgeId: _parseNullableString(map['bridgeId']),
       bridgeMonitoringReason: map['bridgeMonitoringReason'] as String?,
       bridgeMonitoringSource: map['bridgeMonitoringSource'] as String?,
+      xmMonitoringStatus: map['xmMonitoringStatus'] as String?,
+      xmMonitoringConfirmedAt: (map['xmMonitoringConfirmedAt'] as Timestamp?)
+          ?.toDate(),
       bridgeMonitoringStatus: _parseMonitoringStatus(
         map['bridgeMonitoringStatus'] as String?,
       ),

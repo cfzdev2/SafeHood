@@ -35,6 +35,15 @@ bool hasIndependentCameraMonitoring(
   Iterable<BridgeStatus> bridges,
   DateTime now,
 ) {
+  // Backend-only state, set after a scoped manufacturer callback. SDK setup
+  // alone stays "subscribed" and does not switch off the working phone fallback.
+  if (camera.xmMonitoringStatus == 'confirmed' &&
+      camera.xmMonitoringConfirmedAt != null &&
+      !camera.xmMonitoringConfirmedAt!.isAfter(
+        now.add(const Duration(seconds: 5)),
+      )) {
+    return true;
+  }
   if (camera.monitoringMode != CameraMonitoringMode.bridge ||
       camera.bridgeId == null ||
       camera.bridgeMonitoringStatus != CameraMonitoringRuntimeStatus.online) {
@@ -129,7 +138,15 @@ class CameraMonitoringCoordinator extends ChangeNotifier {
       if (cameras.any(
         (current) =>
             current.id == previous.id &&
-            current.liveMotionEnabled != previous.liveMotionEnabled,
+            (current.liveMotionEnabled != previous.liveMotionEnabled ||
+                cameraMotionIsEnabled(current) !=
+                    cameraMotionIsEnabled(previous) ||
+                (hasIndependentCameraMonitoring(previous, _bridges, _now()) &&
+                    !hasIndependentCameraMonitoring(
+                      current,
+                      _bridges,
+                      _now(),
+                    ))),
       )) {
         _phoneAttempts.remove(previous.id);
         _suppressed.remove(previous.id);
@@ -165,7 +182,9 @@ class CameraMonitoringCoordinator extends ChangeNotifier {
     }
     final phone = phoneStatus.value;
     if (phone.cameraId == camera.id) {
-      if (phone.phase == 'watching' || phone.phase == 'preview') {
+      if (phone.phase == 'watching' ||
+          phone.phase == 'preview' ||
+          phone.phase == 'nativeWatching') {
         return AutomaticMonitoringStatus.phone;
       }
       if (phone.phase == 'starting' || phone.phase == 'reconnecting') {
@@ -179,6 +198,17 @@ class CameraMonitoringCoordinator extends ChangeNotifier {
     camera =
         _cameras.where((item) => item.id == camera.id).firstOrNull ?? camera;
     final status = statusFor(camera);
+    if (status == AutomaticMonitoringStatus.independent &&
+        camera.xmMonitoringStatus == 'confirmed') {
+      return 'Alarmy kamery docierają do SafeHood przez usługę producenta, '
+          'niezależnie od telefonu. Dostępność obrazu jest sprawdzana osobno.';
+    }
+    if (status == AutomaticMonitoringStatus.phone &&
+        phoneStatus.value.cameraId == camera.id &&
+        phoneStatus.value.phase == 'nativeWatching') {
+      return 'Kamera wykrywa ruch. Telefon przekazuje jej alarmy do SafeHood. '
+          'Powiadomienia niezależne od telefonu wymagają połączenia z usługą kamery.';
+    }
     if (status == AutomaticMonitoringStatus.off ||
         status == AutomaticMonitoringStatus.independent) {
       return status.message;
@@ -243,6 +273,7 @@ class CameraMonitoringCoordinator extends ChangeNotifier {
       for (final camera in desired) {
         if (!current()) return;
         if (camera.connectionType != CameraConnectionType.onvif ||
+            hasIndependentCameraMonitoring(camera, _bridges, now) ||
             !camera.liveMotionEnabled ||
             (camera.bridgeId != null &&
                 camera.monitoringMode == CameraMonitoringMode.bridge &&
