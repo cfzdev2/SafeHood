@@ -9,15 +9,50 @@ import java.util.List;
 /** Bounded, session-owned compressed video. Never retains a decoder's mutable input buffer. */
 public final class CameraVideoBuffer implements AutoCloseable {
   public static final int MAX_BYTES = 6 * 1024 * 1024;
-  private static final long WINDOW_US = 8_000_000;
+  private static final long WINDOW_US = 15_000_000;
   private static final long PREBUFFER_US = 5_000_000;
   private final ArrayDeque<Sample> samples = new ArrayDeque<>();
+  private final ArrayDeque<Presentation> presentations = new ArrayDeque<>();
+  private long epoch;
   private StreamFormat format;
   private Recording recording;
   private int bytes;
   private long newestUs = Long.MIN_VALUE;
   private long newestAt;
   private boolean closed;
+
+  public static final class Anchor {
+    public final long timeUs;
+    public final long epoch;
+
+    public Anchor(long timeUs, long epoch) {
+      this.timeUs = timeUs;
+      this.epoch = epoch;
+    }
+  }
+
+  private record Presentation(long timeUs, long releaseNs) {}
+
+  /** Tracks output actually released for display, independently of decoder input look-ahead. */
+  public synchronized void presented(long timeUs, long releaseNs) {
+    if (closed || format == null) return;
+    presentations.addLast(new Presentation(timeUs, releaseNs));
+    while (presentations.size() > 2400
+        || (!presentations.isEmpty()
+            && releaseNs - presentations.peekFirst().releaseNs() > 20_000_000_000L))
+      presentations.removeFirst();
+  }
+
+  public synchronized Anchor anchorAt(long atNs) {
+    Presentation last = null;
+    for (Presentation item : presentations) {
+      if (item.releaseNs() <= atNs && (last == null || item.releaseNs() > last.releaseNs()))
+        last = item;
+    }
+    return last == null || atNs - last.releaseNs() > 3_000_000_000L
+        ? null
+        : new Anchor(last.timeUs(), epoch);
+  }
 
   public static final class StreamFormat {
     public final String mime;
@@ -102,12 +137,14 @@ public final class CameraVideoBuffer implements AutoCloseable {
     newestUs = Math.max(newestUs, timeUs);
     newestAt = atMillis;
     if (recording != null && recording.valid) {
-      recording.bytes += size;
-      if (recording.bytes > MAX_BYTES || recording.samples.size() >= 2400) {
-        recording.valid = false;
-        recording.samples.clear();
-      } else if (timeUs <= recording.triggerUs + 5_500_000) {
-        recording.samples.add(sample);
+      if (timeUs <= recording.triggerUs + 5_000_000) {
+        recording.bytes += size;
+        if (recording.bytes > MAX_BYTES || recording.samples.size() >= 2400) {
+          recording.valid = false;
+          recording.samples.clear();
+        } else {
+          recording.samples.add(sample);
+        }
       }
     }
     while (!samples.isEmpty()
@@ -122,7 +159,14 @@ public final class CameraVideoBuffer implements AutoCloseable {
   }
 
   public synchronized Recording begin(long nowMillis) {
+    return begin(nowMillis, anchorAt(System.nanoTime()));
+  }
+
+  public synchronized Recording begin(long nowMillis, Anchor anchor) {
     if (closed
+        || anchor == null
+        || anchor.epoch != epoch
+        || anchor.timeUs > newestUs
         || recording != null
         || samples.isEmpty()
         || nowMillis - newestAt > 1500
@@ -135,7 +179,9 @@ public final class CameraVideoBuffer implements AutoCloseable {
     // Pick a real key frame inside the prebuffer window; never invent missing history.
     Sample first = null;
     for (Sample sample : samples) {
-      if (sample.keyFrame && sample.timeUs >= newestUs - PREBUFFER_US) {
+      if (sample.keyFrame
+          && sample.timeUs >= anchor.timeUs - PREBUFFER_US
+          && sample.timeUs <= anchor.timeUs) {
         first = sample;
         break;
       }
@@ -145,10 +191,17 @@ public final class CameraVideoBuffer implements AutoCloseable {
     boolean include = false;
     for (Sample sample : samples) {
       if (sample == first) include = true;
-      if (include) selected.add(sample);
+      if (include && sample.timeUs <= anchor.timeUs + 5_000_000) selected.add(sample);
     }
-    recording = new Recording(format, selected, newestUs);
+    recording = new Recording(format, selected, anchor.timeUs);
     return recording;
+  }
+
+  public synchronized boolean ready(Recording target) {
+    return target == null
+        || recording != target
+        || !target.valid
+        || newestUs >= target.triggerUs + 5_000_000;
   }
 
   public synchronized Recording finish(Recording target, long nowMillis) {
@@ -164,6 +217,8 @@ public final class CameraVideoBuffer implements AutoCloseable {
   }
 
   public synchronized void invalidate() {
+    epoch++;
+    presentations.clear();
     samples.clear();
     bytes = 0;
     newestUs = Long.MIN_VALUE;

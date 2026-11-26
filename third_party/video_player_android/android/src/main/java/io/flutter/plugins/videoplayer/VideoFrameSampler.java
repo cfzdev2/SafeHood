@@ -13,6 +13,7 @@ import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.util.Map;
 
 /** Samples only an existing RTSP player's video surface. Owned by one Flutter engine. */
 final class VideoFrameSampler {
@@ -44,7 +45,8 @@ final class VideoFrameSampler {
     boolean jpeg = "snapshot".equals(call.method);
     boolean clip = "clip".equals(call.method);
     boolean stats = "frameStats".equals(call.method);
-    if (!jpeg && !clip && !stats && !"sample".equals(call.method)) {
+    boolean timed = "sampleTimed".equals(call.method);
+    if (!jpeg && !clip && !stats && !timed && !"sample".equals(call.method)) {
       result.notImplemented();
       return;
     }
@@ -69,6 +71,12 @@ final class VideoFrameSampler {
         thread = new HandlerThread("SafeHoodCameraFrame");
         thread.start();
       }
+      Number anchorUs = call.argument("anchorUs");
+      Number anchorEpoch = call.argument("anchorEpoch");
+      CameraVideoBuffer.Anchor anchor =
+          anchorUs != null && anchorEpoch != null
+              ? new CameraVideoBuffer.Anchor(anchorUs.longValue(), anchorEpoch.longValue())
+              : buffer.anchorAt(System.nanoTime());
       recording = true;
       Handler worker = new Handler(thread.getLooper());
       worker.post(
@@ -76,6 +84,7 @@ final class VideoFrameSampler {
               CameraStreamRecorder.start(
                   cacheDirectory,
                   buffer,
+                  anchor,
                   worker,
                   () -> closed,
                   data ->
@@ -104,7 +113,7 @@ final class VideoFrameSampler {
     }
     Handler worker = new Handler(thread.getLooper());
     copying = true;
-    worker.post(() -> copy(player, surface, width, height, jpeg, worker, result));
+    worker.post(() -> copy(player, surface, width, height, jpeg, timed, worker, result));
   }
 
   private void copy(
@@ -113,6 +122,7 @@ final class VideoFrameSampler {
       int width,
       int height,
       boolean jpeg,
+      boolean timed,
       Handler worker,
       MethodChannel.Result result) {
     Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
@@ -121,11 +131,25 @@ final class VideoFrameSampler {
           surface,
           bitmap,
           status -> {
-            byte[] data = null;
+            Object data = null;
             try {
               if (status == PixelCopy.SUCCESS) {
                 boolean corrupt = isCorrupt(bitmap);
-                if (!corrupt) data = jpeg ? encodeJpeg(bitmap) : luminance(bitmap);
+                if (!corrupt) {
+                  byte[] bytes = jpeg ? encodeJpeg(bitmap) : luminance(bitmap);
+                  if (timed) {
+                    Map<String, Object> sample = new java.util.HashMap<>();
+                    sample.put("pixels", bytes);
+                    CameraVideoBuffer buffer = player.getCameraVideoBuffer();
+                    CameraVideoBuffer.Anchor anchor =
+                        buffer == null ? null : buffer.anchorAt(System.nanoTime());
+                    if (anchor != null) {
+                      sample.put("anchorUs", anchor.timeUs);
+                      sample.put("anchorEpoch", anchor.epoch);
+                    }
+                    data = sample;
+                  } else data = bytes;
+                }
               }
             } catch (RuntimeException ignored) {
               // A device may invalidate the buffer during a reconnect.

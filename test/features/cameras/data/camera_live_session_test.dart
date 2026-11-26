@@ -85,6 +85,55 @@ void main() {
     },
   );
 
+  testWidgets(
+    'clip uses the first changed displayed frame despite delayed confirmation and snapshot',
+    (tester) async {
+      final provider = _Provider();
+      final session = CameraLiveSession(
+        provider,
+        createPlayback: provider.createPlayback,
+      );
+      final toggle = StreamController<bool>.broadcast();
+      final photo = Completer<Uint8List?>();
+      var sample = 0;
+      LiveMotionAnchor? captured;
+      final monitor = LiveMotionMonitor(
+        session: session,
+        enabled: toggle.stream,
+        sample: (_) async {
+          sample++;
+          return LiveMotionSample(
+            _motionFrame(sample > 1).pixels,
+            anchor: LiveMotionAnchor(sample * 1000000, 7),
+          );
+        },
+        snapshot: (_) => photo.future,
+        save: (_, _) async => 'event',
+        recordClip: (_, anchor) async {
+          captured = anchor;
+          return null;
+        },
+        saveClip: (_, _) async {},
+      );
+      await session.resume();
+      toggle.add(true);
+      await tester.pump();
+      for (var i = 0; i < 3; i++) {
+        await tester.pump(const Duration(milliseconds: 800));
+      }
+      await tester.pump(const Duration(seconds: 1));
+      expect(captured, isNull);
+      photo.complete(Uint8List(20));
+      await tester.pump();
+      expect(captured?.timeUs, 2000000);
+      expect(captured?.epoch, 7);
+      monitor.dispose();
+      session.dispose();
+      unawaited(toggle.close());
+      await tester.pump();
+    },
+  );
+
   testWidgets('a rejected snapshot cannot create a motion alert or recording', (
     tester,
   ) async {
@@ -106,7 +155,7 @@ void main() {
         reports++;
         return 'unexpected';
       },
-      recordClip: (_) async {
+      recordClip: (_, _) async {
         recordings++;
         return null;
       },
@@ -291,7 +340,7 @@ void main() {
           enabled: toggle.stream,
           sample: (_) async => _motionFrame(++frames > 1),
           snapshot: (_) async => snapshot,
-          recordClip: (_) {
+          recordClip: (_, _) {
             captures++;
             return clip.future;
           },
@@ -790,8 +839,13 @@ void main() {
   );
 }
 
-Uint8List _motionFrame(bool moving) => Uint8List.fromList(
-  List.generate(LiveMotionDetector.pixels, (i) => moving && i < 400 ? 140 : 60),
+LiveMotionSample _motionFrame(bool moving) => LiveMotionSample(
+  Uint8List.fromList(
+    List.generate(
+      LiveMotionDetector.pixels,
+      (i) => moving && i < 400 ? 140 : 60,
+    ),
+  ),
 );
 
 class _Provider extends Fake implements CameraProvider {

@@ -31,8 +31,23 @@ bool supportsLiveMotion(Camera camera) =>
 typedef LiveMotionFrame = Future<Uint8List?> Function(VideoPlayerController);
 typedef SaveLiveMotion = Future<String?> Function(DateTime, Uint8List?);
 typedef RecordLiveMotionClip =
-    Future<LiveMotionClip?> Function(VideoPlayerController);
+    Future<LiveMotionClip?> Function(VideoPlayerController, LiveMotionAnchor?);
 typedef AttachLiveMotionClip = Future<void> Function(String, LiveMotionClip);
+
+class LiveMotionAnchor {
+  const LiveMotionAnchor(this.timeUs, this.epoch);
+  final int timeUs;
+  final int epoch;
+}
+
+class LiveMotionSample {
+  const LiveMotionSample(this.pixels, {this.anchor});
+  final Uint8List pixels;
+  final LiveMotionAnchor? anchor;
+}
+
+typedef ReadLiveMotionSample =
+    Future<LiveMotionSample?> Function(VideoPlayerController);
 
 class LiveMotionClip {
   const LiveMotionClip(this.bytes, {this.prebufferMillis = 0});
@@ -65,7 +80,7 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
     return LiveMotionMonitor(
       session: session,
       enabled: CameraService().watchLiveMotionEnabled(camera.id),
-      sample: (player) => _readFrame(player, 'sample'),
+      sample: _readSample,
       snapshot: (player) => _readFrame(player, 'snapshot'),
       recordClip: recordClips ? _readClip : null,
       save: (time, jpeg) async {
@@ -91,7 +106,7 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
   static const _sampleInterval = Duration(milliseconds: 800);
   static const _sendInterval = Duration(seconds: 30);
   final CameraLiveSession _session;
-  final LiveMotionFrame _sample;
+  final ReadLiveMotionSample _sample;
   final LiveMotionFrame _snapshot;
   final SaveLiveMotion _save;
   final RecordLiveMotionClip? _recordClip;
@@ -105,12 +120,19 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
   int _misses = 0;
   bool _enabled = false;
   bool _closed = false;
+  LiveMotionAnchor? _candidateAnchor;
+  DateTime? _candidateTime;
 
-  static Future<LiveMotionClip?> _readClip(VideoPlayerController player) async {
+  static Future<LiveMotionClip?> _readClip(
+    VideoPlayerController player,
+    LiveMotionAnchor? anchor,
+  ) async {
     final session = CameraLivePlayback.frameSessionFor(player);
     if (session == null) return null;
     final data = await _channel.invokeMapMethod<String, dynamic>('clip', {
       'session': session,
+      if (anchor != null) 'anchorUs': anchor.timeUs,
+      if (anchor != null) 'anchorEpoch': anchor.epoch,
     });
     if (data == null ||
         data['bytes'] is! Uint8List ||
@@ -121,6 +143,33 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
       data['bytes'] as Uint8List,
       prebufferMillis: data['prebufferMillis'] as int,
     );
+  }
+
+  static Future<LiveMotionSample?> _readSample(
+    VideoPlayerController player,
+  ) async {
+    final session = CameraLivePlayback.frameSessionFor(player);
+    if (session == null) return null;
+    final data = await _channel.invokeMapMethod<String, dynamic>(
+      'sampleTimed',
+      {'session': session},
+    );
+    if (data == null || data['pixels'] is! Uint8List) return null;
+    return LiveMotionSample(
+      data['pixels'] as Uint8List,
+      anchor: data['anchorUs'] is int && data['anchorEpoch'] is int
+          ? LiveMotionAnchor(
+              data['anchorUs'] as int,
+              data['anchorEpoch'] as int,
+            )
+          : null,
+    );
+  }
+
+  void _resetMotion() {
+    _detector.reset();
+    _candidateAnchor = null;
+    _candidateTime = null;
   }
 
   static Future<Uint8List?> _readFrame(
@@ -161,7 +210,7 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
     _timer?.cancel();
     _timer = null;
     _misses = 0;
-    _detector.reset();
+    _resetMotion();
   }
 
   bool _current(VideoPlayerController player, int generation) =>
@@ -184,16 +233,21 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
     if (!current()) return;
     try {
       if (!_ready(player)) {
-        _detector.reset();
+        _resetMotion();
         _misses = 0;
         value = LiveMotionStatus.waiting;
         return;
       }
 
-      final frame = await _tryRead(_sample, player);
+      LiveMotionSample? frame;
+      try {
+        frame = await _sample(player).timeout(const Duration(seconds: 2));
+      } catch (_) {
+        frame = null;
+      }
       if (!current() || !_ready(player)) return;
-      if (frame == null || frame.length != LiveMotionDetector.pixels) {
-        _detector.reset();
+      if (frame == null || frame.pixels.length != LiveMotionDetector.pixels) {
+        _resetMotion();
         if (++_misses >= 6) value = LiveMotionStatus.unavailable;
         return;
       }
@@ -203,20 +257,31 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
           value == LiveMotionStatus.unavailable) {
         value = LiveMotionStatus.watching;
       }
-      if (!_detector.add(frame) ||
-          (_sinceLastEvent.isRunning &&
-              _sinceLastEvent.elapsed < _sendInterval)) {
+      if (!_detector.add(frame.pixels)) {
+        if (_detector.hasPendingMotion) {
+          _candidateAnchor ??= frame.anchor;
+          _candidateTime ??= DateTime.now();
+        } else {
+          _candidateAnchor = null;
+          _candidateTime = null;
+        }
         return;
       }
-
-      final occurredAt = DateTime.now();
+      final anchor = _candidateAnchor ?? frame.anchor;
+      final occurredAt = _candidateTime ?? DateTime.now();
+      _candidateAnchor = null;
+      _candidateTime = null;
+      if (_sinceLastEvent.isRunning &&
+          _sinceLastEvent.elapsed < _sendInterval) {
+        return;
+      }
       value = LiveMotionStatus.saving;
       final jpeg = await _tryRead(_snapshot, player);
       if (!current()) return;
       // A visual-only detection is untrusted if its frame cannot be read or
       // the native sampler rejected a corrupt image. Don't publish an alarm.
       if (!_ready(player) || jpeg == null) {
-        _detector.reset();
+        _resetMotion();
         value = LiveMotionStatus.waiting;
         return;
       }
@@ -224,7 +289,7 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
       _sinceLastEvent
         ..reset()
         ..start();
-      final recording = _captureClip(player, generation);
+      final recording = _captureClip(player, generation, anchor);
       String? eventId;
       try {
         eventId = await _save(
@@ -248,11 +313,15 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
   Future<LiveMotionClip?> _captureClip(
     VideoPlayerController player,
     int generation,
+    LiveMotionAnchor? anchor,
   ) async {
     final record = _recordClip;
     if (record == null || _saveClip == null) return null;
     try {
-      final clip = await record(player).timeout(const Duration(seconds: 11));
+      final clip = await record(
+        player,
+        anchor,
+      ).timeout(const Duration(seconds: 11));
       if (!_current(player, generation)) return null;
       if (clip != null &&
           clip.bytes.length >= 100 &&

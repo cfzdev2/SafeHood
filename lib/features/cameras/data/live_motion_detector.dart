@@ -12,6 +12,8 @@ class LiveMotionDetector {
   int _quietFrames = 0;
   bool _episode = false;
 
+  bool get hasPendingMotion => _changesInARow > 0 && !_episode;
+
   void reset() {
     _previous = null;
     _changesInARow = 0;

@@ -12,6 +12,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlaybackException;
 import androidx.media3.exoplayer.FormatHolder;
 import androidx.media3.exoplayer.Renderer;
+import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter;
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo;
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector;
 import androidx.media3.exoplayer.mediacodec.MediaCodecUtil;
@@ -104,6 +105,19 @@ public final class CameraRtspRenderers {
       if (input.isEncrypted()) buffer.invalidate();
       else
         buffer.append(input.data, input.timeUs, input.isKeyFrame(), SystemClock.elapsedRealtime());
+    }
+
+    @Override
+    protected void renderOutputBufferV21(
+        MediaCodecAdapter codec, int index, long presentationTimeUs, long releaseTimeNs) {
+      super.renderOutputBufferV21(codec, index, presentationTimeUs, releaseTimeNs);
+      buffer.presented(presentationTimeUs + getOutputStreamOffsetUs(), releaseTimeNs);
+    }
+
+    @Override
+    protected void renderOutputBuffer(MediaCodecAdapter codec, int index, long presentationTimeUs) {
+      super.renderOutputBuffer(codec, index, presentationTimeUs);
+      buffer.presented(presentationTimeUs + getOutputStreamOffsetUs(), System.nanoTime());
     }
 
     @Override

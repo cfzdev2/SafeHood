@@ -25,20 +25,36 @@ corruption. Unreadable/rejected samples do not produce visual motion alerts.
 The windowless background receiver retains its separate OES reader.
 
 `CameraVideoBuffer` copies compressed H.264 access units before decoder input
-ownership changes. It retains at most eight seconds / six MiB, discards
+ownership changes. It retains at most fifteen seconds / six MiB, discards
 incomplete GOPs and clears on seek, format change, discontinuity or disposal.
+Rendering callbacks associate the original sample timestamps with actual
+scheduled presentation times. Foreground motion samples carry that anchor and
+its stream epoch. The first changed sample is retained while the detector
+confirms motion and while the JPEG is captured; decoder input look-ahead does
+not move the event anchor forward. Anchors cannot cross a reset or format
+change.
+
 On an event, `CameraStreamRecorder` remuxes a key-frame-aligned prefix of up to
-five seconds plus five seconds of new camera video into a silent MP4. It does
-not start another camera connection, decoder or encoder, reduce frame rate,
-resize the recording or block frame sampling while it waits. A warm-up period,
+five seconds before that anchor plus five seconds of subsequent camera video.
+It waits for the required media timestamps rather than always waiting another
+five wall-clock seconds. It does not start another connection, decoder or
+encoder, reduce frame rate, resize video or block frame sampling. A warm-up period,
 long GOP or the byte cap can shorten the available prefix; its actual duration
 is returned through the channel and stored in the event, never hard-coded to
 zero or five seconds. Stream interruption, an unprimed buffer or oversized
 media results in no clip. Current phone clip validation accepts H.264 up to
 1280 x 720, fifteen seconds and six MiB. Other formats remain playable but do
-not get this recording path. The pre-event buffer is scoped to the active
-preview session; native camera alarms without an active video receiver still
-use their separate snapshot path.
+not get this recording path. The pre-event buffer exists only while a receiver
+is active and must warm up after a foreground/background handoff. Background monitoring now owns the
+same bounded buffer and clip recorder. An established native alarm subscription
+does not close the background video needed for evidence. Native alarms can
+use a recent confirmed visual onset when available. The native camera still
+provides the alarm; the video receiver supplies the recording. A single bounded
+join waits for both the acknowledged event ID and the recorded clip, handles
+either completion order, and drops pending evidence on failure or sign-out.
+Uploads re-check the active owner and camera before calling the existing private
+clip endpoint. A disconnected or unprimed receiver cannot provide missing
+history.
 
 The same channel exposes decoder counters for the active RTSP player. The app
 uses them to recognize an ongoing stream that renders too few frames or drops

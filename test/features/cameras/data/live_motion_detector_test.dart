@@ -18,6 +18,22 @@ Uint8List _frame({int light = 0, bool movement = false}) {
 
 void main() {
   test(
+    'pending motion identifies the first changed frame and resets after a false candidate',
+    () {
+      final detector = LiveMotionDetector();
+      detector.add(_frame());
+      expect(detector.hasPendingMotion, isFalse);
+      expect(detector.add(_frame(movement: true)), isFalse);
+      expect(detector.hasPendingMotion, isTrue);
+      detector.add(_frame());
+      expect(detector.hasPendingMotion, isFalse);
+      detector.add(_frame(movement: true));
+      expect(detector.add(_frame(movement: true)), isTrue);
+      expect(detector.hasPendingMotion, isFalse);
+    },
+  );
+
+  test(
     'rebases a whole-frame discontinuity without raising a motion alarm',
     () {
       final detector = LiveMotionDetector();

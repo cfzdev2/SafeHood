@@ -9,7 +9,7 @@ import io.flutter.plugins.videoplayer.CameraFrameReader;
 import io.flutter.plugins.videoplayer.VideoFrameHealth;
 import java.io.ByteArrayOutputStream;
 
-/** Shares the same OES-to-RGB frame reader as the preview, without a visible window. */
+/** Windowless RGB reader for background motion and event snapshots. */
 final class BackgroundMotionFrames implements AutoCloseable {
   interface Listener {
     void onSurface(Surface surface);
@@ -26,8 +26,10 @@ final class BackgroundMotionFrames implements AutoCloseable {
   private final Listener listener;
   private final CameraFrameReader reader;
   private long lastMotion;
+  private long candidateAt;
   private int corruptFrames;
   private volatile long lastSample;
+  private volatile long lastMotionStartedAt;
   private volatile boolean closed;
 
   BackgroundMotionFrames(Listener listener) {
@@ -56,6 +58,10 @@ final class BackgroundMotionFrames implements AutoCloseable {
     reader.start();
   }
 
+  long lastMotionStartedAt() {
+    return lastMotionStartedAt;
+  }
+
   long lastSampleAt() {
     return lastSample;
   }
@@ -72,6 +78,7 @@ final class BackgroundMotionFrames implements AutoCloseable {
     frame.getPixels(pixels, 0, width, 0, 0, width, height);
     if (VideoFrameHealth.isCorrupt(pixels, width, height)) {
       detector.reset();
+      candidateAt = 0;
       if (++corruptFrames == 2)
         main.post(
             () -> {
@@ -94,11 +101,19 @@ final class BackgroundMotionFrames implements AutoCloseable {
       luma[i] =
           (byte) ((77 * ((rgb >> 16) & 255) + 150 * ((rgb >> 8) & 255) + 29 * (rgb & 255)) >> 8);
     }
-    if (!detector.add(luma) || (lastMotion != 0 && now - lastMotion < 30_000)) return;
+    if (!detector.add(luma)) {
+      if (detector.hasPendingMotion()) {
+        if (candidateAt == 0) candidateAt = System.currentTimeMillis();
+      } else candidateAt = 0;
+      return;
+    }
+    long occurredAt = candidateAt == 0 ? System.currentTimeMillis() : candidateAt;
+    candidateAt = 0;
+    lastMotionStartedAt = occurredAt;
+    if (lastMotion != 0 && now - lastMotion < 30_000) return;
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     if (!frame.compress(Bitmap.CompressFormat.JPEG, 75, bytes) || bytes.size() > 256 * 1024) return;
     lastMotion = now;
-    long occurredAt = System.currentTimeMillis();
     byte[] jpeg = bytes.toByteArray();
     main.post(
         () -> {

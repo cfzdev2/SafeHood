@@ -16,25 +16,45 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 /** Remuxes the camera's original H.264, without another connection, decoder or encoder. */
-final class CameraStreamRecorder {
-  static void start(
+public final class CameraStreamRecorder {
+  public static void start(
       File cache,
       CameraVideoBuffer buffer,
       Handler worker,
       BooleanSupplier cancelled,
       Consumer<Map<String, Object>> completion) {
-    CameraVideoBuffer.Recording recording = buffer.begin(SystemClock.elapsedRealtime());
+    start(cache, buffer, buffer.anchorAt(System.nanoTime()), worker, cancelled, completion);
+  }
+
+  public static void start(
+      File cache,
+      CameraVideoBuffer buffer,
+      CameraVideoBuffer.Anchor anchor,
+      Handler worker,
+      BooleanSupplier cancelled,
+      Consumer<Map<String, Object>> completion) {
+    CameraVideoBuffer.Recording recording = buffer.begin(SystemClock.elapsedRealtime(), anchor);
     if (recording == null) {
       completion.accept(null);
       return;
     }
-    worker.postDelayed(
-        () -> {
-          CameraVideoBuffer.Recording ready =
-              buffer.finish(recording, SystemClock.elapsedRealtime());
-          completion.accept(cancelled.getAsBoolean() || ready == null ? null : mux(cache, ready));
-        },
-        5000);
+    long deadline = SystemClock.elapsedRealtime() + 6000;
+    Runnable poll =
+        new Runnable() {
+          @Override
+          public void run() {
+            if (!cancelled.getAsBoolean()
+                && !buffer.ready(recording)
+                && SystemClock.elapsedRealtime() < deadline) {
+              worker.postDelayed(this, 100);
+              return;
+            }
+            CameraVideoBuffer.Recording ready =
+                buffer.finish(recording, SystemClock.elapsedRealtime());
+            completion.accept(cancelled.getAsBoolean() || ready == null ? null : mux(cache, ready));
+          }
+        };
+    worker.post(poll);
   }
 
   private static Map<String, Object> mux(File cache, CameraVideoBuffer.Recording recording) {
