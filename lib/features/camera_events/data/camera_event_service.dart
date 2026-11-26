@@ -314,6 +314,7 @@ class CameraEventService {
     required String cameraId,
     required String eventId,
     required Uint8List mp4,
+    int prebufferMillis = 0,
   }) async {
     _requireUid();
     final callable = _functions.httpsCallable(
@@ -324,6 +325,7 @@ class CameraEventService {
       'cameraId': cameraId,
       'eventId': eventId,
       'mp4Base64': base64Encode(mp4),
+      'prebufferMillis': prebufferMillis,
     });
   }
 }

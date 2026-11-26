@@ -5,9 +5,6 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
-import android.view.PixelCopy;
-import android.view.Surface;
-import androidx.annotation.RequiresApi;
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
@@ -28,6 +25,7 @@ final class VideoFrameSampler {
   private final Handler main = new Handler(Looper.getMainLooper());
   private HandlerThread thread;
   private boolean copying;
+  private boolean recording;
   private volatile boolean closed;
 
   interface PlayerLookup {
@@ -60,89 +58,69 @@ final class VideoFrameSampler {
       result.success(null);
       return;
     }
+    if (clip) {
+      CameraVideoBuffer buffer = player.getCameraVideoBuffer();
+      if (recording || buffer == null) {
+        result.success(null);
+        return;
+      }
+      if (thread == null) {
+        thread = new HandlerThread("SafeHoodCameraFrame");
+        thread.start();
+      }
+      recording = true;
+      Handler worker = new Handler(thread.getLooper());
+      worker.post(
+          () ->
+              CameraStreamRecorder.start(
+                  cacheDirectory,
+                  buffer,
+                  worker,
+                  () -> closed,
+                  data ->
+                      main.post(
+                          () -> {
+                            recording = false;
+                            result.success(closed ? null : data);
+                            if (closed && !copying) stopThread();
+                          })));
+      return;
+    }
     if (copying || Build.VERSION.SDK_INT < 24) {
       result.success(frameStats);
       return;
     }
-    Surface surface = player.getPlayingSurface();
-    if (surface == null || !surface.isValid()) {
-      result.success(frameStats);
-      return;
-    }
-    Integer width = jpeg || clip ? call.argument("width") : SAMPLE_WIDTH;
-    Integer height = jpeg || clip ? call.argument("height") : SAMPLE_HEIGHT;
+    Integer width = jpeg ? call.argument("width") : SAMPLE_WIDTH;
+    Integer height = jpeg ? call.argument("height") : SAMPLE_HEIGHT;
     if (width == null || height == null || width < 1 || height < 1 || width > 640 || height > 640) {
       result.success(null);
       return;
     }
-    if (clip
-        && (width < 16
-            || height < 16
-            || width > MotionClipRecorder.MAX_EDGE
-            || height > MotionClipRecorder.MAX_EDGE
-            || (width & 15) != 0
-            || (height & 15) != 0)) {
-      result.success(null);
-      return;
-    }
-
     if (thread == null) {
       thread = new HandlerThread("SafeHoodCameraFrame");
       thread.start();
     }
-    Handler worker = new Handler(thread.getLooper());
     copying = true;
-    if (clip) {
-      worker.post(
-          () ->
-              new MotionClipRecorder(
-                      cacheDirectory,
-                      surface,
-                      width,
-                      height,
-                      worker,
-                      () -> closed,
-                      bytes -> complete(result, bytes))
-                  .start());
-    } else {
-      worker.post(() -> copy(surface, width, height, jpeg, frameStats, worker, result));
-    }
-  }
-
-  @RequiresApi(24)
-  private void copy(
-      Surface surface,
-      int width,
-      int height,
-      boolean jpeg,
-      Map<String, Object> frameStats,
-      Handler worker,
-      MethodChannel.Result result) {
-    Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-    try {
-      PixelCopy.request(
-          surface,
-          bitmap,
-          status -> {
-            Object data = frameStats;
-            try {
-              if (status == PixelCopy.SUCCESS) {
-                boolean corrupt = isCorrupt(bitmap);
-                if (frameStats != null) frameStats.put("corrupt", corrupt ? 1 : 0);
-                else if (!corrupt) data = jpeg ? encodeJpeg(bitmap) : luminance(bitmap);
-              }
-            } catch (RuntimeException ignored) {
-              // A device may invalidate the buffer during a reconnect.
-            } finally {
-              bitmap.recycle();
-              complete(result, data);
+    player.readCameraFrame(
+        width,
+        height,
+        bitmap -> {
+          Object data = frameStats;
+          try {
+            if (bitmap != null) {
+              boolean corrupt = isCorrupt(bitmap);
+              if (corrupt && player.getCameraVideoBuffer() != null)
+                player.getCameraVideoBuffer().invalidate();
+              if (frameStats != null) frameStats.put("corrupt", corrupt ? 1 : 0);
+              else if (!corrupt) data = jpeg ? encodeJpeg(bitmap) : luminance(bitmap);
             }
-          },
-          worker);
-    } catch (RuntimeException ignored) {
-      bitmap.recycle();
-      complete(result, null);
-    }
+          } catch (RuntimeException ignored) {
+            data = frameStats;
+          } finally {
+            if (bitmap != null) bitmap.recycle();
+            complete(result, data);
+          }
+        });
   }
 
   static boolean isCorrupt(Bitmap bitmap) {
@@ -178,14 +156,14 @@ final class VideoFrameSampler {
         () -> {
           copying = false;
           result.success(closed ? null : data);
-          if (closed) stopThread();
+          if (closed && !recording) stopThread();
         });
   }
 
   void close() {
     closed = true;
     channel.setMethodCallHandler(null);
-    if (!copying) stopThread();
+    if (!copying && !recording) stopThread();
   }
 
   private void stopThread() {

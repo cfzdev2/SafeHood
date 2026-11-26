@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.source.MediaSource;
 final class RtspVideoAsset extends VideoAsset {
   private final boolean forceRtpTcp;
   private final boolean preferSoftware;
+  private final CameraVideoBuffer videoBuffer = new CameraVideoBuffer();
 
   RtspVideoAsset(@NonNull String assetUrl, boolean forceRtpTcp) {
     this(assetUrl, forceRtpTcp, false);
@@ -30,7 +31,13 @@ final class RtspVideoAsset extends VideoAsset {
   @Override
   @OptIn(markerClass = UnstableApi.class)
   public ExoPlayer.Builder createPlayerBuilder(@NonNull Context context) {
-    return new ExoPlayer.Builder(context, CameraRtspRenderers.create(context, preferSoftware));
+    return new ExoPlayer.Builder(
+        context, CameraRtspRenderers.create(context, preferSoftware, videoBuffer));
+  }
+
+  @Override
+  public CameraVideoBuffer getCameraVideoBuffer() {
+    return videoBuffer;
   }
 
   @NonNull

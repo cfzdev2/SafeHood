@@ -4,7 +4,8 @@ const {createHash} = require("node:crypto");
 const {normalizeDocumentId} = require("./camera_event_snapshot");
 
 const maximumClipBytes = 6 * 1024 * 1024;
-const maximumPhoneClipBytes = 1024 * 1024;
+const maximumPhoneClipBytes = maximumClipBytes;
+const maximumPhoneClipMillis = 15000;
 const uuidPattern = new RegExp(
     "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-" +
     "[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -154,8 +155,11 @@ async function savePhoneMotionClip({db, getBucket, FieldValue, Timestamp,
     fail("Nieprawidłowy rozmiar nagrania z podglądu.");
   }
   const clip = decodeClip(value);
+  const requestedPrebuffer = data.prebufferMillis ?? 0;
   if (clip.bytes.length > maximumPhoneClipBytes ||
-      clip.width > 320 || clip.height > 320 || clip.durationMillis > 7000) {
+      clip.durationMillis > maximumPhoneClipMillis ||
+      !Number.isSafeInteger(requestedPrebuffer) || requestedPrebuffer < 0 ||
+      requestedPrebuffer > 5000 || requestedPrebuffer >= clip.durationMillis) {
     fail("Nieprawidłowe nagranie z podglądu.");
   }
 
@@ -196,7 +200,8 @@ async function savePhoneMotionClip({db, getBucket, FieldValue, Timestamp,
           contentType: "video/mp4", cacheControl: "private, max-age=0",
           metadata: {ownerId, cameraId, eventId, source: "phone-motion",
             durationMillis: String(clip.durationMillis),
-            startedAtMillis: String(received)},
+            prebufferMillis: String(requestedPrebuffer),
+            startedAtMillis: String(received - requestedPrebuffer)},
         },
       });
       created = true;
@@ -208,14 +213,17 @@ async function savePhoneMotionClip({db, getBucket, FieldValue, Timestamp,
     const attributes = metadata.metadata || {};
     const duration = Number(attributes.durationMillis);
     const started = Number(attributes.startedAtMillis);
+    const prebuffer = Number(attributes.prebufferMillis ?? 0);
     const size = Number(metadata.size);
     if (metadata.contentType !== "video/mp4" ||
         attributes.ownerId !== ownerId || attributes.cameraId !== cameraId ||
         attributes.eventId !== eventId ||
         attributes.source !== "phone-motion" || !Number.isSafeInteger(size) ||
         size < 100 || size > maximumPhoneClipBytes ||
-        !Number.isSafeInteger(duration) || duration < 1000 || duration > 7000 ||
-        !Number.isSafeInteger(started)) {
+        !Number.isSafeInteger(duration) || duration < 1000 ||
+        duration > maximumPhoneClipMillis ||
+        !Number.isSafeInteger(prebuffer) || prebuffer < 0 || prebuffer > 5000 ||
+        prebuffer >= duration || !Number.isSafeInteger(started)) {
       fail("Istniejące nagranie ma nieprawidłowe metadane.", 409);
     }
     await db.runTransaction(async (transaction) => {
@@ -224,7 +232,8 @@ async function savePhoneMotionClip({db, getBucket, FieldValue, Timestamp,
       const {event} = verify(currentCamera, currentEvent);
       if (!event.clipPath) {
         transaction.update(eventRef, {
-          clipPath, clipDurationMillis: duration, clipPrebufferMillis: 0,
+          clipPath, clipDurationMillis: duration,
+          clipPrebufferMillis: prebuffer,
           clipStartedAt: Timestamp.fromMillis(started),
           clipEndedAt: Timestamp.fromMillis(started + duration),
           clipUpdatedAt: FieldValue.serverTimestamp(),

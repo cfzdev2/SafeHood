@@ -279,11 +279,11 @@ void main() {
           createPlayback: provider.createPlayback,
         );
         final toggle = StreamController<bool>.broadcast();
-        final clip = Completer<Uint8List?>();
+        final clip = Completer<LiveMotionClip?>();
         final snapshot = Uint8List(20);
         final video = Uint8List(500);
         final saved = <Uint8List?>[];
-        final uploads = <(String, Uint8List)>[];
+        final uploads = <(String, LiveMotionClip)>[];
         var frames = 0;
         var captures = 0;
         final monitor = LiveMotionMonitor(
@@ -313,9 +313,11 @@ void main() {
         expect(uploads, isEmpty);
 
         if (leaveEarly) await session.suspend();
-        clip.complete(video);
+        final captured = LiveMotionClip(video, prebufferMillis: 4000);
+        clip.complete(captured);
         await tester.pump();
-        expect(uploads, leaveEarly ? isEmpty : [('recorded-motion', video)]);
+        expect(uploads, leaveEarly ? isEmpty : [('recorded-motion', captured)]);
+        if (!leaveEarly) expect(uploads.single.$2.prebufferMillis, 4000);
         monitor.dispose();
         session.dispose();
         unawaited(toggle.close());

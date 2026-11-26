@@ -134,6 +134,28 @@ test("phone motion attaches a private MP4 once", async () => {
   assert.equal(event.clipPrebufferMillis, 0);
 });
 
+test("phone stream clips preserve prebuffer and camera dimensions",
+    async () => {
+      const h = phoneClip();
+      await h.upload({data: {eventId, cameraId,
+        mp4Base64: movie.toString("base64"), prebufferMillis: 4000}});
+      const event = h.documents.get(`cameraEvents/${eventId}`);
+      assert.equal(event.clipPrebufferMillis, 4000);
+      assert.equal(event.clipDurationMillis, 10000);
+      assert.equal(event.clipStartedAt.toMillis(), occurredAtMillis - 4000);
+      assert.equal(event.clipEndedAt.toMillis(), occurredAtMillis + 6000);
+      assert.deepEqual(h.stored().bytes, movie);
+    });
+
+test("phone stream clips reject invalid or fictitious prebuffer", async () => {
+  for (const prebufferMillis of [-1, 5001, "4000", 2.5, 2000]) {
+    const h = phoneClip();
+    await assert.rejects(h.upload({data: {eventId, cameraId,
+      mp4Base64: phoneMovie, prebufferMillis}}), {status: 400});
+    assert.equal(h.writes(), 0);
+  }
+});
+
 test("phone clips require the owner and a recent phone detection", async () => {
   const wrongOwner = phoneClip({event: {ownerId: "neighbor"}});
   await assert.rejects(wrongOwner.upload(), {status: 403});
@@ -147,7 +169,8 @@ test("phone clips require the owner and a recent phone detection", async () => {
   assert.equal(tooLate.writes(), 0);
 
   await assert.rejects(phoneClip().upload({
-    data: {eventId, cameraId, mp4Base64: movie.toString("base64")},
+    data: {eventId, cameraId, mp4Base64: movie.toString("base64"),
+      prebufferMillis: 5001},
   }), {status: 400});
 });
 

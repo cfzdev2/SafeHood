@@ -30,7 +30,15 @@ bool supportsLiveMotion(Camera camera) =>
 
 typedef LiveMotionFrame = Future<Uint8List?> Function(VideoPlayerController);
 typedef SaveLiveMotion = Future<String?> Function(DateTime, Uint8List?);
-typedef AttachLiveMotionClip = Future<void> Function(String, Uint8List);
+typedef RecordLiveMotionClip =
+    Future<LiveMotionClip?> Function(VideoPlayerController);
+typedef AttachLiveMotionClip = Future<void> Function(String, LiveMotionClip);
+
+class LiveMotionClip {
+  const LiveMotionClip(this.bytes, {this.prebufferMillis = 0});
+  final Uint8List bytes;
+  final int prebufferMillis;
+}
 
 /// Shares the LIVE player and follows its lifecycle, including fullscreen.
 class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
@@ -59,7 +67,7 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
       enabled: CameraService().watchLiveMotionEnabled(camera.id),
       sample: (player) => _readFrame(player, 'sample'),
       snapshot: (player) => _readFrame(player, 'snapshot'),
-      recordClip: recordClips ? (player) => _readFrame(player, 'clip') : null,
+      recordClip: recordClips ? _readClip : null,
       save: (time, jpeg) async {
         final event = await events.ingestFromCamera(
           cameraId: camera.id,
@@ -70,10 +78,11 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
         );
         return event.eventId;
       },
-      saveClip: (eventId, mp4) => events.attachPhoneMotionClip(
+      saveClip: (eventId, clip) => events.attachPhoneMotionClip(
         cameraId: camera.id,
         eventId: eventId,
-        mp4: mp4,
+        mp4: clip.bytes,
+        prebufferMillis: clip.prebufferMillis,
       ),
     );
   }
@@ -85,7 +94,7 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
   final LiveMotionFrame _sample;
   final LiveMotionFrame _snapshot;
   final SaveLiveMotion _save;
-  final LiveMotionFrame? _recordClip;
+  final RecordLiveMotionClip? _recordClip;
   final AttachLiveMotionClip? _saveClip;
   final _detector = LiveMotionDetector();
   final _sinceLastEvent = Stopwatch();
@@ -97,6 +106,23 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
   bool _enabled = false;
   bool _closed = false;
 
+  static Future<LiveMotionClip?> _readClip(VideoPlayerController player) async {
+    final session = CameraLivePlayback.frameSessionFor(player);
+    if (session == null) return null;
+    final data = await _channel.invokeMapMethod<String, dynamic>('clip', {
+      'session': session,
+    });
+    if (data == null ||
+        data['bytes'] is! Uint8List ||
+        data['prebufferMillis'] is! int) {
+      return null;
+    }
+    return LiveMotionClip(
+      data['bytes'] as Uint8List,
+      prebufferMillis: data['prebufferMillis'] as int,
+    );
+  }
+
   static Future<Uint8List?> _readFrame(
     VideoPlayerController player,
     String method,
@@ -104,12 +130,9 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
     final session = CameraLivePlayback.frameSessionFor(player);
     final size = player.value.size;
     if (session == null || size.isEmpty || !size.isFinite) return null;
-    final clip = method == 'clip';
-    final maxEdge = clip ? 320.0 : 480.0;
+    const maxEdge = 480.0;
     final scale = math.min(1.0, maxEdge / math.max(size.width, size.height));
-    int dimension(double value) => clip
-        ? math.max(16, 16 * (value * scale / 16).floor())
-        : math.max(1, (value * scale).round());
+    int dimension(double value) => math.max(1, (value * scale).round());
     return _channel.invokeMethod<Uint8List>(method, {
       'session': session,
       if (method != 'sample') 'width': dimension(size.width),
@@ -222,17 +245,21 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
     }
   }
 
-  Future<Uint8List?> _captureClip(
+  Future<LiveMotionClip?> _captureClip(
     VideoPlayerController player,
     int generation,
   ) async {
     final record = _recordClip;
     if (record == null || _saveClip == null) return null;
     try {
-      final bytes = await record(player).timeout(const Duration(seconds: 9));
+      final clip = await record(player).timeout(const Duration(seconds: 11));
       if (!_current(player, generation)) return null;
-      if (bytes != null && bytes.length >= 100 && bytes.length <= 1024 * 1024) {
-        return bytes;
+      if (clip != null &&
+          clip.bytes.length >= 100 &&
+          clip.bytes.length <= 6 * 1024 * 1024 &&
+          clip.prebufferMillis >= 0 &&
+          clip.prebufferMillis <= 5000) {
+        return clip;
       }
       debugPrint('PHONE MOTION RECORDING: clip unavailable');
     } catch (error) {
@@ -241,9 +268,9 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
     return null;
   }
 
-  Future<void> _attachClip(String eventId, Uint8List mp4) async {
+  Future<void> _attachClip(String eventId, LiveMotionClip clip) async {
     try {
-      await _saveClip?.call(eventId, mp4);
+      await _saveClip?.call(eventId, clip);
     } on FirebaseFunctionsException catch (error) {
       debugPrint('PHONE MOTION CLIP UPLOAD: ${error.code}');
     } catch (error) {

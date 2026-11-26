@@ -309,7 +309,9 @@ class _CameraEventClipState extends State<CameraEventClip>
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              '${(prebuffer / 1000).toStringAsFixed(1)} s przed wykryciem',
+              prebuffer > 0
+                  ? '${(prebuffer / 1000).toStringAsFixed(1)} s przed wykryciem'
+                  : 'Nagranie od chwili wykrycia',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),

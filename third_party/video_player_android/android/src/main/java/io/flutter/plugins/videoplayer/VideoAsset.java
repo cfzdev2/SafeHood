@@ -86,6 +86,11 @@ public abstract class VideoAsset {
     return new ExoPlayer.Builder(context);
   }
 
+  @Nullable
+  public CameraVideoBuffer getCameraVideoBuffer() {
+    return null;
+  }
+
   /**
    * Returns the configured media source factory, if needed for this asset type.
    *
