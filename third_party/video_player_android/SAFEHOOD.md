@@ -11,14 +11,18 @@ For RTSP URLs the local changes translate the in-process
 the player keeps upstream's UDP-first behavior. HTTP/HLS and event recordings
 are unaffected. No developer package cache is modified.
 
-RTSP playback uses one decoder. `CameraFrameReader` consumes its external OES
-texture, applies the `SurfaceTexture` transform and renders to Flutter's output
-surface. Motion samples and JPEGs are read from a small RGBA framebuffer with
-explicit byte order and vertical row conversion. Direct `PixelCopy` of the
-vendor decoder surface is no longer used. RGB readback is throttled separately
-from preview rendering. The background receiver uses the same frame reader.
-If GL capture fails, the preview returns to the direct surface and visual-only
-events wait for readable evidence.
+Foreground RTSP video renders directly to Flutter's `SurfaceProducer`, as in
+the upstream player. Sampling and evidence never replace the decoder's preview
+surface. The experimental foreground OES relay has been removed; a GPU capture
+failure cannot take away an otherwise working preview.
+
+The foreground sampler uses the previous asynchronous `PixelCopy` path only
+for motion samples and JPEGs. Decoder statistics return counters directly and
+do not probe RGB buffers or switch codecs because a copied image looks wrong.
+Some vendor surfaces may still return damaged evidence copies; this rollback
+restores direct display and does not establish a general solution to capture
+corruption. Unreadable/rejected samples do not produce visual motion alerts.
+The windowless background receiver retains its separate OES reader.
 
 `CameraVideoBuffer` copies compressed H.264 access units before decoder input
 ownership changes. It retains at most eight seconds / six MiB, discards
@@ -38,23 +42,22 @@ use their separate snapshot path.
 
 The same channel exposes decoder counters for the active RTSP player. The app
 uses them to recognize an ongoing stream that renders too few frames or drops
-many frames and can try a lighter profile. Stats may include a verdict from
-the shared RGB frame. Plain darkness, grayscale infrared images and a solid
+many frames and can try a lighter profile. Foreground counters are independent
+of image sampling. Plain darkness, grayscale infrared images and a solid
 colored status line do not match the narrow-rainbow-on-black signature. This
 is a conservative check, not a general test of video correctness.
 
-Rejected images are not used for visual motion alerts or JPEG snapshots and
-invalidate the pending compressed recording. A whole-frame luminance discontinuity resets the motion baseline. A
+Rejected images are not used for visual motion alerts or JPEG snapshots. A
+foreground evidence copy does not invalidate independently buffered stream
+data. A whole-frame luminance discontinuity resets the motion baseline. A
 visual motion alert also requires a readable snapshot immediately before it
 is sent. Camera-generated native alarms follow their separate path.
 
-Two damaged-image probes trigger a new RTSP session with TCP and the internal
-`X-SafeHood-Decoder: software` option. This option prioritizes Android software
-video decoders; it is never sent to the camera. RTSP uses synchronous codec
-queueing with hardware decoding as its initial preference. Hardware decoders remain available if software initialization
-fails. Foreground recovery is bounded to two attempts until healthy playback
-or a user retry. Background reception uses a slower retry after repeated
-damage and applies the same frame check.
+RTSP uses synchronous codec queueing with hardware decoding as its initial
+preference. The local `X-SafeHood-Decoder: software` option remains available
+to the recovery controller and is never sent to the camera. Foreground stats
+no longer infer decoder corruption from evidence copies. Background reception
+uses a slower retry after repeated damaged samples.
 
 Validation covers RGBA byte order/orientation, GOP boundaries, true prebuffer,
 buffer ownership and limits, discontinuities, synthetic corruption, ordinary

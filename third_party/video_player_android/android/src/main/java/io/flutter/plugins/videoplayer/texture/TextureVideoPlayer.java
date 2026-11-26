@@ -5,7 +5,6 @@
 package io.flutter.plugins.videoplayer.texture;
 
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.os.SystemClock;
 import android.view.Surface;
 import androidx.annotation.NonNull;
@@ -15,13 +14,10 @@ import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
-import androidx.media3.common.Player;
-import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.DecoderCounters;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
-import io.flutter.plugins.videoplayer.CameraFrameReader;
 import io.flutter.plugins.videoplayer.CameraVideoBuffer;
 import io.flutter.plugins.videoplayer.ExoPlayerEventListener;
 import io.flutter.plugins.videoplayer.VideoAsset;
@@ -31,7 +27,6 @@ import io.flutter.plugins.videoplayer.VideoPlayerOptions;
 import io.flutter.view.TextureRegistry.SurfaceProducer;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.function.Consumer;
 
 /**
  * A subclass of {@link VideoPlayer} that adds functionality related to texture view as a way of
@@ -43,10 +38,7 @@ import java.util.function.Consumer;
 public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProducer.Callback {
   // True when the ExoPlayer instance has a null surface.
   private boolean needsSurface = true;
-  private CameraFrameReader frameReader;
   private CameraVideoBuffer videoBuffer;
-  private Surface decoderSurface;
-  private boolean disposed;
 
   /**
    * Creates a texture video player.
@@ -98,56 +90,8 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
                   .setMediaSourceFactory(asset.getMediaSourceFactory(context));
               return builder.build();
             });
-    CameraVideoBuffer buffer = asset.getCameraVideoBuffer();
-    if (buffer != null) player.enableCameraFrames(buffer);
+    player.videoBuffer = asset.getCameraVideoBuffer();
     return player;
-  }
-
-  @OptIn(markerClass = UnstableApi.class)
-  private void enableCameraFrames(CameraVideoBuffer buffer) {
-    videoBuffer = buffer;
-    CameraFrameReader reader =
-        new CameraFrameReader(
-            new CameraFrameReader.Listener() {
-              @Override
-              public void onSurface(Surface surface) {
-                if (disposed || frameReader == null) return;
-                decoderSurface = surface;
-                if (!needsSurface) exoPlayer.setVideoSurface(surface);
-              }
-
-              @Override
-              public void onError() {
-                if (disposed || frameReader == null) return;
-                // Keep the direct preview available if GL capture is unsupported. Never read tiled
-                // decoder buffers as RGB or manufacture evidence from a failed capture.
-                CameraFrameReader failed = frameReader;
-                frameReader = null;
-                decoderSurface = null;
-                if (!needsSurface && surfaceProducer != null)
-                  exoPlayer.setVideoSurface(surfaceProducer.getSurface());
-                failed.close();
-              }
-            });
-    frameReader = reader;
-    reader.setOutput(surfaceProducer == null ? null : surfaceProducer.getSurface());
-    exoPlayer.addListener(
-        new Player.Listener() {
-          @Override
-          public void onVideoSizeChanged(VideoSize size) {
-            if (frameReader != null) frameReader.setVideoSize(size.width, size.height);
-          }
-        });
-    Format format = exoPlayer.getVideoFormat();
-    if (format != null) reader.setVideoSize(format.width, format.height);
-    reader.start();
-  }
-
-  public void readCameraFrame(int width, int height, Consumer<Bitmap> completion) {
-    CameraFrameReader reader = frameReader;
-    if (disposed || needsSurface || reader == null || !exoPlayer.isPlaying())
-      completion.accept(null);
-    else reader.read(width, height, completion);
   }
 
   public CameraVideoBuffer getCameraVideoBuffer() {
@@ -191,9 +135,7 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
     if (needsSurface) {
       // TextureVideoPlayer must always set a surfaceProducer.
       assert surfaceProducer != null;
-      if (frameReader != null) frameReader.setOutput(surfaceProducer.getSurface());
-      exoPlayer.setVideoSurface(
-          decoderSurface != null ? decoderSurface : surfaceProducer.getSurface());
+      exoPlayer.setVideoSurface(surfaceProducer.getSurface());
       needsSurface = false;
     }
   }
@@ -201,7 +143,6 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
   @RestrictTo(RestrictTo.Scope.LIBRARY)
   public void onSurfaceCleanup() {
     exoPlayer.setVideoSurface(null);
-    if (frameReader != null) frameReader.setOutput(null);
     needsSurface = true;
   }
 
@@ -239,11 +180,8 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
 
   public void dispose() {
     // Super must be called first to ensure the player is released before the surface.
-    disposed = true;
     super.dispose();
     if (videoBuffer != null) videoBuffer.close();
-    if (frameReader != null) frameReader.close();
-    frameReader = null;
 
     // TextureVideoPlayer must always set a surfaceProducer.
     assert surfaceProducer != null;

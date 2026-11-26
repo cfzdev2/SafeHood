@@ -5,13 +5,14 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.view.PixelCopy;
+import android.view.Surface;
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.util.Map;
 
 /** Samples only an existing RTSP player's video surface. Owned by one Flutter engine. */
 final class VideoFrameSampler {
@@ -53,9 +54,9 @@ final class VideoFrameSampler {
       result.success(null);
       return;
     }
-    Map<String, Object> frameStats = stats ? player.getPlayingFrameStats() : null;
-    if (stats && frameStats == null) {
-      result.success(null);
+    if (stats) {
+      // Playback health must not depend on copying a vendor decoder buffer.
+      result.success(player.getPlayingFrameStats());
       return;
     }
     if (clip) {
@@ -86,8 +87,9 @@ final class VideoFrameSampler {
                           })));
       return;
     }
-    if (copying || Build.VERSION.SDK_INT < 24) {
-      result.success(frameStats);
+    Surface surface = player.getPlayingSurface();
+    if (copying || Build.VERSION.SDK_INT < 24 || surface == null || !surface.isValid()) {
+      result.success(null);
       return;
     }
     Integer width = jpeg ? call.argument("width") : SAMPLE_WIDTH;
@@ -100,27 +102,43 @@ final class VideoFrameSampler {
       thread = new HandlerThread("SafeHoodCameraFrame");
       thread.start();
     }
+    Handler worker = new Handler(thread.getLooper());
     copying = true;
-    player.readCameraFrame(
-        width,
-        height,
-        bitmap -> {
-          Object data = frameStats;
-          try {
-            if (bitmap != null) {
-              boolean corrupt = isCorrupt(bitmap);
-              if (corrupt && player.getCameraVideoBuffer() != null)
-                player.getCameraVideoBuffer().invalidate();
-              if (frameStats != null) frameStats.put("corrupt", corrupt ? 1 : 0);
-              else if (!corrupt) data = jpeg ? encodeJpeg(bitmap) : luminance(bitmap);
+    worker.post(() -> copy(player, surface, width, height, jpeg, worker, result));
+  }
+
+  private void copy(
+      TextureVideoPlayer player,
+      Surface surface,
+      int width,
+      int height,
+      boolean jpeg,
+      Handler worker,
+      MethodChannel.Result result) {
+    Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+    try {
+      PixelCopy.request(
+          surface,
+          bitmap,
+          status -> {
+            byte[] data = null;
+            try {
+              if (status == PixelCopy.SUCCESS) {
+                boolean corrupt = isCorrupt(bitmap);
+                if (!corrupt) data = jpeg ? encodeJpeg(bitmap) : luminance(bitmap);
+              }
+            } catch (RuntimeException ignored) {
+              // A device may invalidate the buffer during a reconnect.
+            } finally {
+              bitmap.recycle();
+              complete(result, data);
             }
-          } catch (RuntimeException ignored) {
-            data = frameStats;
-          } finally {
-            if (bitmap != null) bitmap.recycle();
-            complete(result, data);
-          }
-        });
+          },
+          worker);
+    } catch (RuntimeException ignored) {
+      bitmap.recycle();
+      complete(result, null);
+    }
   }
 
   static boolean isCorrupt(Bitmap bitmap) {
