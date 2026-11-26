@@ -11,10 +11,16 @@ import 'local_camera_connection.dart';
 enum CameraRtspTransport { platformDefault, tcp }
 
 class CameraPlaybackAttempt {
-  const CameraPlaybackAttempt(this.uri, this.transport, {this.qualityPixels});
+  const CameraPlaybackAttempt(
+    this.uri,
+    this.transport, {
+    this.qualityPixels,
+    this.softwareDecoder = false,
+  });
   final Uri uri;
   final CameraRtspTransport transport;
   final int? qualityPixels;
+  final bool softwareDecoder;
 }
 
 class CameraLiveFrameStats {
@@ -23,12 +29,14 @@ class CameraLiveFrameStats {
     required this.rendered,
     required this.dropped,
     this.expectedFps,
+    this.corruptImage,
   });
 
   final int atMillis;
   final int rendered;
   final int dropped;
   final double? expectedFps;
+  final bool? corruptImage;
 }
 
 List<CameraPlaybackAttempt> cameraPlaybackAttempts(
@@ -46,6 +54,7 @@ List<CameraPlaybackAttempt> cameraPlaybackAttempts(
               ? CameraRtspTransport.tcp
               : CameraRtspTransport.platformDefault,
           qualityPixels: pixels,
+          softwareDecoder: preferred?.softwareDecoder ?? false,
         ),
       if (android)
         for (final uri in candidates.where((uri) => uri.scheme == 'rtsp'))
@@ -53,6 +62,7 @@ List<CameraPlaybackAttempt> cameraPlaybackAttempts(
             uri,
             CameraRtspTransport.platformDefault,
             qualityPixels: pixels,
+            softwareDecoder: preferred?.softwareDecoder ?? false,
           ),
     ];
     if (preferred != null) {
@@ -143,6 +153,7 @@ class CameraLivePlayback {
       expectedFps: expectedFps != null && expectedFps > 0 && expectedFps <= 240
           ? expectedFps
           : null,
+      corruptImage: stats.containsKey('corrupt') ? stats['corrupt'] == 1 : null,
     );
   }
 
@@ -166,6 +177,8 @@ class CameraLivePlayback {
           if (attempt.transport == CameraRtspTransport.tcp)
             'X-SafeHood-Rtsp-Transport': 'tcp',
           'X-SafeHood-Frame-Session': ?frameSession,
+          if (attempt.uri.scheme == 'rtsp' && attempt.softwareDecoder)
+            'X-SafeHood-Decoder': 'software',
         },
       );
       if (frameSession != null) _frameSessions[controller] = frameSession;

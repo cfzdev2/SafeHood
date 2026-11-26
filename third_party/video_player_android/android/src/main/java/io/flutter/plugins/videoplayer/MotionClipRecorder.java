@@ -49,8 +49,14 @@ final class MotionClipRecorder {
   private long lastPresentationUs;
   private boolean finished;
 
-  MotionClipRecorder(File cacheDirectory, Surface surface, int width, int height,
-      Handler worker, BooleanSupplier cancelled, Consumer<byte[]> complete) {
+  MotionClipRecorder(
+      File cacheDirectory,
+      Surface surface,
+      int width,
+      int height,
+      Handler worker,
+      BooleanSupplier cancelled,
+      Consumer<byte[]> complete) {
     this.cacheDirectory = cacheDirectory;
     this.surface = surface;
     this.width = width;
@@ -69,17 +75,18 @@ final class MotionClipRecorder {
       }
       bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
       temporary = File.createTempFile("safehood-motion-", ".mp4", cacheDirectory);
-      MediaFormat format = MediaFormat.createVideoFormat(
-          MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
-      format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+      MediaFormat format =
+          MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
+      format.setInteger(
+          MediaFormat.KEY_COLOR_FORMAT,
           MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
       format.setInteger(MediaFormat.KEY_FRAME_RATE, FPS);
       format.setInteger(MediaFormat.KEY_BIT_RATE, 300_000);
       format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
       encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
       encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-      muxer = new MediaMuxer(temporary.getAbsolutePath(),
-          MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+      muxer =
+          new MediaMuxer(temporary.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
       encoder.start();
       startedAt = SystemClock.uptimeMillis();
       capture();
@@ -93,8 +100,7 @@ final class MotionClipRecorder {
       finish(false);
       return;
     }
-    if (attempts >= FRAME_LIMIT
-        || SystemClock.uptimeMillis() - startedAt >= DEADLINE_MS) {
+    if (attempts >= FRAME_LIMIT || SystemClock.uptimeMillis() - startedAt >= DEADLINE_MS) {
       finish(true);
       return;
     }
@@ -112,10 +118,17 @@ final class MotionClipRecorder {
         finish(false);
         return;
       }
-      if (status == PixelCopy.SUCCESS) queueFrame();
+      if (status == PixelCopy.SUCCESS) {
+        if (VideoFrameSampler.isCorrupt(bitmap)) {
+          finish(false);
+          return;
+        }
+        queueFrame();
+      }
       // Keep at most one copy in flight even if the decoder or encoder is slow.
-      worker.postAtTime(this::capture, Math.max(SystemClock.uptimeMillis() + 16,
-          startedAt + attempts * 1000L / FPS));
+      worker.postAtTime(
+          this::capture,
+          Math.max(SystemClock.uptimeMillis() + 16, startedAt + attempts * 1000L / FPS));
     } catch (RuntimeException unavailable) {
       finish(false);
     }
@@ -150,8 +163,7 @@ final class MotionClipRecorder {
     }
     long now = SystemClock.uptimeMillis();
     if (frames == 0) firstFrameAt = now;
-    long pts = Math.max(frames == 0 ? 0 : lastPresentationUs + 1,
-        (now - firstFrameAt) * 1000);
+    long pts = Math.max(frames == 0 ? 0 : lastPresentationUs + 1, (now - firstFrameAt) * 1000);
     // Queueing returns ownership of the Image to MediaCodec.
     encoder.queueInputBuffer(input, 0, width * height * 3 / 2, pts, 0);
     lastPresentationUs = pts;
@@ -188,8 +200,7 @@ final class MotionClipRecorder {
       } else if (index >= 0) {
         boolean end = (output.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
         try {
-          if (output.size > 0
-              && (output.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+          if (output.size > 0 && (output.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
             ByteBuffer data = encoder.getOutputBuffer(index);
             if (data == null || track < 0) throw new IllegalStateException("No video track");
             data.position(output.offset);
@@ -210,12 +221,19 @@ final class MotionClipRecorder {
     finished = true;
     byte[] result = null;
     try {
-      if (save && frames >= 8 && lastPresentationUs >= 1_000_000
-          && !cancelled.getAsBoolean() && surface.isValid()) {
+      if (save
+          && frames >= 8
+          && lastPresentationUs >= 1_000_000
+          && !cancelled.getAsBoolean()
+          && surface.isValid()) {
         drain(false);
         int input = encoder.dequeueInputBuffer(40000);
         if (input >= 0) {
-          encoder.queueInputBuffer(input, 0, 0, lastPresentationUs + 1000000 / FPS,
+          encoder.queueInputBuffer(
+              input,
+              0,
+              0,
+              lastPresentationUs + 1000000 / FPS,
               MediaCodec.BUFFER_FLAG_END_OF_STREAM);
           if (drain(true) && track >= 0) {
             muxer.stop();
@@ -235,10 +253,16 @@ final class MotionClipRecorder {
     } finally {
       if (bitmap != null) bitmap.recycle();
       if (encoder != null) {
-        try { encoder.release(); } catch (RuntimeException ignored) { }
+        try {
+          encoder.release();
+        } catch (RuntimeException ignored) {
+        }
       }
       if (muxer != null) {
-        try { muxer.release(); } catch (RuntimeException ignored) { }
+        try {
+          muxer.release();
+        } catch (RuntimeException ignored) {
+        }
       }
       if (temporary != null) temporary.delete();
       complete.accept(result);

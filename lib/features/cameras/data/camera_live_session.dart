@@ -100,6 +100,8 @@ class CameraLiveSession extends ChangeNotifier {
   bool _reportedSlowFrames = false;
   int _slowFrameChecks = 0;
   bool _refreshedSlowStream = false;
+  int _corruptFrameChecks = 0;
+  int _corruptionRepairs = 0;
   int _stalledChecks = 0;
   int _movingChecks = 0;
   int _retryIndex = 0;
@@ -123,6 +125,7 @@ class CameraLiveSession extends ChangeNotifier {
     _recentStallStream = null;
     _recentStalls = 0;
     _refreshedSlowStream = false;
+    _corruptionRepairs = 0;
     return _begin(reconnecting: false);
   }
 
@@ -152,6 +155,7 @@ class CameraLiveSession extends ChangeNotifier {
       return Future<void>.value();
     }
     _retryIndex = 0;
+    _corruptionRepairs = 0;
     return _begin(reconnecting: true);
   }
 
@@ -159,6 +163,7 @@ class CameraLiveSession extends ChangeNotifier {
     if (!canRefresh) return;
     _refreshedSlowStream = true;
     _retryIndex = 0;
+    _corruptionRepairs = 0;
     _interrupted('Ręczne odświeżenie podglądu.', reopen: true);
   }
 
@@ -326,6 +331,13 @@ class CameraLiveSession extends ChangeNotifier {
       return;
     }
 
+    if (frameStats?.corruptImage == true) {
+      _movingChecks = 0;
+      if (++_corruptFrameChecks >= 2) _recoverCorruptImage();
+      return;
+    }
+    if (frameStats?.corruptImage == false) _corruptFrameChecks = 0;
+
     if (position == null && value.isPlaying && !value.isBuffering) {
       // One unavailable clock reading is not evidence that video froze.
       _stalledChecks = 0;
@@ -352,6 +364,7 @@ class CameraLiveSession extends ChangeNotifier {
         if (_movingChecks >= _stableChecksBeforeReset) {
           _recentStalls = 0;
           _refreshedSlowStream = false;
+          _corruptionRepairs = 0;
         }
         if (_movingChecks == 4) _rememberQuality(value);
       }
@@ -395,6 +408,23 @@ class CameraLiveSession extends ChangeNotifier {
     _lastFrameStats = null;
     _reportedSlowFrames = false;
     _slowFrameChecks = 0;
+    _corruptFrameChecks = 0;
+  }
+
+  void _recoverCorruptImage() {
+    if (!canRefresh || !_isRtsp || _userPaused) return;
+    if (++_corruptionRepairs > 2) {
+      _interrupted(
+        'Nie udało się odzyskać poprawnego obrazu. Spróbuj ponownie.',
+        corruptImage: true,
+      );
+      return;
+    }
+    _interrupted(
+      'Odebrano uszkodzony obraz. Dopasowuję odtwarzanie.',
+      reopen: true,
+      softwareDecoder: true,
+    );
   }
 
   void _refreshIfStillSlow() {
@@ -553,10 +583,14 @@ class CameraLiveSession extends ChangeNotifier {
     String message, {
     CameraLiveQualityProfile? qualityProfile,
     bool reopen = false,
+    bool softwareDecoder = false,
+    bool corruptImage = false,
   }) {
     final opened = _playback?.openedAttempt;
     final alternate =
-        _playback?.hasNext == true && (!_autoReconnect || !_hadProgress);
+        !corruptImage &&
+        _playback?.hasNext == true &&
+        (!_autoReconnect || !_hadProgress);
     final previous = _detachController();
     if (previous == null) return;
     debugPrint('CAMERA LIVE [${_provider.camera.id}]: $message');
@@ -565,12 +599,20 @@ class CameraLiveSession extends ChangeNotifier {
       unawaited(_begin(reconnecting: true, qualityProfile: qualityProfile));
     } else if (reopen) {
       _preferred = opened ?? _preferred;
+      if (softwareDecoder && opened != null) {
+        _preferred = CameraPlaybackAttempt(
+          opened.uri,
+          CameraRtspTransport.tcp,
+          qualityPixels: opened.qualityPixels,
+          softwareDecoder: true,
+        );
+      }
       unawaited(_begin(reconnecting: true));
     } else if (alternate) {
       unawaited(_begin(reconnecting: true, alternate: true));
     } else {
       _playback = null;
-      _failed(CameraConnectionIssue(message));
+      _failed(CameraConnectionIssue(message, retryable: !corruptImage));
     }
   }
 

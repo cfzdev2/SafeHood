@@ -15,6 +15,136 @@ import 'package:safehood/features/cameras/domain/camera_provider.dart';
 import 'package:video_player/video_player.dart';
 
 void main() {
+  testWidgets(
+    'corrupt images recover with a software decoder even when the clock advances',
+    (tester) async {
+      final provider = _Provider(choices: 2);
+      var clock = 0;
+      var corrupt = true;
+      final session = CameraLiveSession(
+        provider,
+        createPlayback: provider.createPlayback,
+        readFrameStats: (_) async => CameraLiveFrameStats(
+          atMillis: (clock += 5000),
+          rendered: clock ~/ 50,
+          dropped: 0,
+          corruptImage: corrupt,
+        ),
+      );
+      await session.resume();
+      for (var i = 0; i < 2; i++) {
+        provider.players.last.advance();
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pump();
+      }
+      expect(provider.players, hasLength(2));
+      expect(provider.players.first.disposed, isTrue);
+      expect(provider.players.last.attempt.softwareDecoder, isTrue);
+      expect(provider.players.last.attempt.transport, CameraRtspTransport.tcp);
+      corrupt = false;
+      for (var i = 0; i < 4; i++) {
+        provider.players.last.advance();
+        await tester.pump(const Duration(seconds: 5));
+      }
+      expect(provider.players, hasLength(2));
+      expect(session.phase, CameraLivePhase.playing);
+      session.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'persistent corruption has a bounded recovery budget and stops motion sampling',
+    (tester) async {
+      final provider = _Provider(choices: 2);
+      final session = CameraLiveSession(
+        provider,
+        createPlayback: provider.createPlayback,
+        readFrameStats: (_) async => const CameraLiveFrameStats(
+          atMillis: 1,
+          rendered: 1,
+          dropped: 0,
+          corruptImage: true,
+        ),
+      );
+      await session.resume();
+      for (var i = 0; i < 6; i++) {
+        provider.players.last.advance();
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pump();
+      }
+      expect(provider.players, hasLength(3));
+      expect(session.controller, isNull);
+      expect(session.phase, CameraLivePhase.unavailable);
+      await tester.pump(const Duration(minutes: 1));
+      expect(provider.players, hasLength(3));
+      await session.retry();
+      expect(provider.players, hasLength(4));
+      session.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets('a rejected snapshot cannot create a motion alert or recording', (
+    tester,
+  ) async {
+    final provider = _Provider();
+    final session = CameraLiveSession(
+      provider,
+      createPlayback: provider.createPlayback,
+    );
+    final toggle = StreamController<bool>.broadcast();
+    var frames = 0;
+    var reports = 0;
+    var recordings = 0;
+    final monitor = LiveMotionMonitor(
+      session: session,
+      enabled: toggle.stream,
+      sample: (_) async => _motionFrame(++frames > 1),
+      snapshot: (_) async => null,
+      save: (_, _) async {
+        reports++;
+        return 'unexpected';
+      },
+      recordClip: (_) async {
+        recordings++;
+        return null;
+      },
+      saveClip: (_, _) async {},
+    );
+    await session.resume();
+    toggle.add(true);
+    await tester.pump();
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 800));
+    }
+    expect(reports, 0);
+    expect(recordings, 0);
+    expect(monitor.value, LiveMotionStatus.watching);
+    monitor.dispose();
+    session.dispose();
+    unawaited(toggle.close());
+    await tester.pump();
+  });
+
+  test(
+    'software recovery remains a local playback option across stream choices',
+    () {
+      final uri = Uri.parse('rtsp://192.0.2.1/stream');
+      final choices = cameraPlaybackAttempts(
+        [uri],
+        android: true,
+        preferred: CameraPlaybackAttempt(
+          uri,
+          CameraRtspTransport.tcp,
+          softwareDecoder: true,
+        ),
+      );
+      expect(choices.first.transport, CameraRtspTransport.tcp);
+      expect(choices.every((attempt) => attempt.softwareDecoder), isTrue);
+    },
+  );
+
   testWidgets('a suspended view gives monitoring back to the phone service', (
     tester,
   ) async {
@@ -720,7 +850,12 @@ class _Provider extends Fake implements CameraProvider {
     CameraLiveQualityProfile? qualityProfile,
   }) {
     this.preferred.add(preferred);
-    return _Playback(this, choices, qualityProfile);
+    return _Playback(
+      this,
+      choices,
+      qualityProfile,
+      preferred?.softwareDecoder ?? false,
+    );
   }
 }
 
@@ -756,10 +891,12 @@ class _QualityStore implements CameraLiveQualityStore {
 }
 
 class _Playback extends CameraLivePlayback {
-  _Playback(this.provider, this._remaining, this._quality) : super(provider);
+  _Playback(this.provider, this._remaining, this._quality, this.software)
+    : super(provider);
   final _Provider provider;
   int _remaining;
   CameraLiveQualityProfile? _quality;
+  final bool software;
 
   @override
   bool get hasNext => _remaining > 0;
@@ -781,12 +918,14 @@ class _Playback extends CameraLivePlayback {
         quality.uri,
         CameraRtspTransport.tcp,
         qualityPixels: quality.pixels,
+        softwareDecoder: software,
       );
     } else {
       _remaining--;
       attempt = CameraPlaybackAttempt(
         Uri.parse('rtsp://192.168.1.9/profile-$_remaining'),
         CameraRtspTransport.tcp,
+        softwareDecoder: software,
       );
     }
     final player = _Player(attempt);

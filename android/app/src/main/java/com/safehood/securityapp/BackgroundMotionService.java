@@ -41,6 +41,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
+import io.flutter.plugins.videoplayer.CameraRtspRenderers;
 
 /** Monitors one opted-in local camera, including when there is no Flutter Activity. */
 @UnstableApi
@@ -136,6 +137,8 @@ public final class BackgroundMotionService extends Service {
     private DvripAlarmReceiver nativeReceiver;
     private boolean nativeAttempted;
     private boolean nativeConfirmed;
+    private boolean softwareDecoder;
+    private int corruptRestarts;
 
     private record Attempt(URI uri, boolean tcp) { }
 
@@ -281,6 +284,20 @@ public final class BackgroundMotionService extends Service {
             }
 
             @Override public void onError() { if (attempt == selected && frames != null) retry(); }
+
+            @Override public void onCorruptFrame() {
+                if (attempt != selected || frames == null || stopping) return;
+                softwareDecoder = true;
+                // Retry the same stream with a different decoder, retaining TCP.
+                int tcpAttempt = attempts.indexOf(new Attempt(selected.uri(), true));
+                nextAttempt = tcpAttempt >= 0 ? tcpAttempt : Math.max(0, nextAttempt - 1);
+                if (++corruptRestarts > 2) {
+                    closePlayback();
+                    cancelReconnect();
+                    phase("invalidVideo");
+                    scheduleReconnect(30_000);
+                } else retry();
+            }
         };
         frames = new BackgroundMotionFrames(receiver);
         frames.start();
@@ -330,7 +347,8 @@ public final class BackgroundMotionService extends Service {
         URI uri = selected.uri();
         var sockets = new LocalCameraPlayerChannel.CameraSockets(request.network().getSocketFactory(),
                 CameraLocalNetwork.ipv4(uri.getHost()), uri.getPort() == -1 ? 554 : uri.getPort());
-        var decoder = new ExoPlayer.Builder(this).build();
+        var decoder = new ExoPlayer.Builder(this,
+                CameraRtspRenderers.create(this, softwareDecoder)).build();
         player = decoder;
         decoder.addListener(new Player.Listener() {
             @Override public void onPlayerError(PlaybackException error) {
@@ -362,6 +380,7 @@ public final class BackgroundMotionService extends Service {
             return;
         }
         if (last != 0) {
+            if (SystemClock.elapsedRealtime() - openedAt >= 60_000) corruptRestarts = 0;
             backoff = 0;
             phase(uploadFailed ? "uploadFailed" : "watching");
         }
@@ -437,6 +456,7 @@ public final class BackgroundMotionService extends Service {
                 new Intent(this, BackgroundMotionService.class).setAction(STOP), PendingIntent.FLAG_IMMUTABLE);
         String detail = switch (phase) {
             case "nativeWatching" -> "Kamera wykrywa ruch. Telefon odbiera jej alarmy.";
+            case "invalidVideo" -> "Nieprawidłowy obraz. Wznawiam połączenie z kamerą.";
             case "watching" -> "Telefon obserwuje obraz z kamery.";
             case "preview" -> "Wykrywanie z otwartego podglądu.";
             case "reconnecting" -> "Wznawiam połączenie z kamerą.";

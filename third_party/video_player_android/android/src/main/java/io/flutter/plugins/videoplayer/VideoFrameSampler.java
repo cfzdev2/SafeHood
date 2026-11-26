@@ -14,6 +14,7 @@ import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugins.videoplayer.texture.TextureVideoPlayer;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.util.Map;
 
 /** Samples only an existing RTSP player's video surface. Owned by one Flutter engine. */
 final class VideoFrameSampler {
@@ -54,28 +55,33 @@ final class VideoFrameSampler {
       result.success(null);
       return;
     }
-    if (stats) {
-      result.success(player.getPlayingFrameStats());
+    Map<String, Object> frameStats = stats ? player.getPlayingFrameStats() : null;
+    if (stats && frameStats == null) {
+      result.success(null);
       return;
     }
     if (copying || Build.VERSION.SDK_INT < 24) {
-      result.success(null);
+      result.success(frameStats);
       return;
     }
     Surface surface = player.getPlayingSurface();
     if (surface == null || !surface.isValid()) {
-      result.success(null);
+      result.success(frameStats);
       return;
     }
     Integer width = jpeg || clip ? call.argument("width") : SAMPLE_WIDTH;
     Integer height = jpeg || clip ? call.argument("height") : SAMPLE_HEIGHT;
-    if (width == null || height == null || width < 1 || height < 1
-        || width > 640 || height > 640) {
+    if (width == null || height == null || width < 1 || height < 1 || width > 640 || height > 640) {
       result.success(null);
       return;
     }
-    if (clip && (width < 16 || height < 16 || width > MotionClipRecorder.MAX_EDGE
-        || height > MotionClipRecorder.MAX_EDGE || (width & 15) != 0 || (height & 15) != 0)) {
+    if (clip
+        && (width < 16
+            || height < 16
+            || width > MotionClipRecorder.MAX_EDGE
+            || height > MotionClipRecorder.MAX_EDGE
+            || (width & 15) != 0
+            || (height & 15) != 0)) {
       result.success(null);
       return;
     }
@@ -87,28 +93,43 @@ final class VideoFrameSampler {
     Handler worker = new Handler(thread.getLooper());
     copying = true;
     if (clip) {
-      worker.post(() -> new MotionClipRecorder(
-          cacheDirectory, surface, width, height, worker, () -> closed,
-          bytes -> complete(result, bytes)).start());
+      worker.post(
+          () ->
+              new MotionClipRecorder(
+                      cacheDirectory,
+                      surface,
+                      width,
+                      height,
+                      worker,
+                      () -> closed,
+                      bytes -> complete(result, bytes))
+                  .start());
     } else {
-      worker.post(() -> copy(surface, width, height, jpeg, worker, result));
+      worker.post(() -> copy(surface, width, height, jpeg, frameStats, worker, result));
     }
   }
 
   @RequiresApi(24)
   private void copy(
-      Surface surface, int width, int height, boolean jpeg,
-      Handler worker, MethodChannel.Result result) {
+      Surface surface,
+      int width,
+      int height,
+      boolean jpeg,
+      Map<String, Object> frameStats,
+      Handler worker,
+      MethodChannel.Result result) {
     Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
     try {
       PixelCopy.request(
           surface,
           bitmap,
           status -> {
-            byte[] data = null;
+            Object data = frameStats;
             try {
               if (status == PixelCopy.SUCCESS) {
-                data = jpeg ? encodeJpeg(bitmap) : luminance(bitmap);
+                boolean corrupt = isCorrupt(bitmap);
+                if (frameStats != null) frameStats.put("corrupt", corrupt ? 1 : 0);
+                else if (!corrupt) data = jpeg ? encodeJpeg(bitmap) : luminance(bitmap);
               }
             } catch (RuntimeException ignored) {
               // A device may invalidate the buffer during a reconnect.
@@ -122,6 +143,12 @@ final class VideoFrameSampler {
       bitmap.recycle();
       complete(result, null);
     }
+  }
+
+  static boolean isCorrupt(Bitmap bitmap) {
+    int[] pixels = new int[bitmap.getWidth() * bitmap.getHeight()];
+    bitmap.getPixels(pixels, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
+    return VideoFrameHealth.isCorrupt(pixels, bitmap.getWidth(), bitmap.getHeight());
   }
 
   private static byte[] luminance(Bitmap bitmap) {
@@ -146,12 +173,13 @@ final class VideoFrameSampler {
         : null;
   }
 
-  private void complete(MethodChannel.Result result, byte[] data) {
-    main.post(() -> {
-      copying = false;
-      result.success(closed ? null : data);
-      if (closed) stopThread();
-    });
+  private void complete(MethodChannel.Result result, Object data) {
+    main.post(
+        () -> {
+          copying = false;
+          result.success(closed ? null : data);
+          if (closed) stopThread();
+        });
   }
 
   void close() {

@@ -11,6 +11,13 @@ final class BackgroundMotionDetector {
     private int quietFrames;
     private boolean episode;
 
+    void reset() {
+        reference = null;
+        changedFrames = 0;
+        quietFrames = 0;
+        episode = false;
+    }
+
     boolean add(byte[] frame) {
         if (frame.length != PIXELS) return false;
         int low = 255;
@@ -20,10 +27,7 @@ final class BackgroundMotionDetector {
             high = Math.max(high, sample & 255);
         }
         if ((high < 6 || low > 249) && high - low <= 3) {
-            reference = null;
-            changedFrames = 0;
-            quietFrames = 0;
-            episode = false;
+            reset();
             return false;
         }
         if (reference == null) {
@@ -36,6 +40,13 @@ final class BackgroundMotionDetector {
         int changed = 0;
         for (int i = 0; i < PIXELS; i++) {
             if (Math.abs((frame[i] & 255) - (reference[i] & 255) - exposure) >= 24) changed++;
+        }
+        if (changed * 100 >= PIXELS * 80) {
+            // A whole-image discontinuity (decoder/scene reset) is not a
+            // localized motion track. Rebase before accepting another event.
+            reset();
+            reference = frame;
+            return false;
         }
         boolean moving = changed * 100 >= PIXELS * 7;
         if (episode) {

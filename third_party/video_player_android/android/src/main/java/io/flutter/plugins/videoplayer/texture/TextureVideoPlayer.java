@@ -63,7 +63,7 @@ public final class TextureVideoPlayer extends VideoPlayer implements SurfaceProd
         asset.getMediaItem(),
         options,
         () -> {
-          ExoPlayer.Builder builder = new ExoPlayer.Builder(context);
+          ExoPlayer.Builder builder = asset.createPlayerBuilder(context);
           if (options.backBufferDurationMs != null) {
             if (options.backBufferDurationMs < 0) {
               throw new IllegalArgumentException("backBufferDurationMs must be at least 0");

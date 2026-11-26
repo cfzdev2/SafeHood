@@ -15,6 +15,7 @@ import android.os.SystemClock;
 import android.view.PixelCopy;
 import android.view.Surface;
 import java.io.ByteArrayOutputStream;
+import io.flutter.plugins.videoplayer.VideoFrameHealth;
 
 /** A decoder surface whose consumer remains available with no Activity or window. */
 final class BackgroundMotionFrames implements AutoCloseable {
@@ -22,6 +23,7 @@ final class BackgroundMotionFrames implements AutoCloseable {
         void onSurface(Surface surface);
         void onMotion(long occurredAt, byte[] jpeg);
         void onError();
+        void onCorruptFrame();
     }
 
     private final HandlerThread thread = new HandlerThread("SafeHoodBackgroundFrames");
@@ -38,6 +40,7 @@ final class BackgroundMotionFrames implements AutoCloseable {
     private boolean copying;
     private long lastCopy;
     private long lastMotion;
+    private int corruptFrames;
     private volatile long lastSample;
     private volatile int videoWidth = 320;
     private volatile int videoHeight = 180;
@@ -114,8 +117,16 @@ final class BackgroundMotionFrames implements AutoCloseable {
         copy(sample, success -> {
             try {
                 if (!success || closed) return;
-                lastSample = SystemClock.elapsedRealtime();
                 sample.getPixels(argb, 0, sample.getWidth(), 0, 0, sample.getWidth(), sample.getHeight());
+                if (VideoFrameHealth.isCorrupt(argb, sample.getWidth(), sample.getHeight())) {
+                    detector.reset();
+                    if (++corruptFrames == 2) {
+                        main.post(() -> { if (!closed) listener.onCorruptFrame(); });
+                    }
+                    return;
+                }
+                corruptFrames = 0;
+                lastSample = SystemClock.elapsedRealtime();
                 byte[] luma = new byte[argb.length];
                 for (int i = 0; i < argb.length; i++) {
                     int rgb = argb[i];
@@ -144,6 +155,13 @@ final class BackgroundMotionFrames implements AutoCloseable {
             byte[] data = null;
             try {
                 if (!closed && success) {
+                    int[] pixels = new int[photo.getWidth() * photo.getHeight()];
+                    photo.getPixels(pixels, 0, photo.getWidth(), 0, 0, photo.getWidth(), photo.getHeight());
+                    if (VideoFrameHealth.isCorrupt(pixels, photo.getWidth(), photo.getHeight())) {
+                        detector.reset();
+                        main.post(() -> { if (!closed) listener.onCorruptFrame(); });
+                        return;
+                    }
                     ByteArrayOutputStream encoded = new ByteArrayOutputStream();
                     if (photo.compress(Bitmap.CompressFormat.JPEG, 75, encoded)
                             && encoded.size() <= 256 * 1024) data = encoded.toByteArray();
@@ -152,7 +170,7 @@ final class BackgroundMotionFrames implements AutoCloseable {
                 photo.recycle();
             }
             byte[] jpeg = data;
-            main.post(() -> { if (!closed) listener.onMotion(occurredAt, jpeg); });
+            if (jpeg != null) main.post(() -> { if (!closed) listener.onMotion(occurredAt, jpeg); });
         });
     }
 

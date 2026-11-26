@@ -9,15 +9,28 @@ import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.rtsp.RtspMediaSource;
 import androidx.media3.exoplayer.source.MediaSource;
 
 final class RtspVideoAsset extends VideoAsset {
   private final boolean forceRtpTcp;
+  private final boolean preferSoftware;
 
   RtspVideoAsset(@NonNull String assetUrl, boolean forceRtpTcp) {
+    this(assetUrl, forceRtpTcp, false);
+  }
+
+  RtspVideoAsset(@NonNull String assetUrl, boolean forceRtpTcp, boolean software) {
     super(assetUrl);
     this.forceRtpTcp = forceRtpTcp;
+    this.preferSoftware = software;
+  }
+
+  @Override
+  @OptIn(markerClass = UnstableApi.class)
+  public ExoPlayer.Builder createPlayerBuilder(@NonNull Context context) {
+    return new ExoPlayer.Builder(context, CameraRtspRenderers.create(context, preferSoftware));
   }
 
   @NonNull

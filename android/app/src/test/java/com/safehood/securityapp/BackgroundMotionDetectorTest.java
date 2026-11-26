@@ -27,6 +27,21 @@ public final class BackgroundMotionDetectorTest {
         assertTrue(detector.add(picture(120, true)));
     }
 
+    @Test public void wholeFrameDiscontinuityDoesNotProduceMotionOnTheReturnToVideo() {
+        var detector = new BackgroundMotionDetector();
+        byte[] first = new byte[BackgroundMotionDetector.PIXELS];
+        byte[] second = new byte[first.length];
+        for (int i = 0; i < first.length; i++) {
+            first[i] = (byte) ((i & 1) == 0 ? 35 : 200);
+            second[i] = (byte) ((i & 1) == 0 ? 200 : 35);
+        }
+        assertFalse(detector.add(first));
+        assertFalse(detector.add(second));
+        assertFalse(detector.add(second));
+        assertFalse(detector.add(first));
+        assertFalse(detector.add(first));
+    }
+
     @Test public void decoderBlankResetsUnconfirmedMotion() {
         var detector = new BackgroundMotionDetector();
         assertFalse(detector.add(picture(80, false)));

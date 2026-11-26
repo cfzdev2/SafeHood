@@ -190,7 +190,10 @@ class LiveMotionMonitor extends ValueNotifier<LiveMotionStatus> {
       value = LiveMotionStatus.saving;
       final jpeg = await _tryRead(_snapshot, player);
       if (!current()) return;
-      if (!_ready(player)) {
+      // A visual-only detection is untrusted if its frame cannot be read or
+      // the native sampler rejected a corrupt image. Don't publish an alarm.
+      if (!_ready(player) || jpeg == null) {
+        _detector.reset();
         value = LiveMotionStatus.waiting;
         return;
       }

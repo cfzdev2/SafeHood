@@ -47,7 +47,9 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
             binding.getTextureRegistry());
     flutterState.startListening(this, binding.getBinaryMessenger());
     frameSampler =
-        new VideoFrameSampler(binding.getBinaryMessenger(), framePlayers::get,
+        new VideoFrameSampler(
+            binding.getBinaryMessenger(),
+            framePlayers::get,
             binding.getApplicationContext().getCacheDir());
 
     binding
@@ -150,7 +152,8 @@ public class VideoPlayerPlugin implements FlutterPlugin, AndroidVideoPlayerApi {
     } else if (uri.startsWith("rtsp:")) {
       // Local playback option; never sent to the RTSP server.
       boolean forceRtpTcp = "tcp".equals(options.getHttpHeaders().get("X-SafeHood-Rtsp-Transport"));
-      return VideoAsset.fromRtspUrl(uri, forceRtpTcp);
+      boolean software = "software".equals(options.getHttpHeaders().get("X-SafeHood-Decoder"));
+      return VideoAsset.fromRtspUrl(uri, forceRtpTcp, software);
     } else {
       VideoAsset.StreamingFormat streamingFormat = VideoAsset.StreamingFormat.UNKNOWN;
       PlatformVideoFormat formatHint = options.getFormatHint();

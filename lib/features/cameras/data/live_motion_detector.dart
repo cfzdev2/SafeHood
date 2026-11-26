@@ -47,6 +47,11 @@ class LiveMotionDetector {
     for (var i = 0; i < pixels; i++) {
       if ((frame[i] - previous[i] - exposureShift).abs() >= 24) changed++;
     }
+    if (changed * 100 >= pixels * 80) {
+      reset();
+      _previous = frame;
+      return false;
+    }
     final moving = changed * 100 >= pixels * 7;
 
     if (_episode) {

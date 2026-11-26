@@ -8,6 +8,7 @@ import android.content.Context;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.media3.common.MediaItem;
+import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.MediaSource;
 import java.util.HashMap;
 import java.util.Map;
@@ -54,10 +55,15 @@ public abstract class VideoAsset {
    */
   @NonNull
   static VideoAsset fromRtspUrl(@NonNull String rtspUrl, boolean forceRtpTcp) {
+    return fromRtspUrl(rtspUrl, forceRtpTcp, false);
+  }
+
+  @NonNull
+  static VideoAsset fromRtspUrl(@NonNull String rtspUrl, boolean forceRtpTcp, boolean software) {
     if (!rtspUrl.startsWith("rtsp://")) {
       throw new IllegalArgumentException("rtspUrl must start with 'rtsp://'");
     }
-    return new RtspVideoAsset(rtspUrl, forceRtpTcp);
+    return new RtspVideoAsset(rtspUrl, forceRtpTcp, software);
   }
 
   @Nullable protected final String assetUrl;
@@ -73,6 +79,12 @@ public abstract class VideoAsset {
    */
   @NonNull
   public abstract MediaItem getMediaItem();
+
+  @NonNull
+  @androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
+  public ExoPlayer.Builder createPlayerBuilder(@NonNull Context context) {
+    return new ExoPlayer.Builder(context);
+  }
 
   /**
    * Returns the configured media source factory, if needed for this asset type.

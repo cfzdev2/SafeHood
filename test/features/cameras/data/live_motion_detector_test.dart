@@ -17,6 +17,24 @@ Uint8List _frame({int light = 0, bool movement = false}) {
 }
 
 void main() {
+  test(
+    'rebases a whole-frame discontinuity without raising a motion alarm',
+    () {
+      final detector = LiveMotionDetector();
+      final first = Uint8List.fromList(
+        List.generate(LiveMotionDetector.pixels, (i) => i.isEven ? 35 : 200),
+      );
+      final second = Uint8List.fromList(
+        first.map((value) => 235 - value).toList(),
+      );
+      expect(detector.add(first), isFalse);
+      expect(detector.add(second), isFalse);
+      expect(detector.add(second), isFalse);
+      expect(detector.add(first), isFalse);
+      expect(detector.add(first), isFalse);
+    },
+  );
+
   test('ignores global brightness and a single damaged frame', () {
     final detector = LiveMotionDetector();
     expect(detector.add(_frame()), isFalse);
