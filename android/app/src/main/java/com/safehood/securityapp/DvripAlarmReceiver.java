@@ -12,6 +12,7 @@ import javax.net.SocketFactory;
 final class DvripAlarmReceiver implements AutoCloseable {
     record Credentials(String host, String username, String password) { }
     interface Listener {
+        void onSubscribed();
         void onMotion(long occurredAt, byte[] jpeg);
         void onClosed();
     }
@@ -43,6 +44,7 @@ final class DvripAlarmReceiver implements AutoCloseable {
                 client.login(credentials.username(), credentials.password());
                 client.configureMotion(true);
                 client.subscribe();
+                listener.onSubscribed();
                 long keepAliveAt = System.nanoTime();
                 long lastMotionAt = 0;
                 while (!closed) {

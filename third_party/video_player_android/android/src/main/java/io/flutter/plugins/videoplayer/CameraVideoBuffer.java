@@ -86,11 +86,13 @@ public final class CameraVideoBuffer implements AutoCloseable {
     public final long timeUs;
     public final boolean keyFrame;
     public final byte[] data;
+    private final long receivedAtMillis;
 
-    Sample(long timeUs, boolean keyFrame, byte[] data) {
+    Sample(long timeUs, boolean keyFrame, byte[] data, long receivedAtMillis) {
       this.timeUs = timeUs;
       this.keyFrame = keyFrame;
       this.data = data;
+      this.receivedAtMillis = receivedAtMillis;
     }
   }
 
@@ -131,7 +133,7 @@ public final class CameraVideoBuffer implements AutoCloseable {
     if (samples.isEmpty() && !keyFrame) return;
     byte[] copy = new byte[size];
     input.duplicate().get(copy);
-    Sample sample = new Sample(timeUs, keyFrame, copy);
+    Sample sample = new Sample(timeUs, keyFrame, copy, atMillis);
     samples.addLast(sample);
     bytes += size;
     newestUs = Math.max(newestUs, timeUs);
@@ -162,31 +164,70 @@ public final class CameraVideoBuffer implements AutoCloseable {
     return begin(nowMillis, anchorAt(System.nanoTime()));
   }
 
-  public synchronized Recording begin(long nowMillis, Anchor anchor) {
+  // A camera alarm has no displayed frame of its own. Prefer the presentation timeline
+  // when available, otherwise map the alarm to an actual packet already received at that
+  // instant. Both histories belong to this stream epoch; never use a later packet.
+  public synchronized Anchor backgroundAnchorAt(long presentationNs, long arrivalMillis) {
+    Anchor displayed = anchorAt(presentationNs);
+    if (displayed != null && displayed.timeUs <= newestUs && firstKeyAt(displayed.timeUs) != null)
+      return displayed;
+    for (var it = samples.descendingIterator(); it.hasNext(); ) {
+      Sample sample = it.next();
+      if (sample.receivedAtMillis > arrivalMillis) continue;
+      if (arrivalMillis - sample.receivedAtMillis > 1500) return null;
+      return new Anchor(sample.timeUs, epoch);
+    }
+    return null;
+  }
+
+  public synchronized boolean unsupportedClipFormat() {
+    return format != null
+        && (!"video/avc".equals(format.mime) || format.width > 1280 || format.height > 720);
+  }
+
+  public synchronized long lastRecordablePacketAt() {
     if (closed
-        || anchor == null
-        || anchor.epoch != epoch
-        || anchor.timeUs > newestUs
-        || recording != null
-        || samples.isEmpty()
-        || nowMillis - newestAt > 1500
         || format == null
-        || format.initializationData.isEmpty()
+        || unsupportedClipFormat()
         || format.width < 1
         || format.height < 1
-        || format.width > 1280
-        || format.height > 720) return null;
-    // Pick a real key frame inside the prebuffer window; never invent missing history.
-    Sample first = null;
+        || format.initializationData.isEmpty()
+        || samples.isEmpty()) return -1;
+    return newestAt;
+  }
+
+  public synchronized boolean hasRecentRecordablePackets(long nowMillis) {
+    long last = lastRecordablePacketAt();
+    return last >= 0 && nowMillis >= last && nowMillis - last <= 1500;
+  }
+
+  private Sample firstKeyAt(long timeUs) {
     for (Sample sample : samples) {
-      if (sample.keyFrame
-          && sample.timeUs >= anchor.timeUs - PREBUFFER_US
-          && sample.timeUs <= anchor.timeUs) {
-        first = sample;
-        break;
-      }
+      if (sample.keyFrame && sample.timeUs >= timeUs - PREBUFFER_US && sample.timeUs <= timeUs)
+        return sample;
     }
-    if (first == null) return null;
+    return null;
+  }
+
+  /** Coarse recording diagnostics only. Never includes a camera address or media. */
+  public synchronized String startProblem(long nowMillis, Anchor anchor) {
+    if (closed) return "receiver_closed";
+    if (format == null) return "waiting_for_format";
+    if (unsupportedClipFormat()) return "unsupported_profile";
+    if (format.width < 1 || format.height < 1 || format.initializationData.isEmpty())
+      return "incomplete_format";
+    if (samples.isEmpty()) return "waiting_for_keyframe";
+    if (!hasRecentRecordablePackets(nowMillis)) return "stale_packets";
+    if (anchor == null) return "no_frame_at_alarm";
+    if (anchor.epoch != epoch || anchor.timeUs > newestUs) return "stream_changed";
+    if (recording != null) return "already_recording";
+    if (firstKeyAt(anchor.timeUs) == null) return "no_keyframe_before_alarm";
+    return null;
+  }
+
+  public synchronized Recording begin(long nowMillis, Anchor anchor) {
+    if (startProblem(nowMillis, anchor) != null) return null;
+    Sample first = firstKeyAt(anchor.timeUs);
     List<Sample> selected = new ArrayList<>();
     boolean include = false;
     for (Sample sample : samples) {

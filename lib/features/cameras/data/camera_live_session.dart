@@ -111,7 +111,7 @@ class CameraLiveSession extends ChangeNotifier {
   bool _active = false;
   bool _closed = false;
   bool _userPaused = false;
-  int? _previewLease;
+  CameraPreviewLease? _previewLease;
   double _volume;
 
   Future<void> resume() {
@@ -231,6 +231,11 @@ class CameraLiveSession extends ChangeNotifier {
     var startedProvider = false;
     var usingSavedQuality = false;
     try {
+      final lease = _previewLease;
+      if (lease != null) {
+        await lease.ready;
+        if (!isCurrent()) return;
+      }
       if (!alternate) {
         if (qualityProfile == null) {
           await _provider.connect();

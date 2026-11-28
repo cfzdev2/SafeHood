@@ -184,6 +184,7 @@ class CameraMonitoringCoordinator extends ChangeNotifier {
     if (phone.cameraId == camera.id) {
       if (phone.phase == 'watching' ||
           phone.phase == 'preview' ||
+          phone.phase == 'awaitingNativeAlarm' ||
           phone.phase == 'nativeWatching') {
         return AutomaticMonitoringStatus.phone;
       }
@@ -202,6 +203,11 @@ class CameraMonitoringCoordinator extends ChangeNotifier {
         camera.xmMonitoringStatus == 'confirmed') {
       return 'Alarmy kamery docierają do SafeHood przez usługę producenta, '
           'niezależnie od telefonu. Dostępność obrazu jest sprawdzana osobno.';
+    }
+    if (status == AutomaticMonitoringStatus.phone &&
+        phoneStatus.value.cameraId == camera.id &&
+        phoneStatus.value.phase == 'awaitingNativeAlarm') {
+      return 'Telefon odbiera obraz i czeka na pierwszy alarm ruchu z kamery.';
     }
     if (status == AutomaticMonitoringStatus.phone &&
         phoneStatus.value.cameraId == camera.id &&

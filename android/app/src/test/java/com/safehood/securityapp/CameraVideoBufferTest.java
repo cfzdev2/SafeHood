@@ -160,4 +160,69 @@ public final class CameraVideoBufferTest {
           ByteBuffer.wrap(new byte[800_000]), i * 100_000L, i % 10 == 0, 10_000 + i * 100L);
     assertNull(buffer.finish(recording, 13_000));
   }
+
+  private void receive(CameraVideoBuffer buffer, int i) {
+    buffer.append(
+        ByteBuffer.wrap(new byte[] {(byte) i}), i * 100_000L, i % 10 == 0, 10_000 + i * 100L);
+  }
+
+  @Test
+  public void nativeAlarmWithNoDisplayKeepsActualVideoBeforeAndAfterMotion() {
+    var buffer = buffer();
+    // The alarm photo arrived 3 seconds after the alarm. No frames went to a display.
+    for (int i = 0; i <= 100; i++) receive(buffer, i);
+    assertNull(buffer.anchorAt(17_000_000_000L));
+    var atMotion = buffer.backgroundAnchorAt(17_000_000_000L, 17_000);
+    assertNotNull(atMotion);
+    assertEquals(7_000_000L, atMotion.timeUs);
+    var job = buffer.begin(20_000, atMotion);
+    assertNotNull(job);
+    for (int i = 101; i <= 120; i++) receive(buffer, i);
+    var clip = buffer.finish(job, 22_000);
+    assertNotNull(clip);
+    assertEquals(5000, clip.prebufferMillis);
+    assertArrayEquals(new byte[] {20}, clip.samples.get(0).data);
+    assertArrayEquals(new byte[] {120}, clip.samples.get(clip.samples.size() - 1).data);
+  }
+
+  @Test
+  public void aRealDisplayAnchorStillWinsOverDecoderLookAheadInBackground() {
+    var buffer = buffer();
+    for (int i = 0; i <= 100; i++) receive(buffer, i);
+    buffer.presented(6_000_000L, 20_000_000_000L);
+    // The camera has delivered 10s, but only 6s was on screen at detection.
+    assertEquals(6_000_000L, buffer.backgroundAnchorAt(20_000_000_000L, 20_000).timeUs);
+  }
+
+  @Test
+  public void packetFallbackNeverUsesFutureStaleOrPreviousSessionEvidence() {
+    var buffer = buffer();
+    receive(buffer, 0);
+    assertNull(buffer.backgroundAnchorAt(0, 9999));
+    assertNull(buffer.backgroundAnchorAt(0, 12_000));
+    var old = buffer.backgroundAnchorAt(0, 10_000);
+    buffer.invalidate();
+    assertEquals(-1L, buffer.lastRecordablePacketAt());
+    receive(buffer, 30);
+    assertNull(buffer.backgroundAnchorAt(0, 10_000));
+    assertEquals("stream_changed", buffer.startProblem(13_000, old));
+    buffer.close();
+    assertNull(buffer.backgroundAnchorAt(0, 13_000));
+  }
+
+  @Test
+  public void incompatibleProfileAndMissingKeyframeAreDistinguished() {
+    var buffer = new CameraVideoBuffer();
+    assertEquals("waiting_for_format", buffer.startProblem(10_000, null));
+    buffer.configure(new CameraVideoBuffer.StreamFormat("video/hevc", 640, 360, List.of()));
+    assertTrue(buffer.unsupportedClipFormat());
+    assertEquals("unsupported_profile", buffer.startProblem(10_000, null));
+    buffer = buffer();
+    assertFalse(buffer.unsupportedClipFormat());
+    receive(buffer, 1);
+    assertEquals("waiting_for_keyframe", buffer.startProblem(10_100, null));
+    receive(buffer, 10);
+    assertTrue(buffer.hasRecentRecordablePackets(11_000));
+    assertFalse(buffer.hasRecentRecordablePackets(14_000));
+  }
 }

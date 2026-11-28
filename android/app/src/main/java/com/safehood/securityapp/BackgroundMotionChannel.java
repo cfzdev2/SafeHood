@@ -78,8 +78,10 @@ public final class BackgroundMotionChannel implements AutoCloseable {
                 }
                 case "preview" -> {
                     Integer lease = call.argument("lease");
-                    if (lease != null) BackgroundMotionService.preview(lease, call.argument("cameraId"));
-                    result.success(null);
+                    if (lease == null) result.success(null);
+                    else BackgroundMotionService.preview(lease, call.argument("cameraId"), () -> {
+                        if (!closed) result.success(null);
+                    });
                 }
                 default -> result.notImplemented();
             }

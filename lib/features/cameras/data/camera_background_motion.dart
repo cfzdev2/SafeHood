@@ -25,6 +25,13 @@ class CameraBackgroundMotionStatus {
       );
 }
 
+class CameraPreviewLease {
+  const CameraPreviewLease(this.id, this.ready);
+
+  final int id;
+  final Future<void> ready;
+}
+
 /// Runs the phone receiver for the saved motion preference, without a separate
 /// user setting. It is a local fallback; independent monitoring needs a receiver
 /// that can reach the camera while this phone is unavailable.
@@ -160,23 +167,24 @@ class CameraBackgroundMotion {
   Future<void> stop(String cameraId) =>
       _channel.invokeMethod<void>('stop', {'cameraId': cameraId});
 
-  static int? claimPreview(Camera camera) {
+  static CameraPreviewLease? claimPreview(Camera camera) {
     if (!supported(camera)) return null;
     final lease = ++_nextPreview;
-    unawaited(_setPreview(lease, camera.id));
-    return lease;
+    return CameraPreviewLease(lease, _setPreview(lease, camera.id));
   }
 
-  static void releasePreview(int? lease) {
-    if (lease != null) unawaited(_setPreview(lease, null));
+  static void releasePreview(CameraPreviewLease? lease) {
+    if (lease != null) unawaited(_setPreview(lease.id, null));
   }
 
   static Future<void> _setPreview(int lease, String? cameraId) async {
     try {
-      await _channel.invokeMethod<void>('preview', {
-        'lease': lease,
-        'cameraId': ?cameraId,
-      });
+      await _channel
+          .invokeMethod<void>('preview', {
+            'lease': lease,
+            'cameraId': ?cameraId,
+          })
+          .timeout(const Duration(seconds: 9), onTimeout: () {});
     } on PlatformException {
       // The preview still works when monitoring is unavailable.
     } on MissingPluginException {

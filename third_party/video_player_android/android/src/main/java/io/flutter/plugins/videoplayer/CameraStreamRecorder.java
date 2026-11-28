@@ -33,9 +33,28 @@ public final class CameraStreamRecorder {
       Handler worker,
       BooleanSupplier cancelled,
       Consumer<Map<String, Object>> completion) {
-    CameraVideoBuffer.Recording recording = buffer.begin(SystemClock.elapsedRealtime(), anchor);
+    startWithResult(
+        cache, buffer, anchor, worker, cancelled, result -> completion.accept(result.clip()));
+  }
+
+  public record Result(Map<String, Object> clip, String failure) {}
+
+  public static void startWithResult(
+      File cache,
+      CameraVideoBuffer buffer,
+      CameraVideoBuffer.Anchor anchor,
+      Handler worker,
+      BooleanSupplier cancelled,
+      Consumer<Result> completion) {
+    long now = SystemClock.elapsedRealtime();
+    CameraVideoBuffer.Recording recording;
+    String problem;
+    synchronized (buffer) {
+      recording = buffer.begin(now, anchor);
+      problem = recording == null ? buffer.startProblem(now, anchor) : null;
+    }
     if (recording == null) {
-      completion.accept(null);
+      completion.accept(new Result(null, problem == null ? "buffer_not_ready" : problem));
       return;
     }
     long deadline = SystemClock.elapsedRealtime() + 6000;
@@ -51,13 +70,15 @@ public final class CameraStreamRecorder {
             }
             CameraVideoBuffer.Recording ready =
                 buffer.finish(recording, SystemClock.elapsedRealtime());
-            completion.accept(cancelled.getAsBoolean() || ready == null ? null : mux(cache, ready));
+            if (cancelled.getAsBoolean()) completion.accept(new Result(null, "cancelled"));
+            else if (ready == null) completion.accept(new Result(null, "interrupted_or_short"));
+            else completion.accept(mux(cache, ready));
           }
         };
     worker.post(poll);
   }
 
-  private static Map<String, Object> mux(File cache, CameraVideoBuffer.Recording recording) {
+  private static Result mux(File cache, CameraVideoBuffer.Recording recording) {
     File temporary = null;
     MediaMuxer muxer = null;
     try {
@@ -84,7 +105,7 @@ public final class CameraStreamRecorder {
       }
       muxer.stop();
       long size = temporary.length();
-      if (size < 100 || size > CameraVideoBuffer.MAX_BYTES) return null;
+      if (size < 100 || size > CameraVideoBuffer.MAX_BYTES) return new Result(null, "mp4_size");
       Map<String, Object> result = new HashMap<>();
       byte[] bytes = new byte[(int) size];
       try (DataInputStream input = new DataInputStream(new FileInputStream(temporary))) {
@@ -95,9 +116,9 @@ public final class CameraStreamRecorder {
       Log.i(
           "SafeHoodVideo",
           "Original stream clip: bytes=" + size + ", prebufferMillis=" + recording.prebufferMillis);
-      return result;
+      return new Result(result, null);
     } catch (Exception unavailable) {
-      return null;
+      return new Result(null, "mp4_write_failed");
     } finally {
       if (muxer != null)
         try {

@@ -15,6 +15,15 @@ import 'package:safehood/features/cameras/domain/camera_provider.dart';
 import 'package:video_player/video_player.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  const backgroundChannel = MethodChannel('safehood/background_motion');
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  setUp(() {
+    messenger.setMockMethodCallHandler(backgroundChannel, (_) async => null);
+  });
+  tearDown(() => messenger.setMockMethodCallHandler(backgroundChannel, null));
+
   testWidgets(
     'corrupt images recover with a software decoder even when the clock advances',
     (tester) async {
@@ -191,6 +200,50 @@ void main() {
       );
       expect(choices.first.transport, CameraRtspTransport.tcp);
       expect(choices.every((attempt) => attempt.softwareDecoder), isTrue);
+    },
+  );
+
+  testWidgets(
+    'live waits for background capture and ignores an abandoned lease',
+    (tester) async {
+      const channel = MethodChannel('safehood/background_motion');
+      final grants = <Completer<void>>[];
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'preview' && call.arguments['cameraId'] != null) {
+          final gate = Completer<void>();
+          grants.add(gate);
+          await gate.future;
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final provider = _Provider();
+      final view = CameraLiveSession(
+        provider,
+        createPlayback: provider.createPlayback,
+      );
+
+      final abandoned = view.resume();
+      await tester.pump();
+      expect(grants, hasLength(1));
+      expect(provider.players, isEmpty);
+      await view.suspend();
+      grants.first.complete();
+      await tester.pump();
+      await abandoned;
+      expect(provider.players, isEmpty);
+
+      final current = view.resume();
+      await tester.pump();
+      expect(grants, hasLength(2));
+      expect(provider.players, isEmpty);
+      grants.last.complete();
+      await tester.pump();
+      await current;
+      expect(provider.players, hasLength(1));
+      view.dispose();
+      await tester.pump();
     },
   );
 

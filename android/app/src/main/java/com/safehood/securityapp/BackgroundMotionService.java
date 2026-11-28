@@ -31,15 +31,19 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.functions.FirebaseFunctions;
+import com.google.firebase.functions.FirebaseFunctionsException;
 import com.google.firebase.functions.HttpsCallableReference;
 import io.flutter.plugins.videoplayer.CameraRtspRenderers;
 import io.flutter.plugins.videoplayer.CameraStreamRecorder;
 import io.flutter.plugins.videoplayer.CameraVideoBuffer;
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
 import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -106,13 +110,19 @@ public final class BackgroundMotionService extends Service {
     changed();
   }
 
-  static void preview(int lease, String camera) {
+  static void preview(int lease, String camera, Runnable granted) {
     String old = camera == null ? previews.remove(lease) : previews.put(lease, camera);
     if (current != null
         && current.request != null
         && (current.request.camera().equals(camera) || current.request.camera().equals(old))) {
-      current.sync();
+      BackgroundMotionService service = current;
+      service.sync();
+      if (service.request.camera().equals(camera) && !service.stopping) {
+        service.clipHandoff.whenAvailable(granted);
+        return;
+      }
     }
+    granted.run();
   }
 
   static void clearPreviews() {
@@ -152,11 +162,17 @@ public final class BackgroundMotionService extends Service {
   private HttpsCallableReference ingest;
   private HttpsCallableReference clipUpload;
   private CameraVideoBuffer videoBuffer;
+  private final BackgroundClipHandoff clipHandoff = new BackgroundClipHandoff();
+  private final HashSet<URI> unsupportedProfiles = new HashSet<>();
+  private long clipSequence;
+  private String lastClipState = "no_event";
   private HandlerThread recordingThread;
   private BackgroundClipDelivery pendingClip;
   private DvripAlarmReceiver nativeReceiver;
   private boolean nativeAttempted;
   private boolean nativeConfirmed;
+  private boolean nativeSubscribed;
+  private boolean visualReceiverFailed;
   private boolean softwareDecoder;
   private int corruptRestarts;
 
@@ -259,10 +275,13 @@ public final class BackgroundMotionService extends Service {
     if (stopping || !enabled) return;
     if (previewOpen()) {
       cancelReconnect();
+      // A tapped notification can resume the camera screen while its clip is still collecting.
+      // The caller waits on this same lease; the upload does not hold the camera.
+      if (clipHandoff.collecting()) return;
       closePlayback();
       closeNative();
       phase("preview");
-    } else if (frames == null && !reconnectScheduled) {
+    } else if (frames == null && player == null && !reconnectScheduled) {
       // Give the foreground decoder time to release the camera on navigation.
       scheduleReconnect("preview".equals(phase) ? 550 : 0);
     }
@@ -280,7 +299,7 @@ public final class BackgroundMotionService extends Service {
   }
 
   private void open() {
-    if (stopping || !enabled || previewOpen() || frames != null) return;
+    if (stopping || !enabled || previewOpen() || frames != null || player != null) return;
     if (!ownsCamera()) {
       finish();
       return;
@@ -307,12 +326,24 @@ public final class BackgroundMotionService extends Service {
     }
     if (uri == null) {
       nextAttempt = 0;
+      // A subscription alone does not prove that alarms will keep arriving.
+      // If all recording attempts failed, allow visual monitoring another turn.
+      if (!nativeConfirmed) visualReceiverFailed = false;
       retry();
       return;
     }
     phase("starting");
     openedAt = SystemClock.elapsedRealtime();
     Attempt selected = attempt;
+    if (canRecordWithoutDisplay()) {
+      try {
+        startPlayback(selected, null);
+        main.postDelayed(watchdog, 1000);
+      } catch (Exception unavailable) {
+        retry();
+      }
+      return;
+    }
     var receiver =
         new BackgroundMotionFrames.Listener() {
           @Override
@@ -321,7 +352,7 @@ public final class BackgroundMotionService extends Service {
             try {
               startPlayback(selected, surface);
             } catch (Exception error) {
-              retry();
+              retryAfterVisualFailure();
             }
           }
 
@@ -333,17 +364,22 @@ public final class BackgroundMotionService extends Service {
 
           @Override
           public void onError() {
-            if (attempt == selected && frames != null) retry();
+            if (attempt == selected && frames != null) retryAfterVisualFailure();
           }
 
           @Override
           public void onCorruptFrame() {
             if (attempt != selected || frames == null || stopping) return;
+            if (nativeConfirmed && receivingEncodedVideo()) return;
             softwareDecoder = true;
             // Retry the same stream with a different decoder, retaining TCP.
             int tcpAttempt = attempts.indexOf(new Attempt(selected.uri(), true));
             nextAttempt = tcpAttempt >= 0 ? tcpAttempt : Math.max(0, nextAttempt - 1);
             if (++corruptRestarts > 2) {
+              if (nativeSubscribed) {
+                retryAfterVisualFailure();
+                return;
+              }
               closePlayback();
               cancelReconnect();
               phase("invalidVideo");
@@ -356,6 +392,19 @@ public final class BackgroundMotionService extends Service {
     main.postDelayed(watchdog, 1000);
   }
 
+  private boolean canRecordWithoutDisplay() {
+    return nativeSubscribed && (nativeConfirmed || visualReceiverFailed);
+  }
+
+  private void retryAfterVisualFailure() {
+    visualReceiverFailed = true;
+    if (canRecordWithoutDisplay() && attempt != null) {
+      int tcp = attempts.indexOf(new Attempt(attempt.uri(), true));
+      if (tcp >= 0) nextAttempt = tcp;
+    }
+    retry();
+  }
+
   private void startNative() {
     if (request.nativeCredentials() == null || nativeAttempted || nativeReceiver != null) return;
     nativeAttempted = true;
@@ -365,6 +414,17 @@ public final class BackgroundMotionService extends Service {
             request.network().getSocketFactory(),
             request.nativeCredentials(),
             new DvripAlarmReceiver.Listener() {
+              @Override
+              public void onSubscribed() {
+                main.post(
+                    () -> {
+                      if (stopping || previewOpen() || nativeReceiver != holder[0]) return;
+                      nativeSubscribed = true;
+                      if (visualReceiverFailed && frames == null && player == null)
+                        scheduleReconnect(0);
+                    });
+              }
+
               @Override
               public void onMotion(long occurredAt, byte[] jpeg) {
                 main.post(
@@ -383,7 +443,7 @@ public final class BackgroundMotionService extends Service {
                               ? firstChange
                               : occurredAt;
                       send(eventAt, jpeg);
-                      if (frames == null && !reconnectScheduled) scheduleReconnect(0);
+                      if (frames == null && player == null) scheduleReconnect(0);
                     });
               }
 
@@ -393,7 +453,9 @@ public final class BackgroundMotionService extends Service {
                     () -> {
                       if (stopping || nativeReceiver != holder[0]) return;
                       nativeReceiver = null;
+                      nativeSubscribed = false;
                       nativeConfirmed = false;
+                      visualReceiverFailed = false;
                       if (!previewOpen() && frames == null) retry();
                     });
               }
@@ -407,6 +469,8 @@ public final class BackgroundMotionService extends Service {
     var receiver = nativeReceiver;
     nativeReceiver = null;
     nativeConfirmed = false;
+    nativeSubscribed = false;
+    visualReceiverFailed = false;
     nativeAttempted = false;
     if (receiver != null) receiver.close();
   }
@@ -419,9 +483,11 @@ public final class BackgroundMotionService extends Service {
             CameraLocalNetwork.ipv4(uri.getHost()),
             uri.getPort() == -1 ? 554 : uri.getPort());
     videoBuffer = new CameraVideoBuffer();
-    var decoder =
-        new ExoPlayer.Builder(this, CameraRtspRenderers.create(this, softwareDecoder, videoBuffer))
-            .build();
+    var renderers =
+        surface == null
+            ? AlarmPacketRenderer.factory(videoBuffer)
+            : CameraRtspRenderers.create(this, softwareDecoder, videoBuffer);
+    var decoder = new ExoPlayer.Builder(this, renderers).build();
     player = decoder;
     decoder.addListener(
         new Player.Listener() {
@@ -431,7 +497,9 @@ public final class BackgroundMotionService extends Service {
               Log.w(TAG, "RTSP playback error: " + error.errorCode);
               main.post(
                   () -> {
-                    if (player == decoder) retry();
+                    if (player != decoder) return;
+                    if (frames != null) retryAfterVisualFailure();
+                    else retry();
                   });
             }
           }
@@ -448,7 +516,7 @@ public final class BackgroundMotionService extends Service {
             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
             .build());
     decoder.setWakeMode(C.WAKE_MODE_NETWORK);
-    decoder.setVideoSurface(surface);
+    if (surface != null) decoder.setVideoSurface(surface);
     decoder.setMediaSource(
         new RtspMediaSource.Factory()
             .setSocketFactory(sockets)
@@ -460,17 +528,62 @@ public final class BackgroundMotionService extends Service {
     decoder.play();
   }
 
+  private boolean receivingEncodedVideo() {
+    return videoBuffer != null
+        && videoBuffer.hasRecentRecordablePackets(SystemClock.elapsedRealtime());
+  }
+
+  // Do not settle on an unrecordable profile if this camera advertised another one.
+  // If none works, keep native/visual alarms and snapshots rather than cycling forever.
+  private boolean tryAnotherClipProfile() {
+    if (attempt == null
+        || videoBuffer == null
+        || !videoBuffer.unsupportedClipFormat()
+        || !unsupportedProfiles.add(attempt.uri())) return false;
+    for (int i = 0; i < attempts.size(); i++) {
+      Attempt other = attempts.get(i);
+      if (other.tcp() && !unsupportedProfiles.contains(other.uri())) {
+        nextAttempt = i;
+        retry();
+        return true;
+      }
+    }
+    return false;
+  }
+
   private void checkFrames() {
-    if (stopping || frames == null) return;
-    long last = frames.lastSampleAt();
+    if (stopping || (frames == null && player == null)) return;
+    if (tryAnotherClipProfile()) return;
+    long now = SystemClock.elapsedRealtime();
+    // A decoder can keep returning thumbnails while its compressed input is no longer
+    // usable for recording. Once the camera has demonstrably supplied motion events,
+    // keep the alarm subscription and recover the recording input independently of JPEG.
+    if (nativeConfirmed
+        && frames != null
+        && videoBuffer != null
+        && !videoBuffer.unsupportedClipFormat()
+        && !clipHandoff.collecting()
+        && now - Math.max(openedAt, videoBuffer.lastRecordablePacketAt()) > 12_000) {
+      retryAfterVisualFailure();
+      return;
+    }
+    long last = frames == null ? 0 : frames.lastSampleAt();
+    if ((nativeConfirmed || frames == null) && videoBuffer != null)
+      last = Math.max(last, videoBuffer.lastRecordablePacketAt());
     if (SystemClock.elapsedRealtime() - (last == 0 ? openedAt : last) > 12_000) {
-      retry();
+      if (frames == null) retry();
+      else retryAfterVisualFailure();
       return;
     }
     if (last != 0) {
       if (SystemClock.elapsedRealtime() - openedAt >= 60_000) corruptRestarts = 0;
       backoff = 0;
-      phase(uploadFailed ? "uploadFailed" : nativeConfirmed ? "nativeWatching" : "watching");
+      phase(
+          uploadFailed
+              ? "uploadFailed"
+              : nativeConfirmed
+                  ? "nativeWatching"
+                  : frames == null ? "awaitingNativeAlarm" : "watching");
     }
     main.postDelayed(watchdog, 2000);
   }
@@ -508,7 +621,8 @@ public final class BackgroundMotionService extends Service {
         || (lastEventAt != 0 && now - lastEventAt < 30_000)) return;
     sending = true;
     lastEventAt = now;
-    BackgroundClipDelivery evidence = beginClip(occurredAt);
+    long sequence = ++clipSequence;
+    BackgroundClipDelivery evidence = beginClip(occurredAt, sequence);
     var format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT);
     format.setTimeZone(TimeZone.getTimeZone("UTC"));
     var data = new HashMap<String, Object>();
@@ -530,6 +644,8 @@ public final class BackgroundMotionService extends Service {
               if (evidence != null) {
                 Object response = result.isSuccessful() ? result.getResult().getData() : null;
                 Object id = response instanceof Map<?, ?> map ? map.get("id") : null;
+                if (!(id instanceof String textId) || textId.isEmpty())
+                  clipState(sequence, "event_not_acknowledged");
                 evidence.eventSaved(id instanceof String text ? text : null);
               }
               if (nativeConfirmed) phase(uploadFailed ? "uploadFailed" : "nativeWatching");
@@ -538,12 +654,40 @@ public final class BackgroundMotionService extends Service {
             });
   }
 
-  private BackgroundClipDelivery beginClip(long occurredAt) {
+  private void clipState(long sequence, String state) {
+    if (sequence == clipSequence) lastClipState = state;
+    Log.i(TAG, "Background clip #" + sequence + ": " + state);
+  }
+
+  @Override
+  protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
+    super.dump(fd, writer, args);
+    writer.println(
+        "SafeHood clipPipeline=2 monitoring="
+            + phase
+            + " lastClip="
+            + lastClipState
+            + " eventsThisSession="
+            + clipSequence);
+  }
+
+  private BackgroundClipDelivery beginClip(long occurredAt, long sequence) {
     CameraVideoBuffer buffer = videoBuffer;
-    if (buffer == null || (pendingClip != null && !pendingClip.isDone())) return null;
+    if (buffer == null
+        || clipHandoff.collecting()
+        || (pendingClip != null && !pendingClip.isDone())) {
+      clipState(sequence, buffer == null ? "no_video_receiver" : "previous_clip_pending");
+      return null;
+    }
     long ageMillis = Math.max(0, System.currentTimeMillis() - occurredAt);
-    CameraVideoBuffer.Anchor anchor = buffer.anchorAt(System.nanoTime() - ageMillis * 1_000_000L);
-    if (anchor == null) return null;
+    long now = SystemClock.elapsedRealtime();
+    CameraVideoBuffer.Anchor anchor =
+        buffer.backgroundAnchorAt(System.nanoTime() - ageMillis * 1_000_000L, now - ageMillis);
+    String problem = buffer.startProblem(now, anchor);
+    if (problem != null) {
+      clipState(sequence, problem);
+      return null;
+    }
     final String owner = request.owner();
     final String camera = request.camera();
     BackgroundClipDelivery evidence =
@@ -559,14 +703,7 @@ public final class BackgroundMotionService extends Service {
               data.put("eventId", eventId);
               data.put("mp4Base64", Base64.encodeToString(bytes, Base64.NO_WRAP));
               data.put("prebufferMillis", prebuffer);
-              clipUpload
-                  .call(data)
-                  .addOnCompleteListener(
-                      result -> {
-                        if (!result.isSuccessful())
-                          Log.w(TAG, "Could not attach background event recording");
-                        else Log.i(TAG, "Background event recording attached");
-                      });
+              uploadClip(sequence, owner, camera, data, false);
             });
     pendingClip = evidence;
     if (recordingThread == null) {
@@ -574,28 +711,69 @@ public final class BackgroundMotionService extends Service {
       recordingThread.start();
     }
     Handler worker = new Handler(recordingThread.getLooper());
+    Runnable release = clipHandoff.begin(this::sync);
+    main.postDelayed(release, 7500); // A stalled recorder must never trap the live view.
+    clipState(sequence, "collecting");
     worker.post(
         () ->
-            CameraStreamRecorder.start(
+            CameraStreamRecorder.startWithResult(
                 getCacheDir(),
                 buffer,
                 anchor,
                 worker,
                 evidence::isDone,
-                clip ->
+                result ->
                     main.post(
                         () -> {
-                          if (stopping || !ownsCamera()) {
-                            evidence.cancel();
-                            return;
+                          main.removeCallbacks(release);
+                          try {
+                            if (stopping || !ownsCamera() || evidence.isDone()) {
+                              evidence.cancel();
+                              return;
+                            }
+                            var clip = result.clip();
+                            Object bytes = clip == null ? null : clip.get("bytes");
+                            Object prefix = clip == null ? null : clip.get("prebufferMillis");
+                            clipState(
+                                sequence, result.failure() == null ? "encoded" : result.failure());
+                            evidence.clipReady(
+                                bytes instanceof byte[] data ? data : null,
+                                prefix instanceof Number number ? number.intValue() : -1);
+                          } finally {
+                            release.run();
                           }
-                          Object bytes = clip == null ? null : clip.get("bytes");
-                          Object prefix = clip == null ? null : clip.get("prebufferMillis");
-                          evidence.clipReady(
-                              bytes instanceof byte[] data ? data : null,
-                              prefix instanceof Number number ? number.intValue() : -1);
                         })));
     return evidence;
+  }
+
+  private void uploadClip(
+      long sequence, String owner, String camera, Map<String, Object> data, boolean retried) {
+    if (stopping
+        || !enabled
+        || !ownsCamera()
+        || !owner.equals(request.owner())
+        || !camera.equals(request.camera())) return;
+    clipState(sequence, retried ? "retrying_upload" : "uploading");
+    clipUpload
+        .call(data)
+        .addOnCompleteListener(
+            result -> {
+              if (stopping) return;
+              if (result.isSuccessful()) {
+                clipState(sequence, "attached");
+                return;
+              }
+              var error = result.getException();
+              var code = error instanceof FirebaseFunctionsException fn ? fn.getCode() : null;
+              if (!retried
+                  && (code == FirebaseFunctionsException.Code.UNAVAILABLE
+                      || code == FirebaseFunctionsException.Code.DEADLINE_EXCEEDED)) {
+                // The endpoint is idempotent for the same private event. Never repeat the alarm.
+                main.postDelayed(() -> uploadClip(sequence, owner, camera, data, true), 2000);
+              } else {
+                clipState(sequence, code == null ? "upload_failed" : "upload_" + code.name());
+              }
+            });
   }
 
   private void phase(String next) {
@@ -627,6 +805,7 @@ public final class BackgroundMotionService extends Service {
             PendingIntent.FLAG_IMMUTABLE);
     String detail =
         switch (phase) {
+          case "awaitingNativeAlarm" -> "Kamera jest połączona. Oczekiwanie na alarm ruchu.";
           case "nativeWatching" -> "Kamera wykrywa ruch. Telefon odbiera jej alarmy.";
           case "invalidVideo" -> "Nieprawidłowy obraz. Wznawiam połączenie z kamerą.";
           case "watching" -> "Telefon obserwuje obraz z kamery.";
@@ -663,6 +842,7 @@ public final class BackgroundMotionService extends Service {
     closeNative();
     if (pendingClip != null) pendingClip.cancel();
     pendingClip = null;
+    clipHandoff.close();
     if (recordingThread != null) recordingThread.quitSafely();
     recordingThread = null;
     if (settings != null) settings.remove();
