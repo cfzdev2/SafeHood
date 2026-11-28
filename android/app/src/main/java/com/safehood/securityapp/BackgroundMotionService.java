@@ -166,6 +166,7 @@ public final class BackgroundMotionService extends Service {
   private final HashSet<URI> unsupportedProfiles = new HashSet<>();
   private long clipSequence;
   private String lastClipState = "no_event";
+  private String lastClipProfile = "unknown";
   private HandlerThread recordingThread;
   private BackgroundClipDelivery pendingClip;
   private DvripAlarmReceiver nativeReceiver;
@@ -663,16 +664,18 @@ public final class BackgroundMotionService extends Service {
   protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
     super.dump(fd, writer, args);
     writer.println(
-        "SafeHood clipPipeline=2 monitoring="
+        "SafeHood clipPipeline=3 monitoring="
             + phase
             + " lastClip="
             + lastClipState
+            + " profile=" + lastClipProfile
             + " eventsThisSession="
             + clipSequence);
   }
 
   private BackgroundClipDelivery beginClip(long occurredAt, long sequence) {
     CameraVideoBuffer buffer = videoBuffer;
+    lastClipProfile = buffer == null ? "unknown" : buffer.profileDescription();
     if (buffer == null
         || clipHandoff.collecting()
         || (pendingClip != null && !pendingClip.isDone())) {

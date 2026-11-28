@@ -147,6 +147,39 @@ test("phone stream clips preserve prebuffer and camera dimensions",
       assert.deepEqual(h.stored().bytes, movie);
     });
 
+// Synthetic 1080p clips with a visible change at two seconds.
+test("phone saves HD AVC and HEVC privately; bridge keeps its own contract",
+    async () => {
+      for (const codec of [264, 265]) {
+        const bytes = Buffer.from(fs.readFileSync(path.join(__dirname,
+            `fixtures/camera_hd_h${codec}.mp4.b64`), "utf8"), "base64");
+        assert.throws(() => inspectMp4(bytes)); // Bridge.
+        assert.deepEqual(inspectMp4(bytes, true), {
+          durationMillis: 4000, width: 1920, height: 1080,
+        });
+        const h = phoneClip();
+        await h.upload({data: {cameraId, eventId, prebufferMillis: 2000,
+          mp4Base64: bytes.toString("base64")}});
+        const event = h.documents.get(`cameraEvents/${eventId}`);
+        assert.equal(event.clipPath,
+            `users/${ownerId}/cameraEvents/${eventId}/clip.mp4`);
+        assert.equal(event.clipPrebufferMillis, 2000);
+        assert.deepEqual(h.stored().bytes, bytes);
+        const invalid = Buffer.from(bytes);
+        const entry = invalid.indexOf(codec === 265 ? "hvc1" : "avc1", 64);
+        assert.notEqual(entry, -1);
+        invalid.writeUInt16BE(8192, entry + 28);
+        assert.throws(() => inspectMp4(invalid, true));
+        if (codec === 265) {
+          const pos = bytes.indexOf("hvcC");
+          assert.notEqual(pos, -1);
+          const wrong = Buffer.from(bytes);
+          wrong.write("avcC", pos);
+          assert.throws(() => inspectMp4(wrong, true));
+        }
+      }
+    });
+
 test("phone stream clips reject invalid or fictitious prebuffer", async () => {
   for (const prebufferMillis of [-1, 5001, "4000", 2.5, 2000]) {
     const h = phoneClip();

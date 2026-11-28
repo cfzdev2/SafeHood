@@ -24,7 +24,7 @@ restores direct display and does not establish a general solution to capture
 corruption. Unreadable/rejected samples do not produce visual motion alerts.
 The windowless background receiver retains its separate OES reader.
 
-`CameraVideoBuffer` copies compressed H.264 access units before decoder input
+`CameraVideoBuffer` copies compressed H.264 and H.265 access units before decoder input
 ownership changes. It retains at most fifteen seconds / six MiB, discards
 incomplete GOPs and clears on seek, format change, discontinuity or disposal.
 Rendering callbacks associate the original sample timestamps with actual
@@ -42,8 +42,8 @@ encoder, reduce frame rate, resize video or block frame sampling. A warm-up peri
 long GOP or the byte cap can shorten the available prefix; its actual duration
 is returned through the channel and stored in the event, never hard-coded to
 zero or five seconds. Stream interruption, an unprimed buffer or oversized
-media results in no clip. Current phone clip validation accepts H.264 up to
-1280 x 720, fifteen seconds and six MiB. Other formats remain playable but do
+media results in no clip. Current phone clip validation accepts H.264 and H.265 up to
+4096 x 2160 (either orientation), fifteen seconds and six MiB. Other formats remain playable but do
 not get this recording path. The pre-event buffer exists only while a receiver
 is active and must warm up after a foreground/background handoff. Background monitoring now owns the
 same bounded buffer and clip recorder. An established native alarm subscription

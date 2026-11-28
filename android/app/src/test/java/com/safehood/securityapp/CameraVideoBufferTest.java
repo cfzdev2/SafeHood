@@ -211,12 +211,48 @@ public final class CameraVideoBufferTest {
   }
 
   @Test
+  public void hevcMuxerGetsOneAnnexBConfigurationInCameraOrder() {
+    byte[] vps = {0, 0, 0, 1, 64, 1};
+    byte[] sps = {0, 0, 0, 1, 66, 1};
+    byte[] pps = {0, 0, 0, 1, 68, 1};
+    byte[] expected = {0, 0, 0, 1, 64, 1, 0, 0, 0, 1, 66, 1, 0, 0, 0, 1, 68, 1};
+    for (List<byte[]> config : List.of(List.of(vps, sps, pps), List.of(expected))) {
+      var format = new CameraVideoBuffer.StreamFormat("video/hevc", 1920, 1080, config);
+      var combined = format.hevcConfig();
+      byte[] bytes = new byte[combined.remaining()];
+      combined.get(bytes);
+      assertArrayEquals(expected, bytes);
+    }
+  }
+
+  @Test
+  public void fullHdAvcAndHevcKeepBothSidesOfAnAlarmWithoutDisplay() {
+    for (String mime : List.of("video/avc", "video/hevc")) {
+      var buffer = new CameraVideoBuffer();
+      buffer.configure(new CameraVideoBuffer.StreamFormat(mime, 1920, 1080, List.of(new byte[]{1})));
+      for (int i = 0; i <= 70; i++) receive(buffer, i);
+      var anchor = buffer.backgroundAnchorAt(0, 17_000);
+      var job = buffer.begin(17_000, anchor);
+      assertNotNull(job);
+      for (int i = 71; i <= 120; i++) receive(buffer, i);
+      var clip = buffer.finish(job, 22_000);
+      assertNotNull(clip);
+      assertEquals(5000, clip.prebufferMillis);
+      assertEquals(mime, clip.format.mime);
+      assertEquals(101, clip.samples.size());
+      buffer.configure(new CameraVideoBuffer.StreamFormat(mime, 7680, 4320, List.of()));
+      assertTrue(buffer.unsupportedClipFormat());
+    }
+  }
+
+  @Test
   public void incompatibleProfileAndMissingKeyframeAreDistinguished() {
     var buffer = new CameraVideoBuffer();
     assertEquals("waiting_for_format", buffer.startProblem(10_000, null));
-    buffer.configure(new CameraVideoBuffer.StreamFormat("video/hevc", 640, 360, List.of()));
+    buffer.configure(new CameraVideoBuffer.StreamFormat("video/unknown", 640, 360, List.of()));
     assertTrue(buffer.unsupportedClipFormat());
     assertEquals("unsupported_profile", buffer.startProblem(10_000, null));
+    buffer.close();
     buffer = buffer();
     assertFalse(buffer.unsupportedClipFormat());
     receive(buffer, 1);

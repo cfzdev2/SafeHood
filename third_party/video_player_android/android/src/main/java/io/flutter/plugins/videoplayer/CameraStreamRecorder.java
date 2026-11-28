@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
-/** Remuxes the camera's original H.264, without another connection, decoder or encoder. */
+/** Remuxes the camera's original AVC or HEVC, without another connection, decoder or encoder. */
 public final class CameraStreamRecorder {
   public static void start(
       File cache,
@@ -85,8 +85,12 @@ public final class CameraStreamRecorder {
       temporary = File.createTempFile("safehood-stream-", ".mp4", cache);
       CameraVideoBuffer.StreamFormat stream = recording.format;
       MediaFormat format = MediaFormat.createVideoFormat(stream.mime, stream.width, stream.height);
-      for (int i = 0; i < stream.initializationData.size(); i++) {
-        format.setByteBuffer("csd-" + i, ByteBuffer.wrap(stream.initializationData.get(i)));
+      if ("video/hevc".equals(stream.mime)) {
+        format.setByteBuffer("csd-0", stream.hevcConfig());
+      } else {
+        for (int i = 0; i < stream.initializationData.size(); i++) {
+          format.setByteBuffer("csd-" + i, ByteBuffer.wrap(stream.initializationData.get(i)));
+        }
       }
       muxer =
           new MediaMuxer(temporary.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);

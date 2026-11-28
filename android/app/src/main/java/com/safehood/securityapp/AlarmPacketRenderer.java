@@ -53,7 +53,7 @@ final class AlarmPacketRenderer extends BaseRenderer {
     int support =
         !MimeTypes.isVideo(format.sampleMimeType)
             ? C.FORMAT_UNSUPPORTED_TYPE
-            : !MimeTypes.VIDEO_H264.equals(format.sampleMimeType)
+            : !CameraVideoBuffer.supportsClipMime(format.sampleMimeType)
                 ? C.FORMAT_UNSUPPORTED_SUBTYPE
                 : format.drmInitData != null ? C.FORMAT_UNSUPPORTED_DRM : C.FORMAT_HANDLED;
     return RendererCapabilities.create(support);

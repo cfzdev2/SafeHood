@@ -9,6 +9,10 @@ import java.util.List;
 /** Bounded, session-owned compressed video. Never retains a decoder's mutable input buffer. */
 public final class CameraVideoBuffer implements AutoCloseable {
   public static final int MAX_BYTES = 6 * 1024 * 1024;
+  public static boolean supportsClipMime(String mime) {
+    return "video/avc".equals(mime) || "video/hevc".equals(mime);
+  }
+
   private static final long WINDOW_US = 15_000_000;
   private static final long PREBUFFER_US = 5_000_000;
   private final ArrayDeque<Sample> samples = new ArrayDeque<>();
@@ -68,6 +72,21 @@ public final class CameraVideoBuffer implements AutoCloseable {
       for (byte[] data : initializationData) this.initializationData.add(data.clone());
     }
 
+    // Android stores the Annex B VPS/SPS/PPS together under csd-0 for HEVC.
+    // Media3 RTSP can provide them as three separate initialization buffers.
+    public ByteBuffer hevcConfig() {
+      int size = 0;
+      for (byte[] data : initializationData) {
+        if (data.length > MAX_BYTES - size) throw new IllegalArgumentException("HEVC config size");
+        size += data.length;
+      }
+      if (size == 0) throw new IllegalArgumentException("Missing HEVC config");
+      ByteBuffer combined = ByteBuffer.allocate(size);
+      for (byte[] data : initializationData) combined.put(data);
+      combined.flip();
+      return combined;
+    }
+
     boolean same(StreamFormat other) {
       if (other == null
           || !mime.equals(other.mime)
@@ -120,7 +139,7 @@ public final class CameraVideoBuffer implements AutoCloseable {
   }
 
   public synchronized void append(ByteBuffer input, long timeUs, boolean keyFrame, long atMillis) {
-    if (closed || format == null || !"video/avc".equals(format.mime) || input == null) return;
+    if (closed || format == null || unsupportedClipFormat() || input == null) return;
     int size = input.remaining();
     if (size == 0) return;
     if (size > MAX_BYTES
@@ -182,7 +201,16 @@ public final class CameraVideoBuffer implements AutoCloseable {
 
   public synchronized boolean unsupportedClipFormat() {
     return format != null
-        && (!"video/avc".equals(format.mime) || format.width > 1280 || format.height > 720);
+        && (!supportsClipMime(format.mime)
+            || Math.max(format.width, format.height) > 4096
+            || Math.min(format.width, format.height) > 2160);
+  }
+
+  public synchronized String profileDescription() {
+    if (format == null) return "unknown";
+    String mime = format.mime != null && format.mime.matches("video/[a-zA-Z0-9.+_-]{1,32}")
+        ? format.mime : "other";
+    return mime + ":" + format.width + "x" + format.height;
   }
 
   public synchronized long lastRecordablePacketAt() {

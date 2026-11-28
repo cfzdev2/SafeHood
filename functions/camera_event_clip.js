@@ -47,11 +47,12 @@ function boxes(bytes, start, end) {
 }
 
 /**
- * Sprawdza MP4 H.264 z jedną ścieżką wideo i odczytuje czas filmu.
+ * Sprawdza MP4 z jedną ścieżką wideo i odczytuje czas filmu.
  * @param {Buffer} bytes Plik.
+ * @param {boolean} phone Dopuszcza oryginalny profil kamery telefonu.
  * @return {Object} Wymiary i czas trwania.
  */
-function inspectMp4(bytes) {
+function inspectMp4(bytes, phone = false) {
   if (!Buffer.isBuffer(bytes) || bytes.length < 100 ||
       bytes.length > maximumClipBytes) fail("Nieprawidłowy rozmiar nagrania.");
   const top = boxes(bytes, 0, bytes.length);
@@ -104,16 +105,22 @@ function inspectMp4(bytes) {
     fail("Nieprawidłowy opis ścieżki MP4.");
   }
   const entries = boxes(bytes, description.start + 8, description.end);
-  if (entries.length !== 1 || entries[0].type !== "avc1" ||
+  const hevc = phone && ["hvc1", "hev1"].includes(entries[0]?.type);
+  if (entries.length !== 1 || (!hevc && entries[0].type !== "avc1") ||
       entries[0].start + 78 > entries[0].end) {
-    fail("Wymagane jest wideo H.264.");
+    fail(phone ? "Wymagane jest wideo H.264 lub H.265." :
+      "Wymagane jest wideo H.264.");
   }
   const width = bytes.readUInt16BE(entries[0].start + 24);
   const height = bytes.readUInt16BE(entries[0].start + 26);
-  if (!width || !height || width > 1280 || height > 720 ||
+  const tooLarge = phone ? Math.max(width, height) > 4096 ||
+    Math.min(width, height) > 2160 : width > 1280 || height > 720;
+  if (!width || !height || tooLarge ||
       !boxes(bytes, entries[0].start + 78, entries[0].end)
-          .some((box) => box.type === "avcC" && box.end - box.start >= 7)) {
-    fail("Nieprawidłowe wymiary lub konfiguracja H.264.");
+          .some((box) => box.type === (hevc ? "hvcC" : "avcC") &&
+            box.end - box.start >= (hevc ? 23 : 7) &&
+            bytes[box.start] === 1)) {
+    fail("Nieprawidłowe wymiary lub konfiguracja wideo.");
   }
   return {durationMillis, width, height};
 }
@@ -121,9 +128,10 @@ function inspectMp4(bytes) {
 /**
  * Dekoduje ograniczony plik; kontrola odbywa się przed alokacją bufora.
  * @param {*} value Base64.
+ * @param {boolean} phone Włącz profile nagrywania z telefonu.
  * @return {Object} Plik i jego metadane.
  */
-function decodeClip(value) {
+function decodeClip(value, phone = false) {
   if (typeof value !== "string" || !value.length ||
       value.length > 4 * Math.ceil(maximumClipBytes / 3) ||
       value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
@@ -131,7 +139,7 @@ function decodeClip(value) {
   }
   const bytes = Buffer.from(value, "base64");
   if (bytes.toString("base64") !== value) fail("Niepoprawne Base64.");
-  return {bytes, ...inspectMp4(bytes)};
+  return {bytes, ...inspectMp4(bytes, phone)};
 }
 
 /**
@@ -154,7 +162,7 @@ async function savePhoneMotionClip({db, getBucket, FieldValue, Timestamp,
       value.length > 4 * Math.ceil(maximumPhoneClipBytes / 3)) {
     fail("Nieprawidłowy rozmiar nagrania z podglądu.");
   }
-  const clip = decodeClip(value);
+  const clip = decodeClip(value, true);
   const requestedPrebuffer = data.prebufferMillis ?? 0;
   if (clip.bytes.length > maximumPhoneClipBytes ||
       clip.durationMillis > maximumPhoneClipMillis ||
